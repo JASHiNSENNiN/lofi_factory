@@ -1615,6 +1615,45 @@ def _build_self_markov(history: list[list[int]]) -> dict:
     return dict(learner.markov.nodes)
 
 
+# ─── RECIPE LOG (diagnostic, append-only) ─────────────────────────────────────
+
+_RECIPE_LOG_FILE = os.path.join(MUSIC_DIR, '.recipe_log.jsonl')
+
+
+def _append_recipe_log(params: dict, quality_score: float | None = None,
+                        quality_retries: int | None = None,
+                        ga_voicing: bool | None = None) -> None:
+    """
+    Append-only JSONL diagnostic log: one line per generated track, recording
+    which generative techniques fired and (once the quality gate runs) how it
+    scored. Deliberately append-only (no read-modify-write) so it can't
+    inherit _save_params_history's latent read-modify-write race under
+    generate_tracks()'s ThreadPoolExecutor (up to 3 concurrent pick_params()
+    calls). Lets a user debugging "why did today's video sound different"
+    weeks into unattended daily runs answer it directly via `tail`, without
+    re-deriving anything from the audio/video itself.
+    """
+    entry = {
+        'ts':              round(time.time()),
+        'sub_genre':       params.get('sub_genre', ''),
+        'key':             params.get('key', ''),
+        'bpm':             params.get('bpm', ''),
+        'euclid_a':        'drum_pattern_a_generated' in params,
+        'euclid_b':        'drum_pattern_b_generated' in params,
+        'markov_prog':     'generated_progression' in params,
+        'self_markov':     'markov_melody_nodes' in params,
+        'ga_voicing':      bool(ga_voicing),
+        'quality_score':   quality_score,
+        'quality_retries': quality_retries,
+    }
+    try:
+        os.makedirs(os.path.dirname(_RECIPE_LOG_FILE), exist_ok=True)
+        with open(_RECIPE_LOG_FILE, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except OSError:
+        pass
+
+
 # ─── ALGORITHMIC PARAM HELPERS ────────────────────────────────────────────────
 
 def _pick_subgenre_weighted(history: list[dict]) -> str:
@@ -1757,34 +1796,52 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         'sub_genre':      sub,
     }
 
-    # ~20% independent chance each for A/B drum sections to use a freshly
-    # generated Euclidean pattern instead of the curated table — the curated
-    # table stays the ~80% reliable default.
+    # ~35% independent chance each for A/B drum sections to use a freshly
+    # generated Euclidean pattern instead of the curated table (Phase-A
+    # adoption bump; started at 20%). Each call is individually try/except'd
+    # so a failure on one side never blocks the other, or the rest of
+    # pick_params() — daily unattended runs must never crash over an optional
+    # embellishment.
     energy_f = _DRUM_ENERGY_TO_FLOAT.get(drum_energy, 0.55)
     complexity_f = round(random.uniform(0.3, 0.8), 2)
-    if random.random() < 0.20:
-        params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
-    if random.random() < 0.20:
-        params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+    if random.random() < 0.35:
+        try:
+            params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+        except Exception as e:
+            print(f"  [params] Euclidean drum A generation failed ({e}) — using curated table")
+    if random.random() < 0.35:
+        try:
+            params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+        except Exception as e:
+            print(f"  [params] Euclidean drum B generation failed ({e}) — using curated table")
 
-    # ~15-20% chance to procedurally generate a fresh progression (Markov walk
+    # ~30% chance to procedurally generate a fresh progression (Markov walk
     # over the curated table's chord transitions) instead of indexing into the
-    # fixed 51-entry table — params['progression'] keeps its int index either
-    # way (for history/logging); generated_progression, when present, takes
-    # priority in build_midi().
-    if random.random() < 0.18:
-        chord_count = len(PROGRESSIONS[prog]) if PROGRESSIONS[prog] else 4
-        params['generated_progression'] = generate_progression(
-            length=max(2, min(6, chord_count)),
-            jazziness=round(random.uniform(0.2, 0.8), 2),
-        )
+    # fixed 51-entry table (Phase-A bump; started at 18%) — params['progression']
+    # keeps its int index either way (for history/logging); generated_progression,
+    # when present, takes priority in build_midi().
+    if random.random() < 0.30:
+        try:
+            chord_count = len(PROGRESSIONS[prog]) if PROGRESSIONS[prog] else 4
+            params['generated_progression'] = generate_progression(
+                length=max(2, min(6, chord_count)),
+                jazziness=round(random.uniform(0.2, 0.8), 2),
+            )
+        except Exception as e:
+            print(f"  [params] Progression generation failed ({e}) — using curated table")
 
     # Self-referential melodic voice: once enough history exists, bias new
     # melodies toward the pipeline's own past output (no external data, no
     # LLM) — see _build_self_markov / build_melody's markov_nodes blending.
-    _melody_history = _load_melody_history()
-    if len(_melody_history) >= 3:
-        params['markov_melody_nodes'] = _build_self_markov(_melody_history)
+    # Capped at 75% (not unconditional) both to bound the blast radius of any
+    # latent bug in this newly-wired-up path and to hedge against slow
+    # Markov mode-collapse from training on the pipeline's own output daily.
+    try:
+        _melody_history = _load_melody_history()
+        if len(_melody_history) >= 3 and random.random() < 0.75:
+            params['markov_melody_nodes'] = _build_self_markov(_melody_history)
+    except Exception as e:
+        print(f"  [params] Self-referential Markov build failed ({e}) — skipping")
 
     if key in ('C', 'G', 'F') and prog < 16:
         print(f"  [params] NOTE: major key '{key}' with minor prog {prog} — voicings will be modal")
@@ -2024,14 +2081,7 @@ def build_midi(params, output_path):
         c += prog_bars * _n
         fill_bars.add(c - 1)
 
-    # ── Break scale modulation (35% → relative major lift) ──────
-    break_scale    = scale
-    break_key_root = key_root
-    if random.random() < 0.35 and scale in _SCALE_MODAL_LIFT:
-        break_scale    = _SCALE_MODAL_LIFT[scale]
-        break_key_root = key_root + 3   # relative major (+3 semitones: Am→C, Dm→F)
-
-    # ── Motif: generate once, shared across all melody sections ─
+    # ── Motif scale (recomputed fresh per retry attempt below) ──
     if scale == 'dorian':
         _motif_scale = get_dorian(key_root)
     elif scale == 'phryg':
@@ -2042,93 +2092,144 @@ def build_midi(params, output_path):
         _motif_scale = get_lydian(key_root)
     else:
         _motif_scale = get_pentatonic(key_root)
-    track_motif = generate_motif(_motif_scale) if _motif_scale else None
 
     print(f"  BPM={bpm} key={key} prog={prog_idx} swing={int(swing*100)}% "
           f"energy={energy} sub={sub_genre} walk={walking} form={form_name} mood='{mood}' | {TOTAL} bars")
 
-    # ── Build events ────────────────────────────────────────────
-    piano_ev    = []
-    bass_ev     = []
-    drum_ev     = []
-    mel_ev      = []
-    pad_ev      = []
-    cmelo_ev    = []
-    texture_ev  = []
-    sustain_ev  = []
+    # ── Build events, with a quality-gate retry loop ─────────────
+    # Each attempt gets a fresh motif and break-scale roll (not just a
+    # re-run of the same random.* calls) so a retry actually produces a
+    # structurally different arrangement, not a near-identical one. Never
+    # blocks the daily upload over this — worst case, keeps the
+    # highest-scoring attempt even if none clear the threshold.
+    try:
+        from scripts.track_quality import score_track_quality, MIN_QUALITY_SCORE, MAX_RETRIES
+    except Exception:
+        score_track_quality, MIN_QUALITY_SCORE, MAX_RETRIES = None, 0.0, 0
 
-    cursor = 0
-    for sec_label, n_loops in form:
-        sec_start = cursor
-        sec_bars  = prog_bars * n_loops
+    best_events = None
+    best_score = -1.0
+    best_failures: list = []
+    attempts_used = 0
 
-        if sec_label == 'I':
-            piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            bass_s = sec_start + min(2, prog_bars - 1)
-            bass_ev += build_bass(prog, bass_s, 1, swing, bpm, False)
-            hat_s = sec_start + min(2, prog_bars - 1)
-            hat_b = sec_bars - (hat_s - sec_start)
-            if hat_b > 0:
-                drum_ev += build_intro_hats(hat_s, hat_b, swing, bpm)
-            cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
+    for attempt in range(1 + MAX_RETRIES):
+        attempts_used = attempt + 1
 
-        elif sec_label == 'A':
-            piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
-            drum_ev    += build_drums(pat_a, sec_start, sec_bars, swing, bpm, fill_bars)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
-                                       'sparse', scale, motif=track_motif,
-                                       progression=prog, prog_bars=prog_bars,
-                                       markov_nodes=markov_nodes)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            _tex = _SUBGENRE_TEXTURE.get(sub_genre)
-            if _tex and random.random() < 0.50:
-                texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+        break_scale    = scale
+        break_key_root = key_root
+        if random.random() < 0.35 and scale in _SCALE_MODAL_LIFT:
+            break_scale    = _SCALE_MODAL_LIFT[scale]
+            break_key_root = key_root + 3   # relative major (+3 semitones: Am→C, Dm→F)
+        track_motif = generate_motif(_motif_scale) if _motif_scale else None
 
-        elif sec_label == 'BR':
-            piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
-            cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+        piano_ev    = []
+        bass_ev     = []
+        drum_ev     = []
+        mel_ev      = []
+        pad_ev      = []
+        cmelo_ev    = []
+        texture_ev  = []
+        sustain_ev  = []
+        active_bars = 0
 
-        elif sec_label == 'B':
-            piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
-            drum_ev    += build_drums(pat_b, sec_start, sec_bars, swing, bpm, fill_bars)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
-                                       'medium', scale, motif=track_motif,
-                                       progression=prog, prog_bars=prog_bars,
-                                       markov_nodes=markov_nodes)
-            if sec_bars > prog_bars:
-                cmelo_ev += build_counter_melody(key_root, sec_start + prog_bars,
-                                                 sec_bars - prog_bars, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            _tex = _SUBGENRE_TEXTURE.get(sub_genre)
-            if _tex and random.random() < 0.50:
-                texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+        cursor = 0
+        for sec_label, n_loops in form:
+            sec_start = cursor
+            sec_bars  = prog_bars * n_loops
 
-        elif sec_label == 'O':
-            piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, False)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            od_bars = max(1, sec_bars // 2)
-            od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm)
-            n_od = len(od_raw)
-            od_raw = [(ev[0], ev[1], max(1, int(ev[2] * (1.0 - (i / max(1, n_od)) * 0.75))), ev[3])
-                      for i, ev in enumerate(od_raw)]
-            drum_ev += od_raw
-            if sec_bars - od_bars > 0:
-                drum_ev += build_intro_hats(sec_start + od_bars, sec_bars - od_bars, swing, bpm)
+            if sec_label == 'I':
+                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                bass_s = sec_start + min(2, prog_bars - 1)
+                bass_ev += build_bass(prog, bass_s, 1, swing, bpm, False)
+                hat_s = sec_start + min(2, prog_bars - 1)
+                hat_b = sec_bars - (hat_s - sec_start)
+                if hat_b > 0:
+                    drum_ev += build_intro_hats(hat_s, hat_b, swing, bpm)
+                cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
 
-        cursor += sec_bars
+            elif sec_label == 'A':
+                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
+                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
+                drum_ev    += build_drums(pat_a, sec_start, sec_bars, swing, bpm, fill_bars)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
+                                           'sparse', scale, motif=track_motif,
+                                           progression=prog, prog_bars=prog_bars,
+                                           markov_nodes=markov_nodes)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                active_bars += sec_bars
+                _tex = _SUBGENRE_TEXTURE.get(sub_genre)
+                if _tex and random.random() < 0.50:
+                    texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+
+            elif sec_label == 'BR':
+                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
+                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
+                cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+
+            elif sec_label == 'B':
+                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
+                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
+                drum_ev    += build_drums(pat_b, sec_start, sec_bars, swing, bpm, fill_bars)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
+                                           'medium', scale, motif=track_motif,
+                                           progression=prog, prog_bars=prog_bars,
+                                           markov_nodes=markov_nodes)
+                if sec_bars > prog_bars:
+                    cmelo_ev += build_counter_melody(key_root, sec_start + prog_bars,
+                                                     sec_bars - prog_bars, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                active_bars += sec_bars
+                _tex = _SUBGENRE_TEXTURE.get(sub_genre)
+                if _tex and random.random() < 0.50:
+                    texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+
+            elif sec_label == 'O':
+                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
+                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, False)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                od_bars = max(1, sec_bars // 2)
+                od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm)
+                n_od = len(od_raw)
+                od_raw = [(ev[0], ev[1], max(1, int(ev[2] * (1.0 - (i / max(1, n_od)) * 0.75))), ev[3])
+                          for i, ev in enumerate(od_raw)]
+                drum_ev += od_raw
+                if sec_bars - od_bars > 0:
+                    drum_ev += build_intro_hats(sec_start + od_bars, sec_bars - od_bars, swing, bpm)
+
+            cursor += sec_bars
+
+        this_events = (piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev)
+
+        if score_track_quality is None:
+            best_events, best_score = this_events, 1.0
+            break
+
+        try:
+            score, failures = score_track_quality(mel_ev, piano_ev, drum_ev, active_bars, sub_genre)
+        except Exception as e:
+            print(f"  [quality] Scoring failed ({e}) — accepting attempt without gating")
+            best_events, best_score, best_failures = this_events, 1.0, []
+            break
+
+        if score > best_score:
+            best_events, best_score, best_failures = this_events, score, failures
+        if score >= MIN_QUALITY_SCORE:
+            break
+
+    if best_score < MIN_QUALITY_SCORE and score_track_quality is not None:
+        print(f"  [quality] Track scored {best_score:.2f} after {attempts_used} attempt(s) "
+              f"(failures: {best_failures}) — using best attempt, not blocking upload")
+
+    piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev = best_events
 
     # ── Tension arc: replaces flat energy_mult with per-bar dynamic curve ──────
     drum_ev = _apply_tension_to_drums(drum_ev, TOTAL, energy_mult)
@@ -2175,7 +2276,15 @@ def build_midi(params, output_path):
 
     # Feed this track's melody into the self-referential history (see
     # _build_self_markov / pick_params) so future tracks can draw on it.
+    # Fires once, on the winning attempt only — a discarded low-quality
+    # attempt must never pollute the self-referential model with exactly the
+    # kind of melody the quality gate exists to filter out.
     _save_melody_pitch_classes([note % 12 for (_t, note, _v, _d) in mel_ev])
+    try:
+        _append_recipe_log(params, quality_score=best_score,
+                            quality_retries=attempts_used - 1, ga_voicing=False)
+    except Exception:
+        pass
 
     mid.save(output_path)
     return output_path
@@ -2336,24 +2445,44 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
             'drum_energy':    diverse_energy,
             'sub_genre':      sub,
         }
-        # Same ~20% independent chance for a generated Euclidean pattern as
+        # Same ~35% independent chance for a generated Euclidean pattern as
         # the single-track pick_params() path — see generate_euclidean_drum_pattern.
+        # Individually try/except'd: a failure here must never abort building
+        # the rest of this track's params, or the whole multi-track video.
         energy_f = _DRUM_ENERGY_TO_FLOAT.get(diverse_energy, 0.55)
         complexity_f = round(random.uniform(0.3, 0.8), 2)
-        if random.random() < 0.20:
-            track_params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
-        if random.random() < 0.20:
-            track_params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+        if random.random() < 0.35:
+            try:
+                track_params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+            except Exception as e:
+                print(f"  [params] Euclidean drum A generation failed ({e}) — using curated table")
+        if random.random() < 0.35:
+            try:
+                track_params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+            except Exception as e:
+                print(f"  [params] Euclidean drum B generation failed ({e}) — using curated table")
 
-        # Same ~18% chance for a Markov-generated progression as pick_params().
-        if random.random() < 0.18:
-            chord_count = len(PROGRESSIONS[track_params['progression']])
-            track_params['generated_progression'] = generate_progression(
-                length=max(2, min(6, chord_count)),
-                jazziness=round(random.uniform(0.2, 0.8), 2),
-            )
+        # Same ~30% chance for a Markov-generated progression as pick_params().
+        if random.random() < 0.30:
+            try:
+                chord_count = len(PROGRESSIONS[track_params['progression']])
+                track_params['generated_progression'] = generate_progression(
+                    length=max(2, min(6, chord_count)),
+                    jazziness=round(random.uniform(0.2, 0.8), 2),
+                )
+            except Exception as e:
+                print(f"  [params] Progression generation failed ({e}) — using curated table")
         if self_markov:
             track_params['markov_melody_nodes'] = self_markov
+
+        # Non-anchor tracks previously never recorded to params history, so
+        # the anti-repeat steering (_pick_key_avoiding_recent etc.) was blind
+        # to ~83% of actually-generated tracks at the default 6-track count.
+        try:
+            _save_params_history(track_params)
+        except Exception as e:
+            print(f"  [params] History save failed ({e}) — continuing")
+
         param_sets.append(track_params)
 
     return param_sets

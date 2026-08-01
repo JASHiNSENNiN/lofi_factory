@@ -3,13 +3,33 @@ static_layers.py — Pre-computed background: gradient, star field, scanlines.
 All return numpy arrays composited in generate.py.
 """
 
+import json
 import math
+import os
 import random
+import time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from .config import W, H
+from .config import W, H, VISUALS_DIR
 from .themes import THEMES
+
+# Append-only diagnostic log of which background technique fired, mirroring
+# the music side's recipe log (generate_music_gemini._append_recipe_log) —
+# deliberately a separate file/module (visual_v2 stays decoupled from the
+# music generator) but the same append-only-JSONL pattern for the same
+# reason: cheap, race-free, and answers "why did today's video look
+# different" without re-deriving anything from the rendered video.
+_VISUAL_RECIPE_LOG_FILE = os.path.join(VISUALS_DIR, '.recipe_log.jsonl')
+
+
+def _log_bg_choice(theme: str, technique: str, preset: str | None = None) -> None:
+    try:
+        entry = {'ts': round(time.time()), 'theme': theme, 'technique': technique, 'preset': preset}
+        with open(_VISUAL_RECIPE_LOG_FILE, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except OSError:
+        pass
 
 
 # ── Background gradient ──────────────────────────────────────────────────────
@@ -31,7 +51,9 @@ def make_gradient_bg(theme: str, seed: int = 11) -> np.ndarray:
         try:
             from .reaction_diffusion import gray_scott_bg, PRESETS
             preset = random.choice(list(PRESETS.keys()))
-            return gray_scott_bg(c, W, H, preset=preset, seed=seed)
+            result = gray_scott_bg(c, W, H, preset=preset, seed=seed)
+            _log_bg_choice(theme, 'gray_scott', preset)
+            return result
         except Exception:
             pass  # fall through to the noise-warped gradient below
 
@@ -48,6 +70,7 @@ def make_gradient_bg(theme: str, seed: int = 11) -> np.ndarray:
     t_row    = np.broadcast_to(np.linspace(0, 1, H, dtype=np.float32)[:, None], (H, W))
     t_warped = np.clip(t_row + 0.18 * (field - 0.5), 0, 1)[:, :, None]
     arr = top[None, None, :] * (1 - t_warped) + bot[None, None, :] * t_warped
+    _log_bg_choice(theme, 'noise_gradient')
     return arr.astype(np.uint8)
 
 

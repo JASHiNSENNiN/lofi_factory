@@ -39,7 +39,7 @@ from scripts.generate_music_gemini import (  # noqa: E402
     _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT,
     maybe_sub_chord, _tension, _apply_tension_to_drums, _chord_pcs_at_bar,
     pick_params, _build_diverse_params,
-    _save_melody_pitch_classes,
+    _save_melody_pitch_classes, _append_recipe_log,
     midi_to_wav, _pick_soundfont, MUSIC_DIR,
     GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_BASS, GM_STRINGS, GM_WARM_PAD,
 )
@@ -216,7 +216,7 @@ def _voice_lead_progression_ga(progression: list[tuple[str, int]],
 
 
 def build_chords_v2(progression: list, start_bar: int, num_loops: int,
-                    swing: float, bpm: int) -> list:
+                    swing: float, bpm: int, ga_flag: list | None = None) -> list:
     """
     v1 build_chords with full-displacement voice leading and Gaussian humanization.
     ~15% of the time, uses a genetic-algorithm-optimized voicing sequence for
@@ -226,6 +226,11 @@ def build_chords_v2(progression: list, start_bar: int, num_loops: int,
     is skipped for that pass, since the GA already committed to voicings for
     the literal (unsubstituted) progression and substituting afterward would
     leave the chosen voicing not matching the actual chord being played.
+
+    ga_flag: optional list — if GA voicing fires, True is appended to it, so
+    a caller building multiple sections (I/A/B) can cheaply check
+    `bool(ga_flag)` afterward to know whether GA was used anywhere in the
+    track, for the recipe log.
     """
     events = []
     cursor = start_bar
@@ -235,6 +240,8 @@ def build_chords_v2(progression: list, start_bar: int, num_loops: int,
     if len(progression) >= 2 and random.random() < 0.15:
         try:
             ga_voicings = _voice_lead_progression_ga(progression)
+            if ga_flag is not None:
+                ga_flag.append(True)
         except Exception:
             ga_voicings = None
 
@@ -798,105 +805,148 @@ def build_midi_v2(params: dict, output_path: str) -> str:
         c += prog_bars * _n
         fill_bars.add(c - 1)
 
-    break_scale    = scale
-    break_key_root = key_root
-    if random.random() < 0.35 and scale in _SCALE_MODAL_LIFT:
-        break_scale    = _SCALE_MODAL_LIFT[scale]
-        break_key_root = key_root + 3
-
-    # Shared motif (v2 Motif object)
+    # Shared motif scale (motif itself recomputed fresh per retry below)
     motif_scale  = _get_scale_notes(key_root, scale)
-    track_motif  = _generate_motif_v2(motif_scale, random.randint(3, 5)) if motif_scale else None
 
     print(f"  [v2] BPM={bpm} key={key} prog={prog_idx} swing={int(swing*100)}% "
           f"energy={energy} sub={sub_genre} walk={walking} form={form_name} mood='{mood}' | {TOTAL} bars")
 
-    piano_ev   = []
-    bass_ev    = []
-    drum_ev    = []
-    mel_ev     = []
-    pad_ev     = []
-    cmelo_ev   = []
-    texture_ev = []
-    sustain_ev = []
+    # ── Build events, with a quality-gate retry loop (see build_midi() in
+    # generate_music_gemini.py for the identical pattern / rationale) ──────
+    try:
+        from scripts.track_quality import score_track_quality, MIN_QUALITY_SCORE, MAX_RETRIES
+    except Exception:
+        score_track_quality, MIN_QUALITY_SCORE, MAX_RETRIES = None, 0.0, 0
 
-    cursor = 0
-    for sec_label, n_loops in form:
-        sec_start = cursor
-        sec_bars  = prog_bars * n_loops
+    best_events = None
+    best_score = -1.0
+    best_failures: list = []
+    attempts_used = 0
+    ga_flag: list = []
 
-        if sec_label == 'I':
-            piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            bass_s = sec_start + min(2, prog_bars - 1)
-            bass_ev += build_bass_v2(prog, bass_s, 1, swing, bpm, False)
-            hat_s = sec_start + min(2, prog_bars - 1)
-            hat_b = sec_bars - (hat_s - sec_start)
-            if hat_b > 0:
-                drum_ev += build_intro_hats(hat_s, hat_b, swing, bpm)
-            cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
+    for attempt in range(1 + MAX_RETRIES):
+        attempts_used = attempt + 1
 
-        elif sec_label == 'A':
-            piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
-            drum_ev    += build_drums_v2(pat_a, sec_start, sec_bars, swing, bpm,
-                                          fill_bars, energy_float)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            mel_ev     += build_melody_v2(key_root, sec_start, sec_bars, swing, bpm,
-                                          'sparse', scale, motif=track_motif,
-                                          progression=prog, prog_bars=prog_bars, section='A',
-                                          markov_nodes=markov_nodes)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            _tex = _SUBGENRE_TEXTURE.get(sub_genre)
-            if _tex and random.random() < 0.50:
-                texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+        break_scale    = scale
+        break_key_root = key_root
+        if random.random() < 0.35 and scale in _SCALE_MODAL_LIFT:
+            break_scale    = _SCALE_MODAL_LIFT[scale]
+            break_key_root = key_root + 3
+        track_motif = _generate_motif_v2(motif_scale, random.randint(3, 5)) if motif_scale else None
 
-        elif sec_label == 'BR':
-            piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
-            cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+        piano_ev    = []
+        bass_ev     = []
+        drum_ev     = []
+        mel_ev      = []
+        pad_ev      = []
+        cmelo_ev    = []
+        texture_ev  = []
+        sustain_ev  = []
+        active_bars = 0
 
-        elif sec_label == 'B':
-            piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
-            drum_ev    += build_drums_v2(pat_b, sec_start, sec_bars, swing, bpm,
-                                          fill_bars, energy_float)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            mel_ev     += build_melody_v2(key_root, sec_start, sec_bars, swing, bpm,
-                                          'medium', scale, motif=track_motif,
-                                          progression=prog, prog_bars=prog_bars, section='B',
-                                          markov_nodes=markov_nodes)
-            if sec_bars > prog_bars:
-                cmelo_ev += build_counter_melody(key_root, sec_start + prog_bars,
-                                                 sec_bars - prog_bars, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            _tex = _SUBGENRE_TEXTURE.get(sub_genre)
-            if _tex and random.random() < 0.50:
-                texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+        cursor = 0
+        for sec_label, n_loops in form:
+            sec_start = cursor
+            sec_bars  = prog_bars * n_loops
 
-        elif sec_label == 'O':
-            piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm)
-            bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, False)
-            pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-            cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
-            sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
-            od_bars = max(1, sec_bars // 2)
-            od_raw  = build_drums_v2(pat_a, sec_start, od_bars, swing, bpm,
-                                     energy=energy_float)
-            n_od    = len(od_raw)
-            od_raw  = [(ev[0], ev[1],
-                        max(1, int(ev[2] * (1.0 - (i / max(1, n_od)) * 0.75))),
-                        ev[3])
-                       for i, ev in enumerate(od_raw)]
-            drum_ev += od_raw
-            if sec_bars - od_bars > 0:
-                drum_ev += build_intro_hats(sec_start + od_bars, sec_bars - od_bars, swing, bpm)
+            if sec_label == 'I':
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                bass_s = sec_start + min(2, prog_bars - 1)
+                bass_ev += build_bass_v2(prog, bass_s, 1, swing, bpm, False)
+                hat_s = sec_start + min(2, prog_bars - 1)
+                hat_b = sec_bars - (hat_s - sec_start)
+                if hat_b > 0:
+                    drum_ev += build_intro_hats(hat_s, hat_b, swing, bpm)
+                cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
 
-        cursor += sec_bars
+            elif sec_label == 'A':
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
+                drum_ev    += build_drums_v2(pat_a, sec_start, sec_bars, swing, bpm,
+                                              fill_bars, energy_float)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                mel_ev     += build_melody_v2(key_root, sec_start, sec_bars, swing, bpm,
+                                              'sparse', scale, motif=track_motif,
+                                              progression=prog, prog_bars=prog_bars, section='A',
+                                              markov_nodes=markov_nodes)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                active_bars += sec_bars
+                _tex = _SUBGENRE_TEXTURE.get(sub_genre)
+                if _tex and random.random() < 0.50:
+                    texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+
+            elif sec_label == 'BR':
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
+                cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+
+            elif sec_label == 'B':
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
+                drum_ev    += build_drums_v2(pat_b, sec_start, sec_bars, swing, bpm,
+                                              fill_bars, energy_float)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                mel_ev     += build_melody_v2(key_root, sec_start, sec_bars, swing, bpm,
+                                              'medium', scale, motif=track_motif,
+                                              progression=prog, prog_bars=prog_bars, section='B',
+                                              markov_nodes=markov_nodes)
+                if sec_bars > prog_bars:
+                    cmelo_ev += build_counter_melody(key_root, sec_start + prog_bars,
+                                                     sec_bars - prog_bars, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                active_bars += sec_bars
+                _tex = _SUBGENRE_TEXTURE.get(sub_genre)
+                if _tex and random.random() < 0.50:
+                    texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+
+            elif sec_label == 'O':
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, False)
+                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
+                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                od_bars = max(1, sec_bars // 2)
+                od_raw  = build_drums_v2(pat_a, sec_start, od_bars, swing, bpm,
+                                         energy=energy_float)
+                n_od    = len(od_raw)
+                od_raw  = [(ev[0], ev[1],
+                            max(1, int(ev[2] * (1.0 - (i / max(1, n_od)) * 0.75))),
+                            ev[3])
+                           for i, ev in enumerate(od_raw)]
+                drum_ev += od_raw
+                if sec_bars - od_bars > 0:
+                    drum_ev += build_intro_hats(sec_start + od_bars, sec_bars - od_bars, swing, bpm)
+
+            cursor += sec_bars
+
+        this_events = (piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev)
+
+        if score_track_quality is None:
+            best_events, best_score = this_events, 1.0
+            break
+
+        try:
+            score, failures = score_track_quality(mel_ev, piano_ev, drum_ev, active_bars, sub_genre)
+        except Exception as e:
+            print(f"  [quality] Scoring failed ({e}) — accepting attempt without gating")
+            best_events, best_score, best_failures = this_events, 1.0, []
+            break
+
+        if score > best_score:
+            best_events, best_score, best_failures = this_events, score, failures
+        if score >= MIN_QUALITY_SCORE:
+            break
+
+    if best_score < MIN_QUALITY_SCORE and score_track_quality is not None:
+        print(f"  [quality] Track scored {best_score:.2f} after {attempts_used} attempt(s) "
+              f"(failures: {best_failures}) — using best attempt, not blocking upload")
+
+    piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev = best_events
 
     drum_ev = _apply_tension_to_drums(drum_ev, TOTAL, energy_mult)
 
@@ -926,8 +976,14 @@ def build_midi_v2(params: dict, output_path: str) -> str:
         mid.tracks.append(abs_to_track(texture_ev, channel=5, program=tex_prog))
 
     # Feed this track's melody into the self-referential history (see
-    # generate_music_gemini._build_self_markov / pick_params).
+    # generate_music_gemini._build_self_markov / pick_params). Fires once, on
+    # the winning attempt only — see build_midi()'s identical comment.
     _save_melody_pitch_classes([note % 12 for (_t, note, _v, _d) in mel_ev])
+    try:
+        _append_recipe_log(params, quality_score=best_score,
+                            quality_retries=attempts_used - 1, ga_voicing=bool(ga_flag))
+    except Exception:
+        pass
 
     mid.save(output_path)
     return output_path

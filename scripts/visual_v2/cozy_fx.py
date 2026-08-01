@@ -20,7 +20,8 @@ import random
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-from .config import W, H
+from .config import W, H, FPS
+from .noise import noise_field_frames, noise_gradient
 
 
 # ── Theme → effect mapping ─────────────────────────────────────────────────────
@@ -72,21 +73,28 @@ def _paste_rgba(base: np.ndarray, rgba: np.ndarray) -> np.ndarray:
 class WindowGlow:
     """
     Gentle breathing light from the window area — simulates clouds passing
-    or subtle atmospheric light change. Very subtle (±3% brightness).
+    or subtle atmospheric light change. Very subtle (±3% brightness). Driven
+    by a small dedicated fractal noise field (sampled at a fixed cell each
+    frame) instead of a single sine wave, for a more organic, non-repeating
+    breathing pattern — appears in every theme (17/17), so this is the
+    highest-reach of the noise-driven cozy_fx upgrades.
     """
     def __init__(self, n_frames: int, rng_seed: int = 1):
-        rng = random.Random(rng_seed)
         # Window region: upper-right quadrant (typical scene composition)
         self.wx0 = W // 2
         self.wy0 = 0
         self.wx1 = W
         self.wy1 = H // 2
-        # Random phase and speed
-        self.phase = rng.uniform(0, math.pi * 2)
-        self.speed = rng.uniform(0.08, 0.18)  # cycles per second
+        self._n_frames = max(1, n_frames)
+        # Small field (32x32): a small field needs proportionally large
+        # warp_amp so a fixed-point sample actually changes frame-to-frame.
+        self._field_get = noise_field_frames(32, 32, self._n_frames, octaves=3,
+                                              base_res=4, warp_amp=2.5, seed=rng_seed + 4000)
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
-        breath = 1.0 + 0.028 * math.sin(t * self.speed * 2 * math.pi + self.phase)
+        frame_idx = int(round(t * FPS)) % self._n_frames
+        val = float(self._field_get(frame_idx)[16, 16])   # [0,1]
+        breath = 1.0 + 0.028 * (val * 2 - 1)               # remap to ±0.028
         result = frame.copy().astype(np.float32)
         region = result[self.wy0:self.wy1, self.wx0:self.wx1]
         result[self.wy0:self.wy1, self.wx0:self.wx1] = np.clip(region * breath, 0, 255)
@@ -151,7 +159,12 @@ class RainOverlay:
 class CandleFlicker:
     """
     Warm pulsing glow radiating from the desk-lamp / candle region.
-    Simulates the subtle brightness variation of a real flame.
+    Simulates the subtle brightness variation of a real flame: a slow,
+    organic base wander driven by a small dedicated noise field (replacing
+    the old 4-sine sum), plus one residual fast sine harmonic layered on top
+    for the quick micro-flicker a candle physically has — a low-res orbiting
+    noise field alone under-represents that fast component. Appears in
+    11/17 themes.
     """
     def __init__(self, n_frames: int, rng_seed: int = 3):
         rng = random.Random(rng_seed)
@@ -159,16 +172,19 @@ class CandleFlicker:
         self.cx = int(W * 0.22)
         self.cy = int(H * 0.62)
         self.radius = 320
-        self.phases = [rng.uniform(0, math.pi * 2) for _ in range(4)]
-        self.speeds  = [rng.uniform(1.5, 4.5) for _ in range(4)]
-        self.amps    = [rng.uniform(0.015, 0.04) for _ in range(4)]
+        self._n_frames = max(1, n_frames)
+        self._field_get = noise_field_frames(24, 24, self._n_frames, octaves=3,
+                                              base_res=4, warp_amp=3.0, seed=rng_seed + 5000)
+        self.micro_phase = rng.uniform(0, math.pi * 2)
+        self.micro_speed = rng.uniform(6.0, 9.0)
+        self.micro_amp   = rng.uniform(0.008, 0.015)
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
-        # Flicker = sum of sine waves at different frequencies
-        flicker = 1.0 + sum(
-            a * math.sin(t * s * 2 * math.pi + p)
-            for a, s, p in zip(self.amps, self.speeds, self.phases)
-        )
+        frame_idx = int(round(t * FPS)) % self._n_frames
+        val = float(self._field_get(frame_idx)[12, 12])   # [0,1]
+        noise_delta = (val * 2 - 1) * 0.05
+        micro_delta = self.micro_amp * math.sin(t * self.micro_speed * 2 * math.pi + self.micro_phase)
+        flicker = 1.0 + noise_delta + micro_delta
         # Radial warm glow mask
         ys = np.arange(H, dtype=np.float32)
         xs = np.arange(W, dtype=np.float32)

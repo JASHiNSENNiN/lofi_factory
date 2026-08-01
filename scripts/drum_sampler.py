@@ -282,11 +282,18 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
     hat_c = _hihat(False)
     hat_o = _hihat(True)
 
-    # ~20% chance to use a freshly-generated Euclidean pattern instead of the
-    # fixed 5-pattern table, for extra rhythmic variety on this synthesis layer.
-    if random.random() < 0.20:
-        pat = generate_euclidean_pat_dict(energy=random.uniform(0.35, 0.85))
-    else:
+    # ~35% chance to use a freshly-generated Euclidean pattern instead of the
+    # fixed 5-pattern table, for extra rhythmic variety on this synthesis layer
+    # (Phase-A adoption bump; started at 20%). This module is intentionally
+    # dependency-free of generate_music_gemini.py, so a failure here can't
+    # cascade into the MIDI-layer generation — still wrapped defensively since
+    # this runs unattended daily.
+    try:
+        if random.random() < 0.35:
+            pat = generate_euclidean_pat_dict(energy=random.uniform(0.35, 0.85))
+        else:
+            pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
+    except Exception:
         pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
 
     for step in range(16 * n_bars):
