@@ -1,10 +1,15 @@
 """
 Musical DNA extraction: take a mainstream song and derive lofi MIDI generation parameters.
 
-Three paths (tried in order):
+Paths, tried in order — procedural/deterministic paths first, LLM last and opt-in only:
   A) MIDI file scrape from bitmidi.com → parse melody/chords → map to params
   B) Spotify audio features → deterministic parameter mapping
-  C) Groq LLM derivation from title+artist string alone
+  C) Text-heuristic: keyword-lexicon mood/energy inference from title+artist, deterministic
+     (same song -> same params every run), no network call, no LLM. This is the primary
+     fallback and does the job Groq used to do, without an API call.
+  D) Groq LLM derivation — explicit opt-in failsafe only (LOFI_LLM_FAILSAFE=1 env var),
+     tried only if C somehow raises. Should essentially never be reached.
+  E) Absolute last-resort deterministic hash fallback (no text analysis at all).
 
 Output: MidiDNA — maps 1:1 to the `params` dict that build_midi() reads.
 """
@@ -92,7 +97,8 @@ _last_bitmidi_req = 0.0
 
 def extract_song_dna(song: "SongInfo", spotify_features: "SpotifyFeatures | None") -> "MidiDNA":
     """
-    Derive MidiDNA for a song. Tries 3 paths in order; always returns a result.
+    Derive MidiDNA for a song. Tries procedural paths in order; always returns a result.
+    Groq is opt-in (LOFI_LLM_FAILSAFE=1) and only reached if every procedural path fails.
     """
     from .models import MidiDNA
 
@@ -116,17 +122,27 @@ def extract_song_dna(song: "SongInfo", spotify_features: "SpotifyFeatures | None
         except Exception as e:
             print(f"  [extract] Spotify feature mapping failed: {e}")
 
-    # Path C: Groq LLM
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    if groq_key:
-        try:
-            dna = _derive_dna_from_groq(song, groq_key)
-            print(f"  [extract] Groq derivation used for '{song.title}'")
-            return dna
-        except Exception as e:
-            print(f"  [extract] Groq derivation failed: {e}")
+    # Path C: text-heuristic — deterministic, keyword-lexicon derived from title+artist.
+    # This is the primary fallback and replaces what Groq used to be relied on for.
+    try:
+        dna = _derive_dna_from_heuristic(song)
+        print(f"  [extract] Text-heuristic derivation used for '{song.title}'")
+        return dna
+    except Exception as e:
+        print(f"  [extract] Text-heuristic derivation failed: {e}")
 
-    # Fallback: deterministic hash-based params (same song → same params, every time)
+    # Path D: Groq LLM — explicit opt-in failsafe only, should essentially never trigger
+    if os.getenv("LOFI_LLM_FAILSAFE") == "1":
+        groq_key = os.getenv("GROQ_API_KEY", "")
+        if groq_key:
+            try:
+                dna = _derive_dna_from_groq(song, groq_key)
+                print(f"  [extract] Groq failsafe used for '{song.title}'")
+                return dna
+            except Exception as e:
+                print(f"  [extract] Groq failsafe failed: {e}")
+
+    # Path E: absolute last-resort deterministic hash fallback (no text analysis)
     print(f"  [extract] Using hash-based fallback for '{song.title}'")
     return _derive_dna_from_hash(song)
 
@@ -490,7 +506,108 @@ def _pick_mood(valence: float, energy: float) -> str:
     return random.choice(_MOOD_PHRASES[quadrant])
 
 
-# ─── Path C: Groq LLM derivation ──────────────────────────────────────────────
+# ─── Path C: text-heuristic derivation (deterministic, no network, no LLM) ────
+
+# Word → valence (sad/negative=low ... happy/positive=high) contribution
+_VALENCE_KEYWORDS: dict[str, float] = {
+    "love": 0.8, "loved": 0.8, "happy": 0.85, "sun": 0.75, "sunny": 0.75,
+    "summer": 0.75, "smile": 0.8, "smiling": 0.8, "dance": 0.7, "dancing": 0.7,
+    "sweet": 0.7, "gold": 0.65, "golden": 0.7, "bright": 0.75, "warm": 0.7,
+    "good": 0.65, "joy": 0.85, "shine": 0.7, "shining": 0.7, "light": 0.6,
+    "sky": 0.6, "free": 0.65, "young": 0.6, "beautiful": 0.7, "paradise": 0.75,
+    "sad": 0.15, "sadness": 0.15, "cry": 0.15, "crying": 0.15, "alone": 0.2,
+    "lonely": 0.15, "dark": 0.2, "pain": 0.1, "hurt": 0.15, "broken": 0.15,
+    "goodbye": 0.25, "lost": 0.2, "rain": 0.3, "rainy": 0.3, "night": 0.35,
+    "cold": 0.3, "blue": 0.3, "sorry": 0.25, "hate": 0.1, "fear": 0.15,
+    "ghost": 0.25, "shadow": 0.25, "tears": 0.15, "grief": 0.1, "empty": 0.2,
+    "cruel": 0.15, "sick": 0.2, "afraid": 0.2,
+}
+
+# Word → energy (calm/slow=low ... loud/intense=high) contribution
+_ENERGY_KEYWORDS: dict[str, float] = {
+    "dance": 0.85, "dancing": 0.85, "party": 0.9, "run": 0.8, "running": 0.8,
+    "fire": 0.8, "fight": 0.85, "fighting": 0.85, "loud": 0.8, "wild": 0.75,
+    "up": 0.6, "jump": 0.8, "hard": 0.7, "rock": 0.7, "beat": 0.65,
+    "energy": 0.75, "power": 0.7, "alive": 0.65, "crazy": 0.7, "fast": 0.75,
+    "slow": 0.15, "slowly": 0.15, "quiet": 0.15, "still": 0.15, "sleep": 0.1,
+    "sleeping": 0.1, "calm": 0.15, "soft": 0.2, "softly": 0.2, "whisper": 0.15,
+    "drift": 0.2, "drifting": 0.2, "float": 0.2, "floating": 0.2, "night": 0.3,
+    "rain": 0.25, "chill": 0.2, "chilling": 0.2, "slow-motion": 0.1, "lazy": 0.15,
+    "dream": 0.25, "dreaming": 0.25, "peace": 0.2, "peaceful": 0.15,
+}
+
+_WORD_RE = re.compile(r"[a-z']+")
+
+
+def _infer_mood_from_text(text: str) -> tuple[float, float]:
+    """Score (valence, energy) in [0,1] from keyword hits in title+artist text.
+    Falls back to a neutral 0.5/0.5 midpoint when no known words are present —
+    the deterministic hash-seeded RNG downstream still gives per-song variety."""
+    words = _WORD_RE.findall(text.lower())
+    v_hits = [_VALENCE_KEYWORDS[w] for w in words if w in _VALENCE_KEYWORDS]
+    e_hits = [_ENERGY_KEYWORDS[w] for w in words if w in _ENERGY_KEYWORDS]
+    valence = sum(v_hits) / len(v_hits) if v_hits else 0.5
+    energy = sum(e_hits) / len(e_hits) if e_hits else 0.5
+    return valence, energy
+
+
+def _derive_dna_from_heuristic(song: "SongInfo") -> "MidiDNA":
+    """
+    Deterministic, text-aware derivation: infers mood/energy from the song's title+artist
+    via a hand-built keyword lexicon (the same job Path D's LLM call used to do), then reuses
+    the same valence/energy-driven derivation logic as the Spotify path (Path B) for
+    scale/progression/sub-genre/drums. Same song -> same result every run; no network
+    call, no LLM. This is the primary non-network fallback tier.
+    """
+    from .models import MidiDNA
+
+    text = f"{song.title} {song.artist}"
+    valence, energy = _infer_mood_from_text(text)
+
+    seed_str = f"{song.artist_slug}:{song.title_slug}"
+    digest = int(hashlib.sha256(seed_str.encode()).hexdigest(), 16)
+
+    # Seed the shared `random` module deterministically for this song only, then restore
+    # non-deterministic global state afterward so we don't affect unrelated callers.
+    state = random.getstate()
+    random.seed(digest)
+    try:
+        mode = 1 if valence >= 0.5 else 0
+        key = _map_pitch_class_to_key(digest % 12, mode)
+        scale = _derive_scale(mode, valence, energy)
+        progression = _derive_progression(mode, valence, energy)
+        subgenre = _pick_subgenre(valence, mode, energy)
+        drum_a, drum_b = _derive_drums(energy)
+        swing = round(0.62 + ((digest // 12) % 100) / 100 * 0.08, 2)
+        bass_walking = energy < 0.45
+        mood = _pick_mood(valence, energy)
+        drum_energy = "high" if energy > 0.7 else "medium" if energy > 0.35 else "low"
+        melody_density = "medium" if energy > 0.5 else "sparse"
+        lofi_bpm = max(62, min(92, int(72 + (energy - 0.5) * 30)))
+    finally:
+        random.setstate(state)
+
+    return MidiDNA(
+        source_title=song.title,
+        source_artist=song.artist,
+        original_bpm=lofi_bpm / 0.70,
+        dna_source="text_heuristic",
+        bpm=lofi_bpm,
+        key=key,
+        progression=progression,
+        swing=swing,
+        mood=mood,
+        melody_density=melody_density,
+        melody_scale=scale,
+        bass_walking=bass_walking,
+        drum_energy=drum_energy,
+        sub_genre=subgenre,
+        drum_pattern_a=drum_a,
+        drum_pattern_b=drum_b,
+    )
+
+
+# ─── Path D: Groq LLM derivation (opt-in failsafe only) ───────────────────────
 
 _GROQ_PROMPT = """Given the mainstream song "{title}" by "{artist}", derive parameters to create
 a lo-fi hip hop inspired cover track. Output ONLY valid JSON (no markdown) matching this schema:
@@ -552,7 +669,7 @@ def _derive_dna_from_groq(song: "SongInfo", groq_key: str) -> "MidiDNA":
     )
 
 
-# ─── Path D: Hash-based fallback ──────────────────────────────────────────────
+# ─── Path E: absolute last-resort hash-based fallback ─────────────────────────
 
 def _derive_dna_from_hash(song: "SongInfo") -> "MidiDNA":
     """Deterministic fallback: same song → same params, every time."""

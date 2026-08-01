@@ -130,7 +130,7 @@ def _build_description(
         "👍 Like if this hit different",
         "💬 Drop the song you want covered next in the comments",
         "",
-        "Original arrangement. All tracks composed fresh.",
+        "Instrumental reinterpretation — freshly composed and synthesized. No audio from the original recording.",
         "",
         f"#lofi #lofihiphop #{song.title_slug.replace('-', '')[:25]} #{song.artist_slug.replace('-', '')[:20]}lofi #studymusic",
         "",

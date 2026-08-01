@@ -1521,10 +1521,21 @@ def _resolve_genre_hint(hint: str) -> str | None:
 
 def _pick_mood_phrase(concept_hint: str | None = None, sub_genre: str = '',
                       history: list[dict] | None = None) -> str:
-    """Poetic mood phrase. Groq primary; procedural composer fallback."""
+    """Poetic mood phrase. Procedural composer is primary (combinatorial word-bank
+    generator — thousands of unique phrases per genre, never repeats fixed strings).
+    Groq LLM is only ever used as an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1)
+    if the procedural composer can't produce a fresh, non-repeated phrase."""
     if concept_hint:
         return concept_hint
-    if GROQ_KEY:
+
+    recent = {h['mood'] for h in (history or [])[-10:] if h.get('mood')}
+    phrase = _compose_mood_phrase(sub_genre)
+    for _ in range(5):
+        if phrase not in recent:
+            return phrase
+        phrase = _compose_mood_phrase(sub_genre)
+
+    if os.getenv('LOFI_LLM_FAILSAFE') == '1' and GROQ_KEY:
         try:
             from groq import Groq
             genre_txt = f' Genre: {sub_genre.replace("_", " ")}.' if sub_genre else ''

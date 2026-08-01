@@ -44,7 +44,7 @@ def generate_visual(theme_name: str = "cozy_rain",
                     visual_seed: int = None,
                     track_title: str = "lofi dreams",
                     genre: str = "lo-fi hip hop",
-                    use_ai_bg: bool = True,
+                    use_ai_bg: bool = False,
                     regen_bg: bool = False) -> tuple:
     """
     Render an abstract lo-fi radio interface loop video.

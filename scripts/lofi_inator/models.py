@@ -55,7 +55,7 @@ class MidiDNA:
     source_title: str
     source_artist: str
     original_bpm: float
-    dna_source: str    # "midi_parse" | "spotify_features" | "groq_derive" | "fallback"
+    dna_source: str    # "midi_parse" | "spotify_features" | "text_heuristic" | "groq_derive" | "fallback"
 
     # Params that build_midi() reads directly
     bpm: int           # lofi BPM = original * 0.67-0.73, clamped [62, 92]

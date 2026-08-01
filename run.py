@@ -154,8 +154,9 @@ def main():
                         help="Use local Ollama to enhance SEO description")
     parser.add_argument("--visual-seed", type=int, default=None,
                         help="Seed for visual scene layout (random if omitted — use to reproduce a specific render)")
-    parser.add_argument("--no-ai-bg", action="store_true",
-                        help="Use programmatic gradient background instead of Gemini-generated scene")
+    parser.add_argument("--ai-bg", action="store_true",
+                        help="Use an AI-generated (Pollinations.ai) background scene instead of the "
+                             "procedural gradient background. Off by default.")
     parser.add_argument("--regen-bg", action="store_true",
                         help="Force regenerate the AI background even if a cached version exists")
     parser.add_argument("--stream", action="store_true",
@@ -231,7 +232,7 @@ def main():
             theme_name=theme, duration_secs=vis_secs,
             visual_seed=args.visual_seed,
             track_title=np_title, genre=np_genre,
-            use_ai_bg=not args.no_ai_bg,
+            use_ai_bg=args.ai_bg,
             regen_bg=args.regen_bg,
         )
     else:

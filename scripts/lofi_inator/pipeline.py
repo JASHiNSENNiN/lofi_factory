@@ -126,13 +126,15 @@ def _process_song(
     cover_seo = generate_cover_seo(song, midi_dna, duration, visual_theme)
     print(f"  Title: {cover_seo.title}")
 
-    # ── Music generation ─────────────────────────────────────────
+    # ── Music generation (procedural, DNA-guided — no source audio used) ──────
     _clear_music_dir()
-    from scripts.lofi_inator.audio_cover import make_audio_cover
-    audio_path = make_audio_cover(song, midi_dna)
-    if not audio_path:
-        raise RuntimeError(f"Audio download failed for '{song.artist} — {song.title}' — skipping.")
-    wav_files = [audio_path]
+    from scripts.generate_music_gemini import generate_tracks
+    track_count = _DURATION_MUSIC_COUNT.get(duration, 1)
+    wav_files: list[str] = []
+    for variant in _dna_variants(midi_dna, track_count):
+        wav_files += generate_tracks(count=1, song_dna=_dna_to_params(variant))
+    if not wav_files:
+        raise RuntimeError(f"MIDI generation failed for '{song.artist} — {song.title}' — skipping.")
 
     # ── Visual generation ────────────────────────────────────────
     print(f"  Rendering {visual_theme} visual...")
@@ -144,7 +146,7 @@ def _process_song(
         visual_seed=random.randint(0, 9999),
         track_title=cover_seo.title,
         genre=midi_dna.sub_genre.replace("_", " "),
-        use_ai_bg=True,
+        use_ai_bg=False,
         regen_bg=False,
     )
 
@@ -159,6 +161,7 @@ def _process_song(
         theme_name=actual_theme,
         duration_label=duration,
         visual_path=visual_path,
+        music_files=wav_files,
     )
 
     if dry_run:
@@ -198,6 +201,36 @@ def _process_song(
     )
 
     return {"song": song, "status": "uploaded", "video_url": video_url, "video_id": video_id}
+
+
+def _dna_variants(midi_dna: MidiDNA, count: int) -> list[MidiDNA]:
+    """
+    Expand a single song's MidiDNA into `count` variants for multi-track videos, so
+    tracks don't all render with identical key/progression/mood (generate_tracks()
+    reuses the same song_dna verbatim for every track when called with count>1
+    directly). Key/sub_genre/bpm stay anchored to the source song; only progression
+    and mood rotate across a mood-quadrant cycle for variety. count==1 (the common
+    "single" duration case) returns the DNA unchanged.
+    """
+    if count <= 1:
+        return [midi_dna]
+
+    from .extract import _MINOR_PROGS, _MAJOR_PROGS, _MOOD_PHRASES
+
+    mode = 0 if midi_dna.key in ("Am", "Dm", "Em", "Gm", "Cm") else 1
+    prog_pool = [p for p in (_MINOR_PROGS if mode == 0 else _MAJOR_PROGS) if p != midi_dna.progression]
+    random.shuffle(prog_pool)
+    quadrants = list(_MOOD_PHRASES.keys())
+
+    variants = [midi_dna]
+    for i in range(1, count):
+        if not prog_pool:
+            prog_pool = list(_MINOR_PROGS if mode == 0 else _MAJOR_PROGS)
+            random.shuffle(prog_pool)
+        progression = prog_pool.pop(0)
+        mood = random.choice(_MOOD_PHRASES[quadrants[i % len(quadrants)]])
+        variants.append(dataclasses.replace(midi_dna, progression=progression, mood=mood))
+    return variants
 
 
 def _dna_to_params(midi_dna: MidiDNA) -> dict:
