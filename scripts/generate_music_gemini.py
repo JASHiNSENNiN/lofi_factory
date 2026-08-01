@@ -220,9 +220,9 @@ _SWING_DEFAULT = (0.58, 0.68)
 
 # Cozy/bright sub-genres for the channel identity bias (2× base weight in picker)
 _COZY_SUBGENRES: frozenset[str] = frozenset({
-    "cozy_cafe', 'anime_lofi', 'summer_vibes', 'study_lofi",
-    "morning_lofi', 'jazz_cafe', 'piano_lofi', 'bedroom_pop",
-    "lofi_rnb', 'lofi_classical', 'lofi_house', 'chillhop",
+    "cozy_cafe", "anime_lofi", "summer_vibes", "study_lofi",
+    "morning_lofi", "jazz_cafe", "piano_lofi", "bedroom_pop",
+    "lofi_rnb", "lofi_classical", "lofi_house", "chillhop",
 })
 
 # Per-sub-genre FX biasing. NOTE: no longer consumed anywhere (the in-file apply_lofi_fx()
@@ -457,6 +457,78 @@ _EUCL_HATS = {
     'bossa16':   (_bjorklund(3, 16)),        # sparse bossa
     'clave':     (_bjorklund(5, 16)),        # clave approximation
 }
+
+_DRUM_ENERGY_TO_FLOAT = {'low': 0.25, 'medium': 0.55, 'high': 0.85}
+
+
+def generate_euclidean_drum_pattern(energy: float, complexity: float = 0.5,
+                                     seed: int | None = None) -> dict:
+    """
+    Generate a full 16-step drum pattern parametrically via Bjorklund's
+    Euclidean-rhythm algorithm, generalizing the 4 fixed _EUCL_HATS presets
+    (which only ever cover the hi-hat, as a rare fixed-pattern override) into
+    a continuous family driven by energy/complexity floats in [0,1]. Returns
+    a dict in the same {DRUM_NOTE: [16 velocities]} format as DRUM_PATTERNS
+    entries, so it's a drop-in alternative to a curated pattern.
+    """
+    rng = random.Random(seed) if seed is not None else random
+    energy = max(0.0, min(1.0, energy))
+    complexity = max(0.0, min(1.0, complexity))
+    n = 16
+
+    # Kick onset count scales with energy: sparse/grounded at low energy,
+    # busier and more driving at high energy. +-1 jitter so repeated calls at
+    # the same energy/complexity still produce genuinely different patterns
+    # rather than a deterministic 1:1 mapping.
+    k_kick = max(2, min(6, round(2 + energy * 4) + rng.choice([-1, 0, 0, 1])))
+    kick_pat = _bjorklund(k_kick, n)
+
+    # Snare: rotation-search all 16 rotations of a Euclidean pattern and keep
+    # whichever maximizes overlap with the backbeat (steps 4, 12) — this keeps
+    # the genre-defining backbeat feel even though the pattern is Euclidean-derived.
+    k_snare = (2 if energy < 0.5 else 3) + rng.choice([0, 0, 1])
+    snare_base = _bjorklund(k_snare, n)
+    backbeat = {4, 12}
+    best_rot, best_score = snare_base, -1
+    for r in range(n):
+        rotated = snare_base[r:] + snare_base[:r]
+        score = sum(1 for step in backbeat if rotated[step])
+        if score > best_score:
+            best_rot, best_score = rotated, score
+    snare_pat = best_rot
+
+    # Hats/rim: onset density scales with complexity.
+    k_chh = max(5, min(11, round(5 + complexity * 6) + rng.choice([-1, 0, 0, 1])))
+    chh_pat = _bjorklund(k_chh, n)
+    k_ohh = max(1, round(2 + energy * 2) + rng.choice([-1, 0, 0]))
+    ohh_pat = _bjorklund(max(1, k_ohh), n)
+    k_rim = max(0, round(complexity * 3) + rng.choice([-1, 0, 1]))
+    rim_pat = _bjorklund(k_rim, n) if k_rim > 0 else [0] * n
+
+    def _velocities(onsets: list[int], base_vel: int, accent_vel: int) -> list[int]:
+        """Inter-onset-interval weighting: an onset preceded by a longer gap
+        reads as perceptually stronger (Toussaint's metric-complexity idea),
+        so give it proportionally more velocity than a densely-packed onset,
+        instead of a flat velocity for every hit."""
+        vels = [0] * n
+        onset_steps = [i for i, on in enumerate(onsets) if on]
+        if not onset_steps:
+            return vels
+        for idx, step in enumerate(onset_steps):
+            prev_step = onset_steps[idx - 1] if idx > 0 else onset_steps[-1] - n
+            gap = step - prev_step
+            gap_frac = max(0.0, min(1.0, gap / (n / 2)))
+            vels[step] = int(base_vel + gap_frac * (accent_vel - base_vel))
+        return vels
+
+    return {
+        KICK:  _velocities(kick_pat,  60, 95),
+        SNARE: _velocities(snare_pat, 65, 90),
+        CHH:   _velocities(chh_pat,   40, 72),
+        OHH:   _velocities(ohh_pat,   45, 70),
+        RIM:   _velocities(rim_pat,   28, 42),
+    }
+
 
 # ─── DRUM PATTERNS (16-step) ──────────────────────────────────────────────────
 
@@ -807,6 +879,10 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None):
     fill_template = random.choice(DRUM_FILLS)
     # Euclidean hi-hat: 15% chance of polyrhythmic CHH pattern per section
     eucl_hat = random.choice(list(_EUCL_HATS.values())) if random.random() < 0.15 else None
+    # Independent second Euclidean layer for OHH/RIM (10% chance, own pattern
+    # and own target channel, layered on top of whatever CHH is doing).
+    eucl_layer2 = random.choice(list(_EUCL_HATS.values())) if random.random() < 0.10 else None
+    eucl_layer2_note = random.choice([OHH, RIM]) if eucl_layer2 is not None else None
 
     for bar in range(num_bars):
         abs_bar = start_bar + bar
@@ -841,6 +917,12 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None):
                 # Euclidean CHH override (replaces fixed pattern with polyrhythm)
                 if eucl_hat is not None and drum_note == CHH and not use_fill:
                     vel_val = 55 if eucl_hat[step % len(eucl_hat)] else 0
+
+                # Independent second Euclidean layer (OHH or RIM) — a different
+                # polyrhythm than whatever CHH is doing, for extra texture.
+                if (eucl_layer2 is not None and drum_note == eucl_layer2_note
+                        and not use_fill):
+                    vel_val = 45 if eucl_layer2[step % len(eucl_layer2)] else 0
 
                 # Per-bar mutation: occasionally drop or ghost a hit
                 if not use_fill:
@@ -1473,6 +1555,7 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
     pat_b  = random.choice(other)
 
     sw_lo, sw_hi = _SWING_RANGE.get(sub, _SWING_DEFAULT)
+    drum_energy = cfg.get('energy') or random.choice(['low', 'medium', 'high'])
     params = {
         'key':            key,
         'progression':    prog,
@@ -1484,9 +1567,19 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         'bass_walking':   random.random() < 0.4,
         'drum_pattern_a': pat_a,
         'drum_pattern_b': pat_b,
-        'drum_energy':    cfg.get('energy') or random.choice(['low', 'medium', 'high']),
+        'drum_energy':    drum_energy,
         'sub_genre':      sub,
     }
+
+    # ~20% independent chance each for A/B drum sections to use a freshly
+    # generated Euclidean pattern instead of the curated table — the curated
+    # table stays the ~80% reliable default.
+    energy_f = _DRUM_ENERGY_TO_FLOAT.get(drum_energy, 0.55)
+    complexity_f = round(random.uniform(0.3, 0.8), 2)
+    if random.random() < 0.20:
+        params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+    if random.random() < 0.20:
+        params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
 
     if key in ('C', 'G', 'F') and prog < 16:
         print(f"  [params] NOTE: major key '{key}' with minor prog {prog} — voicings will be modal")
@@ -1692,8 +1785,10 @@ def build_midi(params, output_path):
     # Drum pattern selection (Groq picks specific patterns now)
     pat_a_idx = int(params.get('drum_pattern_a', random.randint(0, len(DRUM_PATTERNS)-1)))
     pat_b_idx = int(params.get('drum_pattern_b', random.randint(0, len(DRUM_PATTERNS)-1)))
-    pat_a = DRUM_PATTERNS[pat_a_idx % len(DRUM_PATTERNS)]
-    pat_b = DRUM_PATTERNS[pat_b_idx % len(DRUM_PATTERNS)]
+    # A freshly-generated Euclidean pattern (see generate_euclidean_drum_pattern,
+    # set ~20% of the time in pick_params) takes priority over the curated table.
+    pat_a = params.get('drum_pattern_a_generated') or DRUM_PATTERNS[pat_a_idx % len(DRUM_PATTERNS)]
+    pat_b = params.get('drum_pattern_b_generated') or DRUM_PATTERNS[pat_b_idx % len(DRUM_PATTERNS)]
 
     # Sub-genre config (piano/melody programs, forced energy)
     _cfg = _SUBGENRE_CONFIG.get(sub_genre, {})
@@ -2004,7 +2099,8 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
                 'the groove that keeps you moving forward',
             ])
 
-        param_sets.append({
+        diverse_energy = cfg.get('energy') or random.choice(['low', 'medium', 'high'])
+        track_params = {
             'key':            key,
             'progression':    random.choice(cfg['progs']),
             'bpm':            random.randint(*cfg['bpm']),
@@ -2015,9 +2111,18 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
             'bass_walking':   random.random() < 0.4,
             'drum_pattern_a': pat_a,
             'drum_pattern_b': pat_b,
-            'drum_energy':    cfg.get('energy') or random.choice(['low', 'medium', 'high']),
+            'drum_energy':    diverse_energy,
             'sub_genre':      sub,
-        })
+        }
+        # Same ~20% independent chance for a generated Euclidean pattern as
+        # the single-track pick_params() path — see generate_euclidean_drum_pattern.
+        energy_f = _DRUM_ENERGY_TO_FLOAT.get(diverse_energy, 0.55)
+        complexity_f = round(random.uniform(0.3, 0.8), 2)
+        if random.random() < 0.20:
+            track_params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+        if random.random() < 0.20:
+            track_params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+        param_sets.append(track_params)
 
     return param_sets
 

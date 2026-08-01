@@ -13,28 +13,60 @@ from .themes import THEMES
 
 # ── Background gradient ──────────────────────────────────────────────────────
 
-def make_gradient_bg(theme: str) -> np.ndarray:
-    """Full-frame vertical gradient, very dark and moody."""
+def make_gradient_bg(theme: str, seed: int = 11) -> np.ndarray:
+    """
+    Full-frame vertical gradient, domain-warped by a static fractal (fBm)
+    noise field for cloud-like texture instead of a flat linear gradient.
+    The field is generated at 1/4 resolution and upsampled (same cheap
+    downsample-then-upsample philosophy as postfx.apply_bloom) since this is
+    a one-time precompute, not per-frame.
+    """
+    from .noise import fractal_noise2d
     c   = THEMES[theme]
     top = np.array(c["bg_top"], dtype=np.float32)
     bot = np.array(c["bg_bot"], dtype=np.float32)
-    t   = np.linspace(0, 1, H, dtype=np.float32)[:, None]
-    arr = (top[None, :] * (1 - t) + bot[None, :] * t).astype(np.uint8)
-    return np.broadcast_to(arr[:, None, :], (H, W, 3)).copy()
+
+    field_small = fractal_noise2d(max(4, H // 4), max(4, W // 4), octaves=4, seed=seed)
+    field = np.asarray(
+        Image.fromarray((field_small * 255).astype(np.uint8)).resize((W, H), Image.BILINEAR),
+        dtype=np.float32,
+    ) / 255.0
+
+    t_row    = np.broadcast_to(np.linspace(0, 1, H, dtype=np.float32)[:, None], (H, W))
+    t_warped = np.clip(t_row + 0.18 * (field - 0.5), 0, 1)[:, :, None]
+    arr = top[None, None, :] * (1 - t_warped) + bot[None, None, :] * t_warped
+    return arr.astype(np.uint8)
 
 
 # ── Star field ───────────────────────────────────────────────────────────────
 
 def make_star_field(theme: str, seed: int = 7) -> np.ndarray:
-    """Static star-like dots scattered across the background."""
+    """
+    Star-like dots scattered across the background, with density weighted by
+    a static fractal noise field so stars cluster along noise ridges
+    (nebula/dust-lane look) instead of scattering uniformly at random.
+    """
+    from .noise import fractal_noise2d
     c   = THEMES[theme]
     rng = np.random.RandomState(seed)
     arr = np.zeros((H, W, 3), dtype=np.uint8)
     sc  = np.array(c.get("star_col", [200, 210, 255]), dtype=np.uint8)
 
-    for _ in range(280):
-        sx = rng.randint(0, W)
-        sy = rng.randint(0, H)
+    field_small = fractal_noise2d(max(4, H // 4), max(4, W // 4), octaves=3, seed=seed + 500)
+    field = np.asarray(
+        Image.fromarray((field_small * 255).astype(np.uint8)).resize((W, H), Image.BILINEAR),
+        dtype=np.float32,
+    ) / 255.0
+    # Square the field to sharpen clustering contrast before using as weights.
+    weights = (field ** 2).ravel()
+    weights = weights / weights.sum()
+
+    n_stars = 280
+    flat_idx = rng.choice(H * W, size=n_stars, p=weights)
+    ys, xs = np.unravel_index(flat_idx, (H, W))
+
+    for i in range(n_stars):
+        sx, sy = int(xs[i]), int(ys[i])
         br = rng.randint(30, 140)
         r  = rng.randint(0, 3)
         col = (sc * (br / 140)).astype(np.uint8)

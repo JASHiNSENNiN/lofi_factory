@@ -520,6 +520,8 @@ def build_drums_v2(
     fill_bars  = fill_bars or set()
     fill_tmpl  = random.choice(DRUM_FILLS)
     eucl_hat   = random.choice(list(_EUCL_HATS.values())) if random.random() < 0.15 else None
+    eucl_layer2 = random.choice(list(_EUCL_HATS.values())) if random.random() < 0.10 else None
+    eucl_layer2_note = random.choice([OHH, RIM]) if eucl_layer2 is not None else None
 
     for bar in range(num_bars):
         abs_bar  = start_bar + bar
@@ -554,6 +556,11 @@ def build_drums_v2(
                 # Euclidean CHH override
                 if eucl_hat is not None and drum_note == CHH and not use_fill:
                     vel_val = 55 if eucl_hat[step % len(eucl_hat)] else 0
+
+                # Independent second Euclidean layer (OHH or RIM)
+                if (eucl_layer2 is not None and drum_note == eucl_layer2_note
+                        and not use_fill):
+                    vel_val = 45 if eucl_layer2[step % len(eucl_layer2)] else 0
 
                 # Energy-aware mutation (respects protected steps)
                 if not use_fill:
@@ -599,8 +606,8 @@ def build_midi_v2(params: dict, output_path: str) -> str:
 
     pat_a_idx = int(params.get('drum_pattern_a', random.randint(0, len(DRUM_PATTERNS) - 1)))
     pat_b_idx = int(params.get('drum_pattern_b', random.randint(0, len(DRUM_PATTERNS) - 1)))
-    pat_a     = DRUM_PATTERNS[pat_a_idx % len(DRUM_PATTERNS)]
-    pat_b     = DRUM_PATTERNS[pat_b_idx % len(DRUM_PATTERNS)]
+    pat_a     = params.get('drum_pattern_a_generated') or DRUM_PATTERNS[pat_a_idx % len(DRUM_PATTERNS)]
+    pat_b     = params.get('drum_pattern_b_generated') or DRUM_PATTERNS[pat_b_idx % len(DRUM_PATTERNS)]
 
     _cfg          = _SUBGENRE_CONFIG.get(sub_genre, {})
     piano_prog    = _cfg.get('piano', GM_RHODES)

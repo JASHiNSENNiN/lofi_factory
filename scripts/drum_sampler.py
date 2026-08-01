@@ -179,6 +179,57 @@ _PAT_DUSTY = {
     "h": [0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3],
 }
 
+def _bjorklund(k: int, n: int) -> list[int]:
+    """Bjorklund's Euclidean-rhythm algorithm E(k,n): distribute k onsets as
+    evenly as possible over n steps. Kept as a standalone local copy (rather
+    than importing from generate_music_gemini.py) so this synthesis module
+    has zero dependency on the MIDI-generation module."""
+    pattern, level = [], 0
+    for _ in range(n):
+        level += k
+        if level >= n:
+            level -= n
+            pattern.append(1)
+        else:
+            pattern.append(0)
+    if 1 in pattern:
+        first = pattern.index(1)
+        pattern = pattern[first:] + pattern[:first]
+    return pattern
+
+
+def generate_euclidean_pat_dict(energy: float) -> dict:
+    """
+    Generate a fresh 16-step {'k','s','h'} amplitude-pattern dict via
+    Euclidean rhythms, matching the exact format of _PAT_STANDARD etc., as a
+    generative alternative to always picking from the fixed 5-pattern table.
+    """
+    energy = max(0.0, min(1.0, energy))
+    n = 16
+    k_kick = max(2, min(5, round(2 + energy * 3)))
+    k_hat = max(6, min(12, round(6 + energy * 4)))
+    kick_pat = _bjorklund(k_kick, n)
+    hat_pat = _bjorklund(k_hat, n)
+
+    # Snare: rotation-search for max overlap with the backbeat (steps 4, 12) —
+    # same technique used by the MIDI-layer generator in generate_music_gemini.py,
+    # so the synthesized layer and the MIDI layer share the same rhythmic logic.
+    snare_base = _bjorklund(2, n)
+    backbeat = {4, 12}
+    best_rot, best_score = snare_base, -1
+    for r in range(n):
+        rotated = snare_base[r:] + snare_base[:r]
+        score = sum(1 for step in backbeat if rotated[step])
+        if score > best_score:
+            best_rot, best_score = rotated, score
+
+    return {
+        "k": [1.0 if v else 0.0 for v in kick_pat],
+        "s": [0.9 if v else 0.0 for v in best_rot],
+        "h": [0.6 if v else 0.0 for v in hat_pat],
+    }
+
+
 _ALL_PATS = [_PAT_STANDARD, _PAT_BOOM_BAP, _PAT_808_TRAP, _PAT_JAZZ, _PAT_DUSTY]
 
 _SUBGENRE_PAT: dict[str, dict] = {
@@ -231,7 +282,12 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
     hat_c = _hihat(False)
     hat_o = _hihat(True)
 
-    pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
+    # ~20% chance to use a freshly-generated Euclidean pattern instead of the
+    # fixed 5-pattern table, for extra rhythmic variety on this synthesis layer.
+    if random.random() < 0.20:
+        pat = generate_euclidean_pat_dict(energy=random.uniform(0.35, 0.85))
+    else:
+        pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
 
     for step in range(16 * n_bars):
         step_in_bar = step % 16

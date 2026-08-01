@@ -2,7 +2,6 @@
 particles.py — Floating orb atmosphere particles for the abstract interface.
 """
 
-import math
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -19,24 +18,38 @@ class FloatingOrbs:
     def __init__(self, n: int = ORB_COUNT, rng_seed: int = 0):
         rng = np.random.RandomState(rng_seed)
         self.n  = n
-        # Position, velocity, size, alpha, hue-offset
+        # Position, size, alpha
         self.px  = rng.uniform(0, W, n).astype(np.float32)
         self.py  = rng.uniform(0, H, n).astype(np.float32)
-        self.vx  = rng.uniform(-0.18, 0.18, n).astype(np.float32)
-        self.vy  = rng.uniform(-0.12, 0.12, n).astype(np.float32)
         self.r   = rng.uniform(28, 180, n).astype(np.float32)
         self.alp = rng.uniform(0.03, 0.12, n).astype(np.float32)
-        # Sine drift params (slow)
-        self.dr_amp   = rng.uniform(18, 80, n).astype(np.float32)
-        self.dr_freq  = rng.uniform(0.20, 0.65, n).astype(np.float32)
-        self.dr_phase = rng.uniform(0, 2 * math.pi, n).astype(np.float32)
-        self.dr_axis  = rng.randint(0, 2, n)  # 0=x drift, 1=y drift
+        self.speed = rng.uniform(0.15, 0.5, n).astype(np.float32)
+
+        # Curl-noise flow field: a static fractal field whose spatial gradient
+        # (dy, -dx) is divergence-free, producing swirly current-like drift —
+        # replaces the old constant-velocity + single-axis sine wobble.
+        from .noise import fractal_noise2d, noise_gradient
+        self._field_h = max(4, H // 8)
+        self._field_w = max(4, W // 8)
+        field = fractal_noise2d(self._field_h, self._field_w, octaves=3,
+                                 seed=rng_seed + 900, tileable=(True, True))
+        dy, dx = noise_gradient(field)
+        self._flow_dy = dy
+        self._flow_dx = dx
+
+    def _flow_direction(self, px: np.ndarray, py: np.ndarray):
+        """Unit-length curl-noise flow direction (vx, vy) at given positions."""
+        fy = (py / H * self._field_h).astype(np.int32) % self._field_h
+        fx = (px / W * self._field_w).astype(np.int32) % self._field_w
+        vy = self._flow_dy[fy, fx]
+        vx = -self._flow_dx[fy, fx]
+        mag = np.sqrt(vx ** 2 + vy ** 2) + 1e-6
+        return vx / mag, vy / mag
 
     def update(self, t: float) -> None:
-        drift = self.dr_amp * np.sin(self.dr_freq * t + self.dr_phase)
-        x_mask = self.dr_axis == 0
-        self.px = np.where(x_mask, (self.px + self.vx + drift * 0.003) % W, self.px)
-        self.py = np.where(~x_mask, (self.py + self.vy + drift * 0.003) % H, self.py)
+        dir_x, dir_y = self._flow_direction(self.px, self.py)
+        self.px = (self.px + dir_x * self.speed) % W
+        self.py = (self.py + dir_y * self.speed) % H
 
     def render(self, frame: np.ndarray, theme: str) -> None:
         c      = THEMES[theme]

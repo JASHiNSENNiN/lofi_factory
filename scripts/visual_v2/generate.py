@@ -72,7 +72,7 @@ def generate_visual(theme_name: str = "cozy_rain",
             theme_name, force_regen=regen_bg, variant=scene_variant
         )
     if bg_grad is None:
-        bg_grad = make_gradient_bg(theme_name)
+        bg_grad = make_gradient_bg(theme_name, seed=visual_seed)
     star_field  = make_star_field(theme_name, seed=visual_seed)
     scanlines   = make_scanlines(strength=0.055)
     vignette    = make_vignette(strength=0.38)
@@ -105,7 +105,13 @@ def generate_visual(theme_name: str = "cozy_rain",
         "-movflags", "+faststart",
         out_path,
     ]
-    proc = subprocess.Popen(ffcmd, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    # stderr goes to a log file rather than DEVNULL (previously silently
+    # discarded) or PIPE (risks a classic pipe-buffer deadlock here, since
+    # nothing concurrently drains it while we're blocked writing frames to
+    # stdin) — deleted on success, kept and surfaced on failure.
+    ffmpeg_log_path = out_path + ".ffmpeg.log"
+    ffmpeg_log = open(ffmpeg_log_path, "wb")
+    proc = subprocess.Popen(ffcmd, stdin=subprocess.PIPE, stderr=ffmpeg_log)
 
     print("  Rendering frames...")
     try:
@@ -184,6 +190,20 @@ def generate_visual(theme_name: str = "cozy_rain",
     finally:
         proc.stdin.close()
         proc.wait()
+        ffmpeg_log.close()
+        if proc.returncode != 0:
+            print(f"  [ffmpeg] ERROR (exit code {proc.returncode}) — log: {ffmpeg_log_path}")
+            try:
+                with open(ffmpeg_log_path, "r", errors="replace") as _lf:
+                    tail = _lf.read()[-2000:]
+                print(f"  [ffmpeg] last output:\n{tail}")
+            except OSError:
+                pass
+        else:
+            try:
+                os.remove(ffmpeg_log_path)
+            except OSError:
+                pass
 
     size_mb = os.path.getsize(out_path) / 1024 / 1024
     print(f"[VISUAL v2] Done: {out_path} ({size_mb:.1f} MB)")
