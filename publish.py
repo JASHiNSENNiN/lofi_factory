@@ -709,7 +709,8 @@ def cmd_upload(args):
 def _generate_live_title() -> str:
     """
     Generate a unique live broadcast title using the SEO concept engine.
-    Uses Groq + trend data when available; falls back to the static pool.
+    Procedural (pick_concept/build_title) is primary; Groq is only used as an
+    explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1).
     Hard 30s timeout — if APIs hang, falls back to default immediately.
     Returns empty string on any failure (caller uses its own fallback).
     """
@@ -717,7 +718,7 @@ def _generate_live_title() -> str:
 
     def _inner():
         sys.path.insert(0, ROOT)
-        from scripts.generate_seo import pick_concept, build_title, build_title_groq
+        from scripts.generate_seo import pick_concept, build_title
 
         trends = None
         try:
@@ -727,8 +728,10 @@ def _generate_live_title() -> str:
             pass
 
         concept = pick_concept(trends)
-        title   = (build_title_groq(concept, "all night", trends)
-                   or build_title(concept, "all night"))
+        title = build_title(concept, "all night")
+        if os.getenv("LOFI_LLM_FAILSAFE") == "1":
+            from scripts.generate_seo import build_title_groq
+            title = build_title_groq(concept, "all night", trends) or title
         return title.replace("all night", "24/7 live").strip()[:100]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -786,7 +789,7 @@ def _generate_live_description(concept: dict) -> str:
 def _do_midnight_refresh(broadcast_id: str):
     """Generate a fresh title + description and push it to the live broadcast."""
     try:
-        from scripts.generate_seo import pick_concept, build_title, build_title_groq
+        from scripts.generate_seo import pick_concept, build_title
         from scripts.youtube_live_manager import get_youtube_service
         # save_live_state / load_live_state are defined in publish.py itself
 
@@ -802,10 +805,12 @@ def _do_midnight_refresh(broadcast_id: str):
         except Exception:
             pass
 
-        concept     = pick_concept(trends)
-        title       = (build_title_groq(concept, "all night", trends)
-                       or build_title(concept, "all night"))
-        title       = title.replace("all night", "24/7 live").strip()[:100]
+        concept = pick_concept(trends)
+        title   = build_title(concept, "all night")
+        if os.getenv("LOFI_LLM_FAILSAFE") == "1":
+            from scripts.generate_seo import build_title_groq
+            title = build_title_groq(concept, "all night", trends) or title
+        title   = title.replace("all night", "24/7 live").strip()[:100]
         description = _generate_live_description(concept)
 
         # scheduledStartTime is required by the update API

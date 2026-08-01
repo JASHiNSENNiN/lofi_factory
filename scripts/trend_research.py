@@ -442,15 +442,20 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
         d = v.get("duration", "unknown")
         dur_dist[d] = dur_dist.get(d, 0) + 1
 
-    # Optional: Gemini grounded search
-    gemini_insight = fetch_gemini_trends()
-    if gemini_insight:
-        print(f"  [Trends] Gemini insight: {gemini_insight[:80]}...")
+    # Gemini/Groq trend commentary — opt-in failsafe only (LOFI_LLM_FAILSAFE=1).
+    # suggest_thumbnail_theme()/_extract_music_hints() below already derive real
+    # signal directly from the scraped trending_titles via keyword-rule matching,
+    # so these are pure enrichment, not required for the pipeline to function.
+    gemini_insight = None
+    groq_analysis = None
+    if os.getenv("LOFI_LLM_FAILSAFE") == "1":
+        gemini_insight = fetch_gemini_trends()
+        if gemini_insight:
+            print(f"  [Trends] Gemini insight: {gemini_insight[:80]}...")
 
-    # Groq strategic analysis
-    groq_analysis = _groq_analyze_trends(trending_titles, season, seasonal_kw)
-    if groq_analysis:
-        print(f"  [Trends] Groq analysis complete")
+        groq_analysis = _groq_analyze_trends(trending_titles, season, seasonal_kw)
+        if groq_analysis:
+            print(f"  [Trends] Groq analysis complete")
 
     snapshot = {
         "trending_titles":    trending_titles,

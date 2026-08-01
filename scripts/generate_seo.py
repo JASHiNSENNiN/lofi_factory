@@ -1071,12 +1071,10 @@ def generate_title_variants(
     trends: dict | None = None,
     n: int = 3,
 ) -> list[str]:
-    """Return up to n unique title candidates for this concept."""
+    """Return up to n unique title candidates for this concept. Procedural
+    template-pattern titles (build_title) are primary; Groq is only used as
+    an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1)."""
     variants: list[str] = []
-
-    groq_title = build_title_groq(concept, duration, trends)
-    if groq_title:
-        variants.append(groq_title)
 
     attempts = 0
     while len(variants) < n and attempts < 12:
@@ -1084,6 +1082,11 @@ def generate_title_variants(
         if candidate not in variants:
             variants.append(candidate)
         attempts += 1
+
+    if len(variants) < n and os.getenv("LOFI_LLM_FAILSAFE") == "1":
+        groq_title = build_title_groq(concept, duration, trends)
+        if groq_title and groq_title not in variants:
+            variants.append(groq_title)
 
     return variants[:n]
 
@@ -1175,8 +1178,14 @@ def pick_concept_from_pool() -> dict:
 
 
 def pick_concept(trends: dict | None = None) -> dict:
-    """Get a concept — Gemini primary, Groq secondary, pool fallback."""
-    return pick_concept_gemini(trends) or pick_concept_groq(trends) or pick_concept_from_pool()
+    """Get a concept — procedural pool (analytics-weighted, hundreds of hand-
+    written combinations) is primary and always used. Gemini/Groq are only
+    ever reached as an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1)."""
+    if os.getenv("LOFI_LLM_FAILSAFE") == "1":
+        concept = pick_concept_gemini(trends) or pick_concept_groq(trends)
+        if concept:
+            return concept
+    return pick_concept_from_pool()
 
 
 # Maps internal sub_genre keys → SEO genre_label strings used in titles/descriptions.
