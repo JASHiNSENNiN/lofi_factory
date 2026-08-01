@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# lofi — Launch or reattach to the Lofi Factory dashboard
+#
+# Usage:
+#   ./lofi           # start or reattach to tmux session
+#
+# SSH workflow:
+#   1. SSH in → run ./lofi  (creates tmux session + opens dashboard)
+#   2. Close SSH connection
+#   3. SSH back in → run ./lofi  (reattaches to same session, dashboard still live)
+#
+# Any jobs started from the dashboard will keep running even when SSH is closed.
+
+set -e
+SESSION="lofi"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Try to activate venv (silently)
+_activate() {
+    if [ -f "$SCRIPT_DIR/venv/bin/activate" ]; then
+        source "$SCRIPT_DIR/venv/bin/activate"
+    fi
+}
+
+# No tmux available — run directly (no SSH resilience)
+if ! command -v tmux &>/dev/null; then
+    echo "[lofi] tmux not installed — running dashboard directly (no SSH resilience)"
+    echo "[lofi] To install: sudo pacman -S tmux  OR  sudo apt install tmux"
+    echo ""
+    cd "$SCRIPT_DIR"
+    _activate
+    exec python dashboard.py
+fi
+
+# Session already exists — reattach
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "[lofi] Reattaching to tmux session '$SESSION'..."
+    exec tmux attach-session -t "$SESSION"
+fi
+
+# Create new session with dashboard
+echo "[lofi] Starting new tmux session '$SESSION'..."
+echo "[lofi] Close SSH anytime — jobs will keep running."
+echo "[lofi] To reconnect: ssh back in and run ./lofi"
+echo ""
+
+tmux new-session -d -s "$SESSION" -x "$(tput cols 2>/dev/null || echo 220)" -y "$(tput lines 2>/dev/null || echo 50)" \
+    "cd '$SCRIPT_DIR' && $([ -f '$SCRIPT_DIR/venv/bin/activate' ] && echo 'source venv/bin/activate &&' || echo '') python dashboard.py; exec bash"
+
+exec tmux attach-session -t "$SESSION"

@@ -1,0 +1,15 @@
+# ~/.cloudflared/config.yml — Lo-fi Factory named tunnel
+#
+# Created by deploy/setup.sh after `cloudflared tunnel login` + tunnel create.
+# Replace <TUNNEL_UUID> and the hostname with your own values.
+
+tunnel: <TUNNEL_UUID>
+credentials-file: /home/jashin/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  # Public hostname → local web UI. This hostname must match PUBLIC_BASE_URL
+  # in .env and the OAuth redirect URI registered in Google Cloud.
+  - hostname: lofi.yourdomain.com
+    service: http://127.0.0.1:8080
+  # Catch-all (required last rule)
+  - service: http_status:404

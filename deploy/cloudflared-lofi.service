@@ -1,0 +1,15 @@
+[Unit]
+Description=Cloudflare Tunnel for Lo-fi Factory
+After=network-online.target lofi-webui.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Runs the named tunnel defined in ~/.cloudflared/config.yml
+ExecStart=%h/.local/bin/cloudflared tunnel run lofi
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

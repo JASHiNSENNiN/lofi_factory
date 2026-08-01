@@ -1,0 +1,17 @@
+[Unit]
+Description=Lo-fi Factory web control panel (NiceGUI)
+After=network-online.target
+Wants=network-online.target
+# Never give up restarting (long renders/ffmpeg can wedge occasionally).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jashin/Documents/Lab/lofi_factory
+ExecStart=/home/jashin/Documents/Lab/lofi_factory/venv/bin/python webui.py
+# webui.py loads .env itself (WEBUI_PASSWORD, PUBLIC_BASE_URL, etc.)
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

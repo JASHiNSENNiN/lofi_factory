@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily schedule for the Lo-fi Factory auto-upload run (lofi-auto.service)
+
+[Timer]
+# Default: once daily at 00:00 (midnight). Change via
+#   python publish.py auto-service schedule --start 0 --every-hours 6
+# (every-hours must be 6, 8, 12, or 24 — divisors of 24). This writes an override drop-in at
+# ~/.config/systemd/user/lofi-auto.timer.d/schedule.conf so it survives
+# re-running deploy/setup.sh.
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+Unit=lofi-auto.service
+
+[Install]
+WantedBy=timers.target

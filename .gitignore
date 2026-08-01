@@ -1,0 +1,34 @@
+# --- Secrets / credentials ---
+.env
+.env.*
+token.json
+client_secret.json
+cookies.txt
+*cookies*.txt
+
+# --- Python ---
+__pycache__/
+*.pyc
+venv/
+
+# --- Generated / runtime output ---
+output/
+music/
+visuals/bg_*.mp4
+visuals/bg_scenes/
+assets/seo_*.json
+assets/thumb_*.jpg
+.pipeline.lock
+upload_log.json
+
+# --- Local tooling / editor / debug artifacts ---
+.claude/
+.nicegui/
+.playwright-mcp/
+.codebase-memory/
+login.png
+*.log
+
+# Cached OAuth tokens
+assets/spotify_token_cache.json
+assets/*_token_cache.json

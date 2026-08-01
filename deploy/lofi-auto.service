@@ -1,0 +1,11 @@
+[Unit]
+Description=Lo-fi Factory automated render+upload (one run; triggered by lofi-auto.timer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jashin/Documents/Lab/lofi_factory
+ExecStart=/home/jashin/Documents/Lab/lofi_factory/venv/bin/python publish.py auto
+# run.py (invoked by `auto`) loads .env itself for any API keys it needs
+TimeoutStartSec=0
