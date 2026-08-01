@@ -176,7 +176,7 @@ def generate_visual(theme_name: str = "cozy_rain",
             frame = apply_vignette(frame, vignette)
             frame = film_grain(frame, strength=3.2)
             # Subtle chromatic aberration (retro screen edge distortion)
-            frame = chromatic_aberration(frame, shift=1)
+            frame = chromatic_aberration(frame, shift=3)
 
             # ── 13. Watermark ────────────────────────────────────────────────
             draw_watermark(frame)
