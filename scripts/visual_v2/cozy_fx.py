@@ -98,30 +98,51 @@ class WindowGlow:
 class RainOverlay:
     """
     Rain streaks on a virtual window pane — white-blue translucent vertical
-    streaks of varying length and speed. Only renders in window area.
+    streaks, physically modeled: gravity-accelerated fall (not constant
+    velocity) with a per-drop depth factor for parallax (nearer drops fall
+    faster and render bigger/sharper; farther drops fall slower and render
+    smaller/softer). Only renders in window area.
     """
+    _G_BASE = 900.0  # base gravity, px/s^2 (scaled per-drop by depth)
+
     def __init__(self, n_frames: int, rng_seed: int = 2, density: int = 60):
         rng = random.Random(rng_seed)
         self.drops = []
         for _ in range(density):
+            depth = rng.uniform(0.6, 1.4)   # >1 = nearer/faster/bigger, <1 = farther
+            drop_len = rng.randint(12, 45)
+            g = self._G_BASE * depth
+            fall_distance = H + drop_len
+            fall_period = math.sqrt(2 * fall_distance / g)   # free-fall-from-rest period
             self.drops.append({
-                "x":     rng.randint(W // 2, W - 50),      # right half (window)
-                "y":     rng.uniform(-H, H),
-                "len":   rng.randint(12, 45),
-                "speed": rng.uniform(300, 700),             # px/sec
-                "alpha": rng.uniform(30, 90),
-                "width": 1 if rng.random() < 0.7 else 2,
+                "x":            rng.randint(W // 2, W - 50),   # right half (window)
+                "phase":        rng.uniform(0, fall_period),   # stagger start times
+                "len":          drop_len,
+                "g":            g,
+                "fall_period":  fall_period,
+                "depth":        depth,
+                "alpha":        rng.uniform(30, 90) * min(1.0, depth),
+                "width":        1 if depth < 1.05 else 2,
+                "waver_amp":    rng.uniform(2, 4) * depth,
             })
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
         ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d  = ImageDraw.Draw(ov)
         for drop in self.drops:
-            y = (drop["y"] + drop["speed"] * t) % (H + drop["len"]) - drop["len"]
-            x = drop["x"] + int(math.sin(y * 0.05) * 3)  # slight waver
-            d.line([(x, int(y)), (x + 1, int(y + drop["len"]))],
+            t_mod = (t + drop["phase"]) % drop["fall_period"]
+            # Gravity-accelerated fall from rest: y(t) = y0 + 0.5*g*t^2.
+            # At t_mod=0, y=-len (just above frame); at t_mod=fall_period,
+            # y=H (exits bottom) — matches how fall_period was derived.
+            y = -drop["len"] + 0.5 * drop["g"] * t_mod ** 2
+            x = drop["x"] + int(math.sin(y * 0.05) * drop["waver_amp"])
+            length = drop["len"] * (0.85 + 0.3 * drop["depth"])
+            d.line([(x, int(y)), (x + 1, int(y + length))],
                    fill=(200, 220, 255, int(drop["alpha"])),
                    width=drop["width"])
+        # Slight softening so streaks read as glass-refracted rain rather
+        # than crisp vector lines.
+        ov = ov.filter(ImageFilter.GaussianBlur(radius=0.6))
         return _paste_rgba(frame, np.array(ov))
 
 

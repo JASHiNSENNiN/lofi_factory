@@ -432,6 +432,99 @@ def maybe_sub_chord(chord_name, position_in_prog):
         return sub_info[0]
     return chord_name
 
+
+# ─── PROCEDURAL PROGRESSION GENERATOR (Markov, mined from curated table) ──────
+
+_PROGRESSION_MARKOV_CACHE: dict | None = None
+_JAZZY_MARKERS = ('9', 'b9', '#9', '11', '13', '7b5', '7#5', 'dim', 'aug')
+
+
+def _build_progression_markov() -> dict:
+    """
+    Lazily build (and cache) a first-order Markov chain over chord-symbol
+    bigrams, mined from the curated PROGRESSIONS table itself — real
+    statistical structure learned from 51 hand-composed progressions, not an
+    LLM call. Also captures start-chord frequency (which chords tend to open
+    a progression) and the empirical bar-duration distribution.
+    """
+    global _PROGRESSION_MARKOV_CACHE
+    if _PROGRESSION_MARKOV_CACHE is not None:
+        return _PROGRESSION_MARKOV_CACHE
+
+    transitions: dict[str, dict[str, int]] = {}
+    start_counts: dict[str, int] = {}
+    duration_counts: dict[int, int] = {}
+
+    for prog in PROGRESSIONS:
+        if not prog:
+            continue
+        start_counts[prog[0][0]] = start_counts.get(prog[0][0], 0) + 1
+        for _chord_name, dur in prog:
+            duration_counts[dur] = duration_counts.get(dur, 0) + 1
+        for i in range(len(prog) - 1):
+            cur, nxt = prog[i][0], prog[i + 1][0]
+            transitions.setdefault(cur, {})
+            transitions[cur][nxt] = transitions[cur].get(nxt, 0) + 1
+
+    _PROGRESSION_MARKOV_CACHE = {
+        'transitions': transitions,
+        'start_counts': start_counts,
+        'duration_counts': duration_counts,
+    }
+    return _PROGRESSION_MARKOV_CACHE
+
+
+def generate_progression(length: int = 4, jazziness: float = 0.5,
+                          seed_chord: str | None = None) -> list[tuple[str, int]]:
+    """
+    Procedurally generate a fresh chord progression by walking a Markov chain
+    built from the curated PROGRESSIONS table's chord-to-chord transitions —
+    real statistical structure, not an LLM call, and not just re-picking a
+    whole progression from the fixed 51-entry table. `jazziness` in [0,1]
+    biases sampling toward extended/altered chords. Applies the same
+    maybe_sub_chord() secondary-dominant substitution used by curated
+    progressions, so generated and curated progressions share the same
+    harmonic-coloring pass.
+    """
+    markov = _build_progression_markov()
+    transitions     = markov['transitions']
+    start_counts    = markov['start_counts']
+    duration_counts = markov['duration_counts']
+
+    all_chords = list(transitions.keys()) or list(VOICING_OPTIONS.keys())
+    if not all_chords:
+        return [('Am7', 4)]
+
+    starts = list(start_counts.keys()) or all_chords
+    start_weights = [start_counts.get(c, 1) for c in starts]
+    current = (seed_chord if (seed_chord and seed_chord in all_chords)
+               else random.choices(starts, weights=start_weights, k=1)[0])
+
+    dur_choices = list(duration_counts.keys()) or [2]
+    dur_weights = [duration_counts[d] for d in dur_choices]
+
+    result: list[tuple[str, int]] = []
+    for i in range(length):
+        chord = maybe_sub_chord(current, i)
+        dur   = random.choices(dur_choices, weights=dur_weights, k=1)[0]
+        result.append((chord, dur))
+
+        next_options = transitions.get(current)
+        if not next_options:
+            current = random.choices(starts, weights=start_weights, k=1)[0]
+            continue
+
+        candidates = list(next_options.keys())
+        weights = [float(next_options[c]) for c in candidates]
+        if jazziness > 0:
+            weights = [
+                w * (1.0 + jazziness * 2.0) if any(m in c for m in _JAZZY_MARKERS) else w
+                for c, w in zip(candidates, weights)
+            ]
+        current = random.choices(candidates, weights=weights, k=1)[0]
+
+    return result
+
 # ─── EUCLIDEAN RHYTHM (Bjorklund/Toussaint) ──────────────────────────────────
 
 def _bjorklund(k, n):
@@ -1098,13 +1191,43 @@ def build_bass(progression, start_bar, num_loops, swing, bpm, walking=False):
     return events
 
 
+def _markov_next_pitch_class(markov_nodes: dict, prev_pc: int, scale_pcs: set) -> int | None:
+    """
+    Given a Markov transition table (isobar.MarkovLearner-style — either
+    {pitch_class: [successor_pcs...]} or {pitch_class: {successor_pc: count}}),
+    sample a next pitch class following prev_pc, filtered to the current
+    scale so the result stays diatonically sane. Returns None if no usable
+    transition exists (caller falls back to the existing chord/phi-point logic).
+    """
+    if not markov_nodes:
+        return None
+    node = markov_nodes.get(prev_pc, markov_nodes.get(str(prev_pc)))
+    if not node:
+        return None
+    if isinstance(node, dict):
+        candidates, weights = list(node.keys()), list(node.values())
+    else:
+        candidates, weights = list(node), [1] * len(node)
+    filtered = [(c, w) for c, w in zip(candidates, weights) if int(c) % 12 in scale_pcs]
+    if not filtered:
+        return None
+    cands, wts = zip(*filtered)
+    return int(random.choices(cands, weights=wts, k=1)[0]) % 12
+
+
 def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', scale='pent',
-                 motif=None, progression=None, prog_bars=None):
+                 motif=None, progression=None, prog_bars=None, markov_nodes=None):
     """
     Motif-based melody with phi-point (0.618) contour arc + chord-aware phrase starts.
     Develops a 3-5 note motif through retrograde/inversion/transposition variations.
     Climax velocity peaks at ~61.8% through phrase. First note of each phrase snaps to
     the nearest chord tone (60% chance) so melody lands convincingly on the harmony.
+
+    markov_nodes: optional pitch-class transition table (from
+    isobar.MarkovLearner, e.g. MidiDNA.markov_melody_nodes) learned from a
+    real source melody. When present, blended in as a probabilistic nudge
+    toward pitch classes the source tends to move to — additive to, not a
+    replacement for, the existing chord-tone/phi-point logic above.
     """
     if scale == 'dorian':
         notes_scale = get_dorian(key_root)
@@ -1145,6 +1268,8 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
     events = []
     bar = start_bar
     rest_min = 2 if density == 'sparse' else 1
+    scale_pcs = {n % 12 for n in notes_scale}
+    prev_final_note = None   # tracks the last emitted note, across phrases, for Markov nudging
 
     while bar < start_bar + num_bars:
         if random.random() < 0.72:
@@ -1175,6 +1300,19 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                     chord_scale = [n for n in notes_scale if n % 12 in chord_pcs]
                     if chord_scale:
                         note = min(chord_scale, key=lambda n: abs(n - note))
+
+                # Markov-influenced nudge (blended, not a replacement): bias
+                # toward a pitch class the source melody's own transition
+                # statistics favor after the previous note, when available.
+                if markov_nodes and prev_final_note is not None and random.random() < 0.35:
+                    target_pc = _markov_next_pitch_class(markov_nodes, prev_final_note % 12, scale_pcs)
+                    if target_pc is not None:
+                        same_pc = [n for n in notes_scale
+                                   if n % 12 == target_pc and abs(n - note) <= 14]
+                        if same_pc:
+                            note = min(same_pc, key=lambda n: abs(n - note))
+
+                prev_final_note = note
 
                 # Velocity arc: louder near phi-point climax
                 climax_dist = abs(pos - 0.618)
@@ -1429,6 +1567,54 @@ def _save_params_history(params: dict) -> None:
         pass
 
 
+# ─── SELF-REFERENTIAL MELODY HISTORY (Markov, learned from own past output) ───
+
+_MELODY_HISTORY_FILE = os.path.join(MUSIC_DIR, '.melody_history.json')
+_MELODY_HISTORY_MAXLEN = 50  # rolling cap: bounds the model and guards against
+                              # Markov mode-collapse from unbounded accumulation
+
+
+def _load_melody_history() -> list[list[int]]:
+    try:
+        with open(_MELODY_HISTORY_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save_melody_pitch_classes(pitch_classes: list[int]) -> None:
+    """Append one track's melody pitch-class sequence to the rolling history."""
+    if not pitch_classes:
+        return
+    history = _load_melody_history()
+    history.append(pitch_classes)
+    history = history[-_MELODY_HISTORY_MAXLEN:]
+    try:
+        os.makedirs(os.path.dirname(_MELODY_HISTORY_FILE), exist_ok=True)
+        with open(_MELODY_HISTORY_FILE, 'w') as f:
+            json.dump(history, f)
+    except OSError:
+        pass
+
+
+def _build_self_markov(history: list[list[int]]) -> dict:
+    """
+    Build a pitch-class Markov transition table (isobar.MarkovLearner-style:
+    {pc: [successor_pcs...]}) from the pipeline's own historically-generated
+    melodies, so the system develops an evolving "melodic voice" from its own
+    output over time — no external data, no LLM call. Each track's sequence
+    is learned independently (learner.last reset between tracks) so
+    transitions never falsely bridge across unrelated tracks.
+    """
+    from isobar import MarkovLearner
+    learner = MarkovLearner()
+    for track_pcs in history:
+        learner.last = None
+        for pc in track_pcs:
+            learner.register(pc)
+    return dict(learner.markov.nodes)
+
+
 # ─── ALGORITHMIC PARAM HELPERS ────────────────────────────────────────────────
 
 def _pick_subgenre_weighted(history: list[dict]) -> str:
@@ -1580,6 +1766,25 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
     if random.random() < 0.20:
         params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+
+    # ~15-20% chance to procedurally generate a fresh progression (Markov walk
+    # over the curated table's chord transitions) instead of indexing into the
+    # fixed 51-entry table — params['progression'] keeps its int index either
+    # way (for history/logging); generated_progression, when present, takes
+    # priority in build_midi().
+    if random.random() < 0.18:
+        chord_count = len(PROGRESSIONS[prog]) if PROGRESSIONS[prog] else 4
+        params['generated_progression'] = generate_progression(
+            length=max(2, min(6, chord_count)),
+            jazziness=round(random.uniform(0.2, 0.8), 2),
+        )
+
+    # Self-referential melodic voice: once enough history exists, bias new
+    # melodies toward the pipeline's own past output (no external data, no
+    # LLM) — see _build_self_markov / build_melody's markov_nodes blending.
+    _melody_history = _load_melody_history()
+    if len(_melody_history) >= 3:
+        params['markov_melody_nodes'] = _build_self_markov(_melody_history)
 
     if key in ('C', 'G', 'F') and prog < 16:
         print(f"  [params] NOTE: major key '{key}' with minor prog {prog} — voicings will be modal")
@@ -1777,8 +1982,14 @@ def build_midi(params, output_path):
     walking   = bool(params.get('bass_walking', False))
     energy    = params.get('drum_energy', 'medium')
     sub_genre = params.get('sub_genre', 'chillhop')
+    # Pitch-class Markov transition table, when available (DNA-guided covers
+    # via isobar.MarkovLearner, or the self-referential history-based table —
+    # see _build_self_markov) — blended into build_melody's note choices.
+    markov_nodes = params.get('markov_melody_nodes')
 
-    prog      = PROGRESSIONS[prog_idx]
+    # A procedurally-generated progression (Markov walk, ~18% of the time —
+    # see generate_progression) takes priority over the curated table.
+    prog      = params.get('generated_progression') or PROGRESSIONS[prog_idx]
     prog_bars = sum(d for _,d in prog)
     key_root  = KEY_ROOTS.get(key, 57)
 
@@ -1870,7 +2081,8 @@ def build_midi(params, output_path):
             pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
             mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
                                        'sparse', scale, motif=track_motif,
-                                       progression=prog, prog_bars=prog_bars)
+                                       progression=prog, prog_bars=prog_bars,
+                                       markov_nodes=markov_nodes)
             sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
             _tex = _SUBGENRE_TEXTURE.get(sub_genre)
             if _tex and random.random() < 0.50:
@@ -1891,7 +2103,8 @@ def build_midi(params, output_path):
             pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
             mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
                                        'medium', scale, motif=track_motif,
-                                       progression=prog, prog_bars=prog_bars)
+                                       progression=prog, prog_bars=prog_bars,
+                                       markov_nodes=markov_nodes)
             if sec_bars > prog_bars:
                 cmelo_ev += build_counter_melody(key_root, sec_start + prog_bars,
                                                  sec_bars - prog_bars, swing, bpm)
@@ -1959,6 +2172,10 @@ def build_midi(params, output_path):
     if texture_ev:
         tex_prog = _SUBGENRE_TEXTURE[sub_genre][0] if sub_genre in _SUBGENRE_TEXTURE else GM_WARM_PAD
         mid.tracks.append(abs_to_track(texture_ev, channel=5, program=tex_prog))
+
+    # Feed this track's melody into the self-referential history (see
+    # _build_self_markov / pick_params) so future tracks can draw on it.
+    _save_melody_pitch_classes([note % 12 for (_t, note, _v, _d) in mel_ev])
 
     mid.save(output_path)
     return output_path
@@ -2060,6 +2277,11 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
     if count == 1:
         return param_sets
 
+    # Reuse the anchor's self-referential Markov melody table (if pick_params
+    # built one) across all tracks in this video, rather than rebuilding it
+    # per-track — same model, no redundant isobar passes.
+    self_markov = anchor.get('markov_melody_nodes')
+
     # Build rotation pools — shuffle to avoid always starting at the same place
     sub_pool  = [s for s in all_subs if s != anchor.get('sub_genre')]
     key_pool  = [k for k in all_keys if k != anchor.get('key')]
@@ -2122,6 +2344,16 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
             track_params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
         if random.random() < 0.20:
             track_params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+
+        # Same ~18% chance for a Markov-generated progression as pick_params().
+        if random.random() < 0.18:
+            chord_count = len(PROGRESSIONS[track_params['progression']])
+            track_params['generated_progression'] = generate_progression(
+                length=max(2, min(6, chord_count)),
+                jazziness=round(random.uniform(0.2, 0.8), 2),
+            )
+        if self_markov:
+            track_params['markov_melody_nodes'] = self_markov
         param_sets.append(track_params)
 
     return param_sets

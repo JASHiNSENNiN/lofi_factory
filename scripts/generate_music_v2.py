@@ -39,6 +39,7 @@ from scripts.generate_music_gemini import (  # noqa: E402
     _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT,
     maybe_sub_chord, _tension, _apply_tension_to_drums, _chord_pcs_at_bar,
     pick_params, _build_diverse_params,
+    _save_melody_pitch_classes,
     midi_to_wav, _pick_soundfont, MUSIC_DIR,
     GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_BASS, GM_STRINGS, GM_WARM_PAD,
 )
@@ -67,8 +68,17 @@ def _lofi_late(tick: int, bpm: int, ppq: int = PPQN) -> int:
 
 def _voice_lead_v2(voicing_options: list[list[int]], prev_voicing: list[int]) -> list[int]:
     """
-    Choose the voicing that minimizes total semitone displacement from prev_voicing,
-    trying ±12 semitone octave shifts on each voice independently.
+    Choose the voicing that minimizes a weighted multi-term cost, trying ±12
+    semitone octave shifts on each voice independently (brute-force, exact —
+    the search space per chord is tiny). Terms, hand-rolled classical
+    voice-leading rules (no neural net, no LLM):
+      - total semitone displacement from prev_voicing (the original term)
+      - a penalty for parallel fifths/octaves (adjacent voice pairs moving in
+        the same direction by the same interval, landing on a 5th or octave —
+        a classic part-writing error)
+      - a penalty for inner-voice spacing outside a natural close-position
+        range (~3-12 semitones)
+      - a small bonus for contrary motion between the outer (bass/top) voices
     """
     if not prev_voicing:
         return random.choice(voicing_options)
@@ -80,8 +90,37 @@ def _voice_lead_v2(voicing_options: list[list[int]], prev_voicing: list[int]) ->
             shifted = [v[i] + shifts[i] for i in range(n)]
             if shifted != sorted(shifted):      # must stay ascending
                 continue
-            dist = sum(abs(shifted[i] - prev_voicing[i]) for i in range(n))
-            best = min(best, dist)
+            displacement = sum(abs(shifted[i] - prev_voicing[i]) for i in range(n))
+
+            parallel_penalty = 0.0
+            for a in range(n - 1):
+                b = a + 1
+                move_a = shifted[a] - prev_voicing[a]
+                move_b = shifted[b] - prev_voicing[b]
+                if move_a == 0 and move_b == 0:
+                    continue
+                interval_now = abs(shifted[b] - shifted[a]) % 12
+                same_direction = (move_a > 0) == (move_b > 0)
+                if same_direction and move_a == move_b and interval_now in (0, 7):
+                    parallel_penalty += 8.0
+
+            spacing_penalty = 0.0
+            for a in range(len(shifted) - 1):
+                gap = shifted[a + 1] - shifted[a]
+                if gap < 3:
+                    spacing_penalty += (3 - gap) * 1.5
+                elif gap > 12:
+                    spacing_penalty += (gap - 12) * 1.0
+
+            contrary_bonus = 0.0
+            if n >= 2:
+                outer_a = shifted[0] - prev_voicing[0]
+                outer_b = shifted[-1] - prev_voicing[-1]
+                if outer_a != 0 and outer_b != 0 and (outer_a > 0) != (outer_b > 0):
+                    contrary_bonus = 2.0
+
+            total = displacement + parallel_penalty + spacing_penalty - contrary_bonus
+            best = min(best, total)
         return best
 
     return min(voicing_options, key=_cost)
@@ -211,10 +250,23 @@ def _build_note_pool(
     scale_notes: list[int],
     chord_pcs: set[int],
     prev_note: int | None,
+    markov_nodes: dict | None = None,
 ) -> tuple[list[int], list[float]]:
-    """Return (candidates, weights) for next melody note."""
+    """
+    Return (candidates, weights) for next melody note. markov_nodes (optional,
+    isobar.MarkovLearner-style pitch-class transition table) additively boosts
+    candidates matching what the source melody's own statistics favor after
+    prev_note — blended into, not a replacement for, the chord-tone weighting.
+    """
     candidates: list[int] = []
     weights: list[float]  = []
+
+    markov_boost_pcs: set[int] = set()
+    if markov_nodes and prev_note is not None:
+        node = markov_nodes.get(prev_note % 12, markov_nodes.get(str(prev_note % 12)))
+        if node:
+            keys = node.keys() if isinstance(node, dict) else node
+            markov_boost_pcs = {int(k) % 12 for k in keys}
 
     for n in scale_notes:
         if prev_note is not None and abs(n - prev_note) > 12:
@@ -231,6 +283,9 @@ def _build_note_pool(
         if prev_note is not None and abs(n - prev_note) > 5:
             w *= 0.5                         # penalize large leaps
 
+        if pc in markov_boost_pcs:
+            w *= 1.8                         # Markov nudge (additive, not exclusive)
+
         candidates.append(n)
         weights.append(max(w, 0.01))
 
@@ -238,8 +293,8 @@ def _build_note_pool(
 
 
 def _pick_melody_note(scale_notes: list[int], chord_pcs: set[int],
-                      prev_note: int | None) -> int:
-    cands, wts = _build_note_pool(scale_notes, chord_pcs, prev_note)
+                      prev_note: int | None, markov_nodes: dict | None = None) -> int:
+    cands, wts = _build_note_pool(scale_notes, chord_pcs, prev_note, markov_nodes)
     if not cands:
         return random.choice(scale_notes)
     return random.choices(cands, weights=wts)[0]
@@ -277,10 +332,13 @@ def build_melody_v2(
     progression: list | None = None,
     prog_bars: int | None = None,
     section: str = 'A',
+    markov_nodes: dict | None = None,
 ) -> list:
     """
     Motif-based melody using chord-tone weighted note selection.
     Applies behind-the-beat displacement for lo-fi pocket feel.
+    markov_nodes: optional pitch-class transition table blended into note
+    selection via _pick_melody_note/_build_note_pool (see there).
     """
     notes_scale = _get_scale_notes(key_root, scale)
     if not notes_scale:
@@ -312,7 +370,7 @@ def build_melody_v2(
                 if progression and prog_bars:
                     chord_pcs = _chord_pcs_at_bar(progression, bar, prog_bars)
 
-                note = _pick_melody_note(notes_scale, chord_pcs, prev_note)
+                note = _pick_melody_note(notes_scale, chord_pcs, prev_note, markov_nodes)
 
                 # Phi-point contour: ascending before 0.618, descending after
                 pos = i / max(1, phrase_len - 1)
@@ -599,8 +657,12 @@ def build_midi_v2(params: dict, output_path: str) -> str:
     walking   = bool(params.get('bass_walking', False))
     energy    = params.get('drum_energy', 'medium')
     sub_genre = params.get('sub_genre', 'chillhop')
+    markov_nodes = params.get('markov_melody_nodes')
 
-    prog      = PROGRESSIONS[prog_idx]
+    # A procedurally-generated progression (Markov walk, ~18% of the time —
+    # see generate_music_gemini.generate_progression) takes priority over the
+    # curated table.
+    prog      = params.get('generated_progression') or PROGRESSIONS[prog_idx]
     prog_bars = sum(d for _, d in prog)
     key_root  = KEY_ROOTS.get(key, 57)
 
@@ -674,7 +736,8 @@ def build_midi_v2(params: dict, output_path: str) -> str:
             pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
             mel_ev     += build_melody_v2(key_root, sec_start, sec_bars, swing, bpm,
                                           'sparse', scale, motif=track_motif,
-                                          progression=prog, prog_bars=prog_bars, section='A')
+                                          progression=prog, prog_bars=prog_bars, section='A',
+                                          markov_nodes=markov_nodes)
             sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
             _tex = _SUBGENRE_TEXTURE.get(sub_genre)
             if _tex and random.random() < 0.50:
@@ -696,7 +759,8 @@ def build_midi_v2(params: dict, output_path: str) -> str:
             pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
             mel_ev     += build_melody_v2(key_root, sec_start, sec_bars, swing, bpm,
                                           'medium', scale, motif=track_motif,
-                                          progression=prog, prog_bars=prog_bars, section='B')
+                                          progression=prog, prog_bars=prog_bars, section='B',
+                                          markov_nodes=markov_nodes)
             if sec_bars > prog_bars:
                 cmelo_ev += build_counter_melody(key_root, sec_start + prog_bars,
                                                  sec_bars - prog_bars, swing, bpm)
@@ -751,6 +815,10 @@ def build_midi_v2(params: dict, output_path: str) -> str:
     if texture_ev:
         tex_prog = _SUBGENRE_TEXTURE[sub_genre][0] if sub_genre in _SUBGENRE_TEXTURE else GM_WARM_PAD
         mid.tracks.append(abs_to_track(texture_ev, channel=5, program=tex_prog))
+
+    # Feed this track's melody into the self-referential history (see
+    # generate_music_gemini._build_self_markov / pick_params).
+    _save_melody_pitch_classes([note % 12 for (_t, note, _v, _d) in mel_ev])
 
     mid.save(output_path)
     return output_path
