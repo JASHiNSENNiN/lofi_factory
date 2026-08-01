@@ -4,6 +4,7 @@ All return numpy arrays composited in generate.py.
 """
 
 import math
+import random
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -20,9 +21,21 @@ def make_gradient_bg(theme: str, seed: int = 11) -> np.ndarray:
     The field is generated at 1/4 resolution and upsampled (same cheap
     downsample-then-upsample philosophy as postfx.apply_bloom) since this is
     a one-time precompute, not per-frame.
+
+    ~12% of the time, uses a Gray-Scott reaction-diffusion texture instead —
+    a structurally different (simulation-based, not noise-based) organic
+    pattern. See reaction_diffusion.py.
     """
+    c = THEMES[theme]
+    if random.random() < 0.12:
+        try:
+            from .reaction_diffusion import gray_scott_bg, PRESETS
+            preset = random.choice(list(PRESETS.keys()))
+            return gray_scott_bg(c, W, H, preset=preset, seed=seed)
+        except Exception:
+            pass  # fall through to the noise-warped gradient below
+
     from .noise import fractal_noise2d
-    c   = THEMES[theme]
     top = np.array(c["bg_top"], dtype=np.float32)
     bot = np.array(c["bg_bot"], dtype=np.float32)
 

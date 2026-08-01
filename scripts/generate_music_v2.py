@@ -66,19 +66,61 @@ def _lofi_late(tick: int, bpm: int, ppq: int = PPQN) -> int:
 
 # ── 2. Voice leading v2 — full displacement minimizer ───────────────────────────
 
-def _voice_lead_v2(voicing_options: list[list[int]], prev_voicing: list[int]) -> list[int]:
+def _voicing_transition_cost(prev_voicing: list[int], shifted_voicing: list[int]) -> float:
     """
-    Choose the voicing that minimizes a weighted multi-term cost, trying ±12
-    semitone octave shifts on each voice independently (brute-force, exact —
-    the search space per chord is tiny). Terms, hand-rolled classical
-    voice-leading rules (no neural net, no LLM):
-      - total semitone displacement from prev_voicing (the original term)
+    Weighted multi-term cost of moving from prev_voicing to shifted_voicing
+    (shifted_voicing already has any octave shifts applied). Hand-rolled
+    classical voice-leading rules (no neural net, no LLM):
+      - total semitone displacement from prev_voicing
       - a penalty for parallel fifths/octaves (adjacent voice pairs moving in
         the same direction by the same interval, landing on a 5th or octave —
         a classic part-writing error)
       - a penalty for inner-voice spacing outside a natural close-position
         range (~3-12 semitones)
       - a small bonus for contrary motion between the outer (bass/top) voices
+    Shared by _voice_lead_v2 (greedy, per-chord) and _voice_lead_progression_ga
+    (whole-progression optimizer) so both apply identical rules.
+    """
+    n = min(len(shifted_voicing), len(prev_voicing))
+    if n == 0:
+        return 0.0
+    displacement = sum(abs(shifted_voicing[i] - prev_voicing[i]) for i in range(n))
+
+    parallel_penalty = 0.0
+    for a in range(n - 1):
+        b = a + 1
+        move_a = shifted_voicing[a] - prev_voicing[a]
+        move_b = shifted_voicing[b] - prev_voicing[b]
+        if move_a == 0 and move_b == 0:
+            continue
+        interval_now = abs(shifted_voicing[b] - shifted_voicing[a]) % 12
+        same_direction = (move_a > 0) == (move_b > 0)
+        if same_direction and move_a == move_b and interval_now in (0, 7):
+            parallel_penalty += 8.0
+
+    spacing_penalty = 0.0
+    for a in range(len(shifted_voicing) - 1):
+        gap = shifted_voicing[a + 1] - shifted_voicing[a]
+        if gap < 3:
+            spacing_penalty += (3 - gap) * 1.5
+        elif gap > 12:
+            spacing_penalty += (gap - 12) * 1.0
+
+    contrary_bonus = 0.0
+    if n >= 2:
+        outer_a = shifted_voicing[0] - prev_voicing[0]
+        outer_b = shifted_voicing[-1] - prev_voicing[-1]
+        if outer_a != 0 and outer_b != 0 and (outer_a > 0) != (outer_b > 0):
+            contrary_bonus = 2.0
+
+    return displacement + parallel_penalty + spacing_penalty - contrary_bonus
+
+
+def _voice_lead_v2(voicing_options: list[list[int]], prev_voicing: list[int]) -> list[int]:
+    """
+    Choose the voicing that minimizes _voicing_transition_cost, trying ±12
+    semitone octave shifts on each voice independently (brute-force, exact —
+    the search space per chord is tiny).
     """
     if not prev_voicing:
         return random.choice(voicing_options)
@@ -90,53 +132,120 @@ def _voice_lead_v2(voicing_options: list[list[int]], prev_voicing: list[int]) ->
             shifted = [v[i] + shifts[i] for i in range(n)]
             if shifted != sorted(shifted):      # must stay ascending
                 continue
-            displacement = sum(abs(shifted[i] - prev_voicing[i]) for i in range(n))
-
-            parallel_penalty = 0.0
-            for a in range(n - 1):
-                b = a + 1
-                move_a = shifted[a] - prev_voicing[a]
-                move_b = shifted[b] - prev_voicing[b]
-                if move_a == 0 and move_b == 0:
-                    continue
-                interval_now = abs(shifted[b] - shifted[a]) % 12
-                same_direction = (move_a > 0) == (move_b > 0)
-                if same_direction and move_a == move_b and interval_now in (0, 7):
-                    parallel_penalty += 8.0
-
-            spacing_penalty = 0.0
-            for a in range(len(shifted) - 1):
-                gap = shifted[a + 1] - shifted[a]
-                if gap < 3:
-                    spacing_penalty += (3 - gap) * 1.5
-                elif gap > 12:
-                    spacing_penalty += (gap - 12) * 1.0
-
-            contrary_bonus = 0.0
-            if n >= 2:
-                outer_a = shifted[0] - prev_voicing[0]
-                outer_b = shifted[-1] - prev_voicing[-1]
-                if outer_a != 0 and outer_b != 0 and (outer_a > 0) != (outer_b > 0):
-                    contrary_bonus = 2.0
-
-            total = displacement + parallel_penalty + spacing_penalty - contrary_bonus
-            best = min(best, total)
+            best = min(best, _voicing_transition_cost(prev_voicing, shifted))
         return best
 
     return min(voicing_options, key=_cost)
 
 
+def _enumerate_shift_options(voicing: list[int]) -> list[list[int]]:
+    """All valid (ascending-order-preserving) ±12-semitone octave-shift
+    variants of a voicing — the same shift search _voice_lead_v2 does
+    internally, but materialized as a list for the GA to choose from."""
+    n = len(voicing)
+    out = []
+    for shifts in _iproduct([-12, 0, 12], repeat=n):
+        shifted = [voicing[i] + shifts[i] for i in range(n)]
+        if shifted == sorted(shifted):
+            out.append(shifted)
+    return out or [voicing]
+
+
+def _voice_lead_progression_ga(progression: list[tuple[str, int]],
+                                pop_size: int = 24, generations: int = 40) -> list[list[int]]:
+    """
+    Evolve voicing+octave-shift choices for an ENTIRE progression
+    simultaneously (unlike _voice_lead_v2's greedy per-chord choice), via a
+    genetic algorithm: tournament selection, single-point crossover,
+    mutation, elitism. Solves the real limitation of greedy selection, which
+    can get locally stuck (like greedy TSP) — global fitness considers every
+    transition in the progression at once. Hand-rolled GA, no neural net, no
+    LLM. Runs once per progression pick (~pop_size*generations*len(progression)
+    cost evaluations — trivial cost, not a per-frame or per-render-loop cost).
+
+    Returns one shifted voicing (list[int]) per chord in `progression`, in order.
+    """
+    chord_names = [c for c, _ in progression]
+
+    gene_pools: list[list[list[int]]] = []
+    for chord_name in chord_names:
+        options = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])
+        variants: list[list[int]] = []
+        for base in options:
+            variants.extend(_enumerate_shift_options(base))
+        gene_pools.append(variants or [options[0]])
+
+    def _random_chromosome() -> list[int]:
+        return [random.randrange(len(pool)) for pool in gene_pools]
+
+    def _fitness(chromosome: list[int]) -> float:
+        total = 0.0
+        prev = None
+        for i, gene_idx in enumerate(chromosome):
+            voicing = gene_pools[i][gene_idx]
+            if prev is not None:
+                total += _voicing_transition_cost(prev, voicing)
+            prev = voicing
+        return total
+
+    population = [_random_chromosome() for _ in range(pop_size)]
+    best = min(population, key=_fitness)
+    best_fit = _fitness(best)
+
+    def _tournament(k: int = 3) -> list[int]:
+        contenders = random.sample(population, min(k, len(population)))
+        return min(contenders, key=_fitness)
+
+    for _ in range(generations):
+        next_gen = [best]   # elitism: never lose the best chromosome found so far
+        while len(next_gen) < pop_size:
+            parent_a, parent_b = _tournament(), _tournament()
+            cut = random.randrange(1, len(chord_names)) if len(chord_names) > 1 else 0
+            child = parent_a[:cut] + parent_b[cut:]
+            if random.random() < 0.15:
+                idx = random.randrange(len(child))
+                child[idx] = random.randrange(len(gene_pools[idx]))
+            next_gen.append(child)
+        population = next_gen
+        candidate = min(population, key=_fitness)
+        candidate_fit = _fitness(candidate)
+        if candidate_fit < best_fit:
+            best, best_fit = candidate, candidate_fit
+
+    return [gene_pools[i][gene_idx] for i, gene_idx in enumerate(best)]
+
+
 def build_chords_v2(progression: list, start_bar: int, num_loops: int,
                     swing: float, bpm: int) -> list:
-    """v1 build_chords with full-displacement voice leading and Gaussian humanization."""
+    """
+    v1 build_chords with full-displacement voice leading and Gaussian humanization.
+    ~15% of the time, uses a genetic-algorithm-optimized voicing sequence for
+    the whole progression (_voice_lead_progression_ga) instead of the greedy
+    per-chord _voice_lead_v2 — see there for why this can out-perform greedy
+    selection. When active, secondary-dominant substitution (maybe_sub_chord)
+    is skipped for that pass, since the GA already committed to voicings for
+    the literal (unsubstituted) progression and substituting afterward would
+    leave the chosen voicing not matching the actual chord being played.
+    """
     events = []
     cursor = start_bar
     prev_voicing: list[int] = []
+
+    ga_voicings: list[list[int]] | None = None
+    if len(progression) >= 2 and random.random() < 0.15:
+        try:
+            ga_voicings = _voice_lead_progression_ga(progression)
+        except Exception:
+            ga_voicings = None
+
     for _ in range(max(1, num_loops)):
         for chord_idx, (chord_name, dur_bars) in enumerate(progression):
-            chord_name = maybe_sub_chord(chord_name, chord_idx)
-            options    = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])
-            voicing    = _voice_lead_v2(options, prev_voicing)
+            if ga_voicings is not None:
+                voicing = ga_voicings[chord_idx]
+            else:
+                chord_name = maybe_sub_chord(chord_name, chord_idx)
+                options  = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])
+                voicing  = _voice_lead_v2(options, prev_voicing)
             prev_voicing = voicing
 
             base_t   = grid_tick(cursor * 16, swing)
