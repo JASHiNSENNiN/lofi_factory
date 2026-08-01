@@ -21,7 +21,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
 from .config import W, H, FPS
-from .noise import noise_field_frames, noise_gradient
+from .noise import noise_field_frames, noise_gradient, fractal_noise2d
 
 
 # ── Theme → effect mapping ─────────────────────────────────────────────────────
@@ -204,22 +204,34 @@ class CandleFlicker:
 
 class SteamRiser:
     """
-    Curling wisps of steam rising from the mug area.
-    Rendered as soft white alpha blobs drifting upward.
+    Curling wisps of steam rising from the mug area. Rendered as soft white
+    alpha blobs drifting upward, wandering along a shared static curl-noise
+    flow field (same technique as SnowFall/PetalDrift/particles.FloatingOrbs)
+    instead of a single sine wobble — turbulent curling is exactly what
+    curl-noise models, arguably an even better conceptual fit here than for
+    snow or petals.
     """
     def __init__(self, n_frames: int, rng_seed: int = 4, n_wisps: int = 5):
         rng = random.Random(rng_seed)
         self.wisps = []
         for _ in range(n_wisps):
             self.wisps.append({
-                "x0":    rng.randint(int(W * 0.18), int(W * 0.28)),
-                "phase": rng.uniform(0, math.pi * 2),
-                "speed": rng.uniform(22, 40),          # px/sec upward
-                "wobble_f": rng.uniform(0.5, 1.5),     # Hz
-                "wobble_a": rng.uniform(6, 18),         # px amplitude
-                "life":  rng.uniform(1.5, 3.5),        # seconds per cycle
-                "offset":rng.uniform(0, 3.5),
+                "x0":      rng.randint(int(W * 0.18), int(W * 0.28)),
+                "speed":   rng.uniform(22, 40),          # px/sec upward
+                "wobble_a": rng.uniform(6, 18),           # wander strength
+                "life":    rng.uniform(1.5, 3.5),        # seconds per cycle
+                "offset":  rng.uniform(0, 3.5),
             })
+        self._field_w, self._field_h = 24, 24
+        field = fractal_noise2d(self._field_h, self._field_w, octaves=3,
+                                 seed=rng_seed + 8000, tileable=(True, True))
+        _dy, dx = noise_gradient(field)
+        self._flow_dx = dx
+
+    def _wind_at(self, x: float, y: float) -> float:
+        fx = int((x / W) * self._field_w) % self._field_w
+        fy = int((max(0, min(H - 1, y)) / H) * self._field_h) % self._field_h
+        return float(self._flow_dx[fy, fx])
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
         ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -228,7 +240,8 @@ class SteamRiser:
             age   = (t + w["offset"]) % w["life"]
             frac  = age / w["life"]                         # 0→1 over lifetime
             y     = int(H * 0.62 - w["speed"] * age * 2)   # rises up
-            x     = w["x0"] + int(w["wobble_a"] * math.sin(t * w["wobble_f"] * 2 * math.pi + w["phase"]))
+            wander = self._wind_at(w["x0"], y) * w["wobble_a"] * 30
+            x     = w["x0"] + int(wander)
             alpha = int(80 * math.sin(frac * math.pi))      # fade in/out
             size  = int(4 + frac * 8)
             if 0 < y < H and alpha > 5:
@@ -241,7 +254,14 @@ class SteamRiser:
 # ── Fireflies ─────────────────────────────────────────────────────────────────
 
 class FireflyField:
-    """Drifting warm golden-green glowing points of light."""
+    """
+    Drifting warm golden-green glowing points of light. Curl-noise-driven
+    wander (own shared static flow field, same technique as SnowFall/
+    PetalDrift, but sampling both gradient components since fireflies wander
+    in both x and y rather than just falling) layered on top of each fly's
+    base linear drift, so paths meander instead of moving in dead-straight
+    lines.
+    """
     def __init__(self, n_frames: int, rng_seed: int = 5, count: int = 22):
         rng = random.Random(rng_seed)
         self.flies = []
@@ -249,20 +269,34 @@ class FireflyField:
             self.flies.append({
                 "x": rng.uniform(0.3, 1.0) * W,
                 "y": rng.uniform(0.2, 0.9) * H,
-                "vx": rng.uniform(-8, 8),
-                "vy": rng.uniform(-6, 6),
+                "base_vx": rng.uniform(-8, 8),
+                "base_vy": rng.uniform(-6, 6),
                 "blink_f": rng.uniform(0.3, 1.2),
                 "blink_p": rng.uniform(0, math.pi * 2),
                 "col": rng.choice([(255, 240, 80), (180, 255, 100), (255, 220, 40)]),
                 "size": rng.uniform(2, 5),
             })
+        self._field_w, self._field_h = 24, 24
+        field = fractal_noise2d(self._field_h, self._field_w, octaves=3,
+                                 seed=rng_seed + 9000, tileable=(True, True))
+        dy, dx = noise_gradient(field)
+        self._flow_dx = dx
+        self._flow_dy = dy
+
+    def _flow_at(self, x: float, y: float) -> tuple:
+        fx = int((x / W) * self._field_w) % self._field_w
+        fy = int((y / H) * self._field_h) % self._field_h
+        return float(self._flow_dx[fy, fx]), float(self._flow_dy[fy, fx])
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
         ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d  = ImageDraw.Draw(ov)
         for fly in self.flies:
-            x = (fly["x"] + fly["vx"] * t) % W
-            y = (fly["y"] + fly["vy"] * t) % H
+            x0 = (fly["x"] + fly["base_vx"] * t) % W
+            y0 = (fly["y"] + fly["base_vy"] * t) % H
+            wx, wy = self._flow_at(x0, y0)
+            x = (x0 + wx * 220) % W
+            y = (y0 + wy * 220) % H
             blink = (math.sin(t * fly["blink_f"] * 2 * math.pi + fly["blink_p"]) + 1) / 2
             alpha = int(blink ** 2 * 200)
             if alpha < 10:
@@ -279,29 +313,57 @@ class FireflyField:
 # ── Snow ─────────────────────────────────────────────────────────────────────
 
 class SnowFall:
-    """Slow-drifting white snowflakes outside the window."""
+    """
+    Slow-drifting white snowflakes outside the window. Terminal-velocity
+    fall model (v(t) = v_term*(1-exp(-t/tau)) — light objects reach terminal
+    velocity almost immediately, the physically-correct regime for snow,
+    unlike RainOverlay's unbounded gravity accel which is right for heavier
+    drops) instead of instant constant-velocity, plus curl-noise wind (one
+    shared static flow field per instance, same technique as
+    particles.FloatingOrbs) sampled at each flake's current position, so
+    nearby flakes drift together during a "gust" instead of each having an
+    independently-phased sine wobble.
+    """
     def __init__(self, n_frames: int, rng_seed: int = 6, count: int = 80):
         rng = random.Random(rng_seed)
         self.flakes = []
         for _ in range(count):
+            v_term = rng.uniform(15, 45)
+            tau = rng.uniform(0.15, 0.4)
+            fall_distance = H + 40
+            # tau << fall_distance/v_term here, so this is an excellent
+            # approximation of the true (transcendental) period.
+            fall_period = fall_distance / v_term + tau
             self.flakes.append({
-                "x": rng.uniform(0.45, 1.0) * W,  # window region
-                "y": rng.uniform(-H, H),
-                "speed": rng.uniform(15, 45),
-                "drift": rng.uniform(-8, 8),
-                "size": rng.uniform(1.5, 4),
-                "alpha": rng.randint(60, 160),
-                "phase": rng.uniform(0, math.pi * 2),
+                "x":       rng.uniform(0.45, 1.0) * W,   # window region
+                "phase":   rng.uniform(0, fall_period),
+                "v_term":  v_term,
+                "tau":     tau,
+                "fall_period": fall_period,
+                "drift":   rng.uniform(-8, 8),
+                "size":    rng.uniform(1.5, 4),
+                "alpha":   rng.randint(60, 160),
             })
+        self._field_w, self._field_h = 32, 18
+        field = fractal_noise2d(self._field_h, self._field_w, octaves=3,
+                                 seed=rng_seed + 6000, tileable=(True, True))
+        _dy, dx = noise_gradient(field)
+        self._flow_dx = dx
+
+    def _wind_at(self, x: float, y: float) -> float:
+        fx = int((x / W) * self._field_w) % self._field_w
+        fy = int((y / H) * self._field_h) % self._field_h
+        return float(self._flow_dx[fy, fx])
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
         ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d  = ImageDraw.Draw(ov)
         for flake in self.flakes:
-            y   = (flake["y"] + flake["speed"] * t) % (H + 20) - 20
-            x   = flake["x"] + flake["drift"] * t + flake["size"] * 4 * math.sin(t * 0.3 + flake["phase"])
-            x   = x % W
-            s   = flake["size"]
+            t_local = (t + flake["phase"]) % flake["fall_period"]
+            y = -20 + flake["v_term"] * (t_local - flake["tau"] * (1 - math.exp(-t_local / flake["tau"])))
+            wind_offset = self._wind_at(flake["x"], y % H) * 250
+            x = (flake["x"] + flake["drift"] * t + wind_offset) % W
+            s = flake["size"]
             d.ellipse([x - s, y - s, x + s, y + s],
                       fill=(240, 248, 255, flake["alpha"]))
         ov_soft = ov.filter(ImageFilter.GaussianBlur(radius=1))
@@ -311,47 +373,92 @@ class SnowFall:
 # ── Petal drift (autumn leaves / sakura) ─────────────────────────────────────
 
 class PetalDrift:
-    """Drifting petals — maple leaves (autumn) or sakura (spring/sakura_night)."""
+    """
+    Drifting petals — maple leaves (autumn) or sakura (spring/sakura_night).
+    Terminal-velocity fall (same physical model as SnowFall) + curl-noise
+    wind (own shared static flow field) instead of a sine wobble. Real
+    rotation instead of the old fake squash-only "angle_factor" (which only
+    ever scaled ellipse width, never actually rotated the shape): ~24
+    pre-rotated RGBA sprite tiles are rendered once per (size, color) in
+    __init__ and picked by phase each frame — zero per-frame Image.rotate
+    calls, same "precompute once" philosophy as scene.make_vinyl_label_frames.
+    """
+    _N_TILES = 24
+
     def __init__(self, n_frames: int, rng_seed: int = 7,
                  count: int = 18, sakura: bool = False):
         rng = random.Random(rng_seed)
         self.sakura = sakura
         self.petals = []
         for _ in range(count):
+            v_term = rng.uniform(20, 55)
+            tau = rng.uniform(0.3, 0.6)
+            fall_distance = H + 60
+            fall_period = fall_distance / v_term + tau
             self.petals.append({
-                "x": rng.uniform(0, W),
-                "y": rng.uniform(-H * 0.5, H),
-                "speed_y": rng.uniform(20, 55),
-                "speed_x": rng.uniform(-25, 25),
-                "spin": rng.uniform(-2, 2),
-                "phase": rng.uniform(0, math.pi * 2),
-                "size": rng.randint(4, 10),
-                "alpha": rng.randint(100, 200),
+                "x":          rng.uniform(0, W),
+                "phase":      rng.uniform(0, fall_period),
+                "v_term":     v_term,
+                "tau":        tau,
+                "fall_period": fall_period,
+                "drift":      rng.uniform(-25, 25),
+                "spin_speed": rng.uniform(-1.5, 1.5),
+                "spin_phase": rng.uniform(0, 1),
+                "size":       rng.randint(4, 10),
+                "alpha":      rng.randint(100, 200),
+                "shade_pick": rng.random(),
             })
+
+        self._field_w, self._field_h = 32, 18
+        field = fractal_noise2d(self._field_h, self._field_w, octaves=3,
+                                 seed=rng_seed + 7000, tileable=(True, True))
+        _dy, dx = noise_gradient(field)
+        self._flow_dx = dx
+
+        self._sprite_cache: dict = {}
+
+    def _get_sprites(self, size: int, color: tuple) -> list:
+        key = (size, color)
+        if key not in self._sprite_cache:
+            base = Image.new("RGBA", (size * 4, size * 4), (0, 0, 0, 0))
+            bd = ImageDraw.Draw(base)
+            bd.ellipse([size, int(size * 1.4), size * 3, int(size * 2.6)], fill=color)
+            self._sprite_cache[key] = [
+                base.rotate(i * 360 / self._N_TILES, resample=Image.BILINEAR)
+                for i in range(self._N_TILES)
+            ]
+        return self._sprite_cache[key]
+
+    def _wind_at(self, x: float, y: float) -> float:
+        fx = int((x / W) * self._field_w) % self._field_w
+        fy = int((y / H) * self._field_h) % self._field_h
+        return float(self._flow_dx[fy, fx])
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
         ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        d  = ImageDraw.Draw(ov)
         for p in self.petals:
-            y = (p["y"] + p["speed_y"] * t) % (H + 30) - 30
-            x = (p["x"] + p["speed_x"] * t + 20 * math.sin(t * 0.4 + p["phase"])) % W
-            s = p["size"]
+            t_local = (t + p["phase"]) % p["fall_period"]
+            y = -30 + p["v_term"] * (t_local - p["tau"] * (1 - math.exp(-t_local / p["tau"])))
+            wind_offset = self._wind_at(p["x"], y % H) * 200
+            x = (p["x"] + p["drift"] * t + wind_offset) % W
+
             if self.sakura:
                 col = (255, 182, 193, p["alpha"])  # pink
             else:
                 # Autumn: mix of orange/red/brown
-                shade = (p["phase"] % 1)
+                shade = p["shade_pick"]
                 if shade < 0.33:
                     col = (220, 80, 30, p["alpha"])   # orange-red
                 elif shade < 0.66:
                     col = (200, 120, 20, p["alpha"])  # amber
                 else:
                     col = (160, 60, 20, p["alpha"])   # deep red
-            # Simple leaf/petal ellipse with rotation implied by squash
-            angle_factor = math.cos(t * p["spin"] + p["phase"])
-            w_half = max(1, int(s * abs(angle_factor)))
-            h_half = s
-            d.ellipse([x - w_half, y - h_half, x + w_half, y + h_half], fill=col)
+
+            sprites = self._get_sprites(p["size"], col)
+            tile_idx = int((t * p["spin_speed"] + p["spin_phase"]) * self._N_TILES) % self._N_TILES
+            sprite = sprites[tile_idx]
+            ov.paste(sprite, (int(x - sprite.width / 2), int(y - sprite.height / 2)), sprite)
+
         return _paste_rgba(frame, np.array(ov))
 
 
@@ -361,19 +468,30 @@ class NeonPulse:
     """
     Pulsing coloured light from an off-screen neon sign — hue cycles slowly
     between pink and cyan, casting a faint glow on the left edge of frame.
+    Driven by a small dedicated fractal noise field (same fixed-cell-sample
+    technique as WindowGlow) instead of a single sine wave, for an organic
+    non-repeating pulse — lowest priority of the cozy_fx upgrades (narrowest
+    theme reach, 3/17, and the old sine already read as intentionally
+    synthetic for a neon sign), so it keeps a residual sine term blended in
+    for the sign's characteristic electric "buzz".
     """
     def __init__(self, n_frames: int, rng_seed: int = 8):
         rng = random.Random(rng_seed)
         self.phase = rng.uniform(0, math.pi * 2)
         self.speed = 0.12  # hue rotation cycles per second
+        self._n_frames = max(1, n_frames)
+        self._field_get = noise_field_frames(24, 24, self._n_frames, octaves=3,
+                                              base_res=4, warp_amp=2.0, seed=rng_seed + 10000)
 
     def render(self, frame: np.ndarray, t: float) -> np.ndarray:
-        hue_pos = (math.sin(t * self.speed * 2 * math.pi + self.phase) + 1) / 2
+        frame_idx = int(round(t * FPS)) % self._n_frames
+        val = float(self._field_get(frame_idx)[12, 12])   # [0,1]
+        hue_pos = 0.5 + 0.5 * math.sin((val * 2 - 1) * math.pi + self.phase)
         # Lerp pink (255,20,180) → cyan (0,220,255)
         r = int(255 * (1 - hue_pos))
         g = int(20  + 200 * hue_pos)
         b = int(180 + 75  * hue_pos)
-        intensity = 0.06 + 0.03 * math.sin(t * 2.7 + self.phase)
+        intensity = 0.06 + 0.02 * (val * 2 - 1) + 0.015 * math.sin(t * 2.7 + self.phase)
         # Left-edge gradient glow
         xs = np.linspace(1, 0, W, dtype=np.float32)[np.newaxis, :] ** 3
         ys = np.ones((H, 1), dtype=np.float32)
