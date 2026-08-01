@@ -8,9 +8,14 @@ python-dotenv>=1.0
 Pillow>=10.0
 numpy>=1.24
 requests>=2.31
-pychord>=1.1.0
+scipy>=1.11
+soundfile>=0.12
+pedalboard>=0.9
+librosa>=0.10
+beautifulsoup4>=4.12
+isobar>=0.1
 
-# yt-dlp: trending scrape + audio covers (keep current; YouTube changes often)
+# yt-dlp: trending scrape (keep current; YouTube changes often)
 yt-dlp>=2026.3
 
 # Web control panel (webui.py)

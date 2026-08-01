@@ -10,6 +10,7 @@ import random
 
 from .models import LofiCoverSEO, MidiDNA, SongInfo
 from .registry import build_ref_id
+from scripts.seo_utils import format_timestamp, trim_tags_to_budget
 
 # Title patterns — {title}, {artist}, {dur} are template vars
 # Patterns without {dur} are used for "single" mode
@@ -165,10 +166,7 @@ def _build_chapters(duration: str) -> list[tuple[str, str]]:
     chapters = []
     for i, label in enumerate(labels):
         secs = int(i * total_secs / len(labels))
-        m, s = divmod(secs, 60)
-        h, m = divmod(m, 60)
-        ts = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-        chapters.append((ts, label))
+        chapters.append((format_timestamp(secs), label))
 
     return chapters
 
@@ -201,9 +199,9 @@ def _build_tags(song: SongInfo, midi_dna: MidiDNA) -> list[str]:
             seen.add(t)
             unique.append(t)
 
-    # Trim to fit YouTube 500-char tag limit
-    while unique and sum(len(t) for t in unique) + len(unique) - 1 > 500:
-        unique.pop()
+    # Trim to fit YouTube 500-char tag limit (removes longest first, keeps
+    # short high-intent tags like "lofi hip hop" over long specific ones)
+    unique = trim_tags_to_budget(unique, 500)
 
     return unique[:12]
 

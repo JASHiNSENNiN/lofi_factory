@@ -26,6 +26,8 @@ Output: assets/seo_TIMESTAMP.json
 
 import os, json, random, datetime, secrets, re
 
+from scripts.seo_utils import format_timestamp as _secs_to_ts
+
 try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -463,16 +465,6 @@ DURATION_SECS = {
 # ──────────────────────────────────────────────────────────────────────────────
 #  CHAPTER SETS  — narrative-aware labels per duration
 # ──────────────────────────────────────────────────────────────────────────────
-
-def _secs_to_ts(secs: int) -> str:
-    """Format seconds as a YouTube chapter timestamp (H:MM:SS or M:SS)."""
-    h = secs // 3600
-    m = (secs % 3600) // 60
-    s = secs % 60
-    if h:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
-
 
 def _build_chapters(duration: str, concept: dict) -> list:
     """Dynamically compute chapter timestamps and narrative labels for any duration."""

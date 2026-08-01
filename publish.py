@@ -6,7 +6,10 @@ run.py — use this after the pipeline has produced a video.
 
 SUBCOMMANDS
   upload          Upload the latest (or specified) video as a regular upload
-  live            Start a YouTube Live broadcast, stream the video on loop
+  live            Stream ONE existing video for a fixed duration (dashboard-
+                  controlled, no auto-reconnect). For an indefinite 24/7
+                  auto-reconnecting radio stream instead, use
+                  `python run.py --stream` (scripts/stream_live.py).
   end             End an active live broadcast
   status          Show all active/upcoming broadcasts
   schedule        Schedule a future live broadcast (no stream yet)
@@ -60,17 +63,8 @@ import threading
 import auto_service
 
 ROOT         = os.path.dirname(os.path.abspath(__file__))
-CLIENT_SECRET = os.path.join(ROOT, "client_secret.json")
-TOKEN_FILE   = os.path.join(ROOT, "token.json")
 STATE_FILE   = os.path.join(ROOT, "live_state.json")   # persists active broadcast info
 UPLOAD_LOG   = os.path.join(ROOT, "upload_log.json")
-
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-    "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-    "https://www.googleapis.com/auth/yt-analytics.readonly",
-]
 
 RTMP_BASE = "rtmp://a.rtmp.youtube.com/live2"
 
@@ -84,43 +78,14 @@ STREAM_PRESETS = {
 }
 
 # ── AUTH ────────────────────────────────────────────────────────────────────
+# Delegates to scripts/upload_youtube.py — the OAuth flow used identically by
+# run.py, scripts/analytics.py, scripts/stream_live.py, scripts/youtube_live_manager.py,
+# and scripts/lofi_inator/pipeline.py. Kept as a thin wrapper here so existing
+# `get_youtube()` call sites throughout this file don't need to change.
 
 def get_youtube():
-    try:
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
-    except ImportError:
-        print("[ERROR] Missing Google API libraries.")
-        print("  pip install google-api-python-client google-auth-oauthlib google-auth-httplib2")
-        sys.exit(1)
-
-    creds = None
-    if os.path.exists(TOKEN_FILE):
-        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception:
-                creds = None
-
-        if not creds:
-            if not os.path.exists(CLIENT_SECRET):
-                print(f"[ERROR] client_secret.json not found at {CLIENT_SECRET}")
-                print("  Download from Google Cloud Console → APIs → Credentials → OAuth 2.0")
-                sys.exit(1)
-            flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET, SCOPES)
-            creds = flow.run_local_server(port=0, prompt="consent")
-
-        fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(creds.to_json())
-        print("[AUTH] Token saved.")
-
-    return build("youtube", "v3", credentials=creds)
+    from scripts.upload_youtube import get_authenticated_service
+    return get_authenticated_service()
 
 
 # ── HELPERS ─────────────────────────────────────────────────────────────────
@@ -430,10 +395,15 @@ def cmd_dashboard(args):
     os.execv(sys.executable, [sys.executable, dash])
 
 
-# ── CRON INSTALLER ──────────────────────────────────────────────────────────
+# ── CRON INSTALLER (non-systemd fallback) ───────────────────────────────────
+# The deployed scheduling mechanism is the systemd user timer (deploy/lofi-auto.timer
+# + deploy/lofi-auto.service, controlled via `publish.py auto-service` / auto_service.py).
+# This crontab-based installer exists only as a fallback for hosts without systemd —
+# prefer `auto-service install` when systemd is available.
 
 def cmd_cron(args):
-    """Install/remove/show a daily crontab entry that auto-generates and uploads a video."""
+    """Install/remove/show a daily crontab entry that auto-generates and uploads a video.
+    Non-systemd fallback — see module note above. Prefer `publish.py auto-service` normally."""
     import subprocess as _sp
     script   = os.path.abspath(__file__)
     venv_py  = os.path.join(ROOT, "venv", "bin", "python")
@@ -562,29 +532,8 @@ def cmd_analytics(args):
         swap_low_ctr_thumbnails(data)
 
 
-# ── PLAYLIST HELPERS ────────────────────────────────────────────────────────
-
-_SLEEP_DURATIONS = {"3 hours", "4 hours", "5 hours", "8 hours", "10 hours", "all night"}
-
-
-def _add_video_to_playlist(youtube, video_id: str, seo: dict):
-    """Add video to STUDY or SLEEP playlist based on duration. IDs from .env."""
-    duration = seo.get("duration", "")
-    key = "YT_PLAYLIST_SLEEP" if duration in _SLEEP_DURATIONS else "YT_PLAYLIST_STUDY"
-    playlist_id = os.environ.get(key, "")
-    if not playlist_id:
-        return
-    try:
-        youtube.playlistItems().insert(
-            part="snippet",
-            body={"snippet": {
-                "playlistId": playlist_id,
-                "resourceId": {"kind": "youtube#video", "videoId": video_id},
-            }},
-        ).execute()
-        print(f"  Added to playlist ({key}): {playlist_id}")
-    except Exception as e:
-        print(f"  [WARN] Playlist add failed: {e}")
+# Playlist auto-add on upload is handled by scripts.upload_youtube.upload_video()
+# (shared with run.py/analytics.py/stream_live.py/etc — see cmd_upload above).
 
 
 def cmd_playlist(args):
@@ -645,8 +594,6 @@ def cmd_playlist(args):
 # ── UPLOAD ──────────────────────────────────────────────────────────────────
 
 def cmd_upload(args):
-    from googleapiclient.http import MediaFileUpload
-
     youtube = get_youtube()
 
     # Resolve video — auto-delete corrupt files; regenerate if nothing valid remains
@@ -709,28 +656,16 @@ def cmd_upload(args):
             sys.exit(1)
 
     thumb_path = args.thumb or find_latest(os.path.join(ROOT, "assets"), "thumb_*.jpg")
-    seo        = load_seo(args.seo)
+    seo        = dict(load_seo(args.seo))
 
-    # Build title / description / tags
-    title       = args.title or seo.get("title", "lo-fi beats to study/relax to 🌙")
-    description = seo.get("description", "Cozy lo-fi music. No copyright. Free to use.")
-    tags        = seo.get("tags", ["lofi", "chillhop", "study music"])
-    # YouTube's actual enforced limit is ~467 chars (tags joined with ", ");
-    # use 450 as a safe ceiling to avoid off-by-one rejections.
-    _kept, _total = [], 0
-    for _t in tags:
-        _cost = len(_t) + (2 if _kept else 0)
-        if _total + _cost > 450:
-            break
-        _kept.append(_t)
-        _total += _cost
-    tags = _kept
-    privacy     = args.privacy or seo.get("privacy", "public")
-
-    print(f"\n[UPLOAD] {os.path.basename(video_path)}")
-    print(f"  Title:   {title}")
-    print(f"  Privacy: {privacy}")
-    print(f"  Tags:    {', '.join(tags[:6])}...")
+    # CLI overrides on top of the SEO file
+    if args.title:
+        seo["title"] = args.title
+    if args.privacy:
+        seo["privacy"] = args.privacy
+    seo.setdefault("title", "lo-fi beats to study/relax to 🌙")
+    seo.setdefault("description", "Cozy lo-fi music. No copyright. Free to use.")
+    seo.setdefault("tags", ["lofi", "chillhop", "study music"])
 
     # Scheduled publish: --schedule-at sets privacyStatus=private + publishAt
     schedule_at = getattr(args, "schedule_at", None)
@@ -741,61 +676,22 @@ def cmd_upload(args):
             print("[ERROR] --schedule-at must be ISO format: 2026-05-16T20:00:00")
             sys.exit(1)
         schedule_at = schedule_at + ".000Z"
-        privacy = "private"
-        print(f"  Scheduled: publishes at {schedule_at} (UTC)")
 
-    body = {
-        "snippet": {
-            "title":                title,
-            "description":          description,
-            "tags":                 tags,
-            "categoryId":           seo.get("category_id", "10"),   # 10 = Music
-            "defaultLanguage":      "en",
-            "defaultAudioLanguage": "en",
-        },
-        "status": {
-            "privacyStatus": privacy,
-            "madeForKids":   seo.get("made_for_kids", False),
-            **({"publishAt": schedule_at} if schedule_at else {}),
-        },
-    }
+    print(f"\n[UPLOAD] {os.path.basename(video_path)}")
+    print(f"  Title:   {seo['title']}")
+    print(f"  Privacy: {'private (scheduled)' if schedule_at else seo.get('privacy', 'public')}")
+    print(f"  Tags:    {', '.join(seo['tags'][:6])}...")
 
-    media = MediaFileUpload(video_path, mimetype="video/mp4",
-                            resumable=True, chunksize=10 * 1024 * 1024)
-    req   = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-
-    print("  Uploading", end="", flush=True)
-    response = None
-    while response is None:
-        status, response = req.next_chunk()
-        if status:
-            pct = int(status.progress() * 100)
-            print(f"\r  Uploading {pct}% ...", end="", flush=True)
-    print()
-
-    video_id = response["id"]
-    url      = f"https://www.youtube.com/watch?v={video_id}"
-    print(f"  Uploaded → {url}")
-
-    # Thumbnail
-    if thumb_path and os.path.exists(thumb_path):
-        print(f"  Setting thumbnail: {os.path.basename(thumb_path)}")
-        youtube.thumbnails().set(
-            videoId=video_id,
-            media_body=MediaFileUpload(thumb_path, mimetype="image/jpeg")
-        ).execute()
-        print("  Thumbnail set.")
-
-    # Auto-add to playlist (reads YT_PLAYLIST_STUDY / YT_PLAYLIST_SLEEP from .env)
-    _add_video_to_playlist(youtube, video_id, seo)
+    from scripts.upload_youtube import upload_video
+    video_id, url = upload_video(youtube, video_path, seo, thumb_path, publish_at=schedule_at)
 
     # Log
     append_upload_log({
         "type":             "upload",
         "video_id":         video_id,
         "url":              url,
-        "title":            title,
-        "title_variants":   seo.get("title_variants", [title]),
+        "title":            seo["title"],
+        "title_variants":   seo.get("title_variants", [seo["title"]]),
         "title_chosen_idx": seo.get("title_chosen_idx", 0),
         "pillar":           seo.get("pillar", ""),
         "concept":          seo.get("concept", ""),
@@ -1085,6 +981,16 @@ def _start_ffmpeg_stream(video_path: str, stream_key: str, preset: dict) -> subp
 
 
 def cmd_live(args):
+    """
+    Stream ONE existing finished video, looped, for a fixed --duration via the
+    YouTube Broadcast API. Owns its own broadcast lifecycle and live_state.json
+    schema (including ffmpeg_pid) that `publish.py end` and the dashboard/webui
+    directly depend on to monitor/kill the stream — this is intentionally NOT
+    delegated to scripts/stream_live.py, which is a different tool: an
+    indefinite, auto-reconnecting 24/7 stream that continuously generates new
+    music in the background (used by `run.py --stream`). If ffmpeg drops here,
+    the broadcast ends rather than reconnecting — use stream_live.py for that.
+    """
     youtube = get_youtube()
 
     # Resolve files
@@ -1522,7 +1428,12 @@ def main():
                            "Upload 3h before peak so YouTube indexes first.")
 
     # ── live ─────────────────────────────────────────────────────
-    p_live = sub.add_parser("live", help="Start a YouTube Live broadcast (loops video)")
+    p_live = sub.add_parser("live", help="Stream ONE existing finished video for a fixed "
+                             "duration via the YouTube Broadcast API, dashboard-controlled "
+                             "(no auto-reconnect on dropout). For an indefinite, "
+                             "auto-reconnecting 24/7 radio stream with continuous background "
+                             "music generation, use 'python run.py --stream' or "
+                             "'python scripts/stream_live.py' instead.")
     p_live.add_argument("--video",    help="Path to video file (default: latest in output/)")
     p_live.add_argument("--seo",      help="Path to SEO JSON")
     p_live.add_argument("--title",    help="Override broadcast title")
@@ -1632,7 +1543,9 @@ def main():
                         help="For 'logs': print history and exit instead of following")
 
     # ── cron ─────────────────────────────────────────────────────
-    p_cron = sub.add_parser("cron", help="Install/remove/show daily auto-upload cron job")
+    p_cron = sub.add_parser("cron", help="[non-systemd fallback] Install/remove/show a daily "
+                             "auto-upload cron job. Prefer 'auto-service install' when systemd "
+                             "is available (the actually-deployed mechanism, see deploy/).")
     cron_sub = p_cron.add_subparsers(dest="cron_cmd", metavar="ACTION")
     p_ci = cron_sub.add_parser("install", help="Install daily auto-upload cron")
     p_ci.add_argument("--hour", type=int, default=9,

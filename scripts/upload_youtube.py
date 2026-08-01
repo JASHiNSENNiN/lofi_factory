@@ -23,6 +23,8 @@ import json
 import argparse
 import glob
 
+from scripts.seo_utils import trim_tags_to_budget
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 # Load .env (stream key, channel ID)
@@ -100,17 +102,19 @@ def get_authenticated_service():
     return build("youtube", "v3", credentials=creds)
 
 
-def upload_video(youtube, video_path, seo, thumbnail_path=None):
+def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None):
+    """
+    publish_at: optional RFC3339 UTC timestamp (e.g. "2026-05-16T20:00:00.000Z").
+    When set, forces privacyStatus="private" and schedules the video to go
+    public at that time (YouTube requirement for scheduled publish).
+    """
     from googleapiclient.http import MediaFileUpload
 
     title       = seo.get("title", "lo-fi hip hop radio")[:100]
     description = seo.get("description", "")
-    tags        = list(seo.get("tags", []))
     # YouTube rejects if all tags joined exceed 500 chars — trim longest first
     # to preserve high-intent short tags (e.g. "lofi", "study music")
-    while tags and sum(len(t) for t in tags) + len(tags) - 1 > 500:
-        longest = max(range(len(tags)), key=lambda i: len(tags[i]))
-        tags.pop(longest)
+    tags        = trim_tags_to_budget(list(seo.get("tags", [])), 500)
 
     print(f"[UPLOAD] Uploading: {os.path.basename(video_path)}")
     print(f"  Title: {title}")
@@ -118,6 +122,10 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None):
     made_for_kids = seo.get("made_for_kids", False)
     if made_for_kids:
         print("[WARN] made_for_kids=True detected — this disables monetization! Set to False unless legally required.")
+
+    privacy = "private" if publish_at else seo.get("privacy", "public")
+    if publish_at:
+        print(f"  Scheduled: publishes at {publish_at} (UTC)")
 
     body = {
         "snippet": {
@@ -129,8 +137,9 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None):
             "defaultAudioLanguage": "en",
         },
         "status": {
-            "privacyStatus": seo.get("privacy", "public"),
+            "privacyStatus": privacy,
             "madeForKids": made_for_kids,
+            **({"publishAt": publish_at} if publish_at else {}),
         },
     }
 

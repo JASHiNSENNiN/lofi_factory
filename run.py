@@ -299,10 +299,7 @@ def main():
     # ── STEP 4: Thumbnail ──────────────────────────────────────
     print("\n[4/5] Generating thumbnail...")
     import time
-    try:
-        from scripts.generate_thumbnail_cozy import generate_thumbnail
-    except ImportError:
-        from scripts.generate_thumbnail import generate_thumbnail
+    from scripts.generate_thumbnail_cozy import generate_thumbnail
     thumb_path, thumb_title = generate_thumbnail(
         theme_name=suggested_theme or theme,
         duration=args.duration,

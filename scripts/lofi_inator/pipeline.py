@@ -276,12 +276,8 @@ def _clear_music_dir() -> None:
 
 def _generate_thumbnail(theme: str, duration: str, title: str) -> str | None:
     try:
-        try:
-            from scripts.generate_thumbnail_cozy import generate_thumbnail
-        except ImportError:
-            from scripts.generate_thumbnail import generate_thumbnail
+        from scripts.generate_thumbnail_cozy import generate_thumbnail
         result = generate_thumbnail(theme, duration, title)
-        # generate_thumbnail_cozy returns (path, title) tuple; fallback returns path str
         return result[0] if isinstance(result, tuple) else result
     except Exception as e:
         print(f"  Warning: thumbnail generation failed: {e}")

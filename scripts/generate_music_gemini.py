@@ -225,8 +225,10 @@ _COZY_SUBGENRES: frozenset[str] = frozenset({
     "lofi_rnb', 'lofi_classical', 'lofi_house', 'chillhop",
 })
 
-# Per-sub-genre FX biasing — overrides random ranges in apply_lofi_fx().
-# Sub-genres not listed here use the global defaults.
+# Per-sub-genre FX biasing. NOTE: no longer consumed anywhere (the in-file apply_lofi_fx()
+# that used this was removed in favor of scripts/lofi_fx.py, which has its own separate
+# _GENRE_PRESETS). generate_music_v2.py still imports this name but doesn't use it either.
+# Left in place pending a follow-up dead-import cleanup pass.
 _SUBGENRE_FX = {
     'chillhop':     {'bits': [11,12,13],  'lpf': (9500,12000),  'vinyl_vol': (0.06,0.12),  'tremolo_d': (0.05,0.10)},
     'morning_lofi': {'bits': [12,13,14],  'lpf': (10000,13000), 'vinyl_vol': (0.03,0.08),  'tremolo_d': (0.05,0.10)},
@@ -1189,123 +1191,6 @@ def build_counter_melody(key_root: int, start_bar: int, num_bars: int,
 
 # ─── PARAMETER SELECTION ──────────────────────────────────────────────────────
 
-_GROQ_PROMPT_LEGACY = """UNUSED — kept for reference only.
-{concept_line}
-
-MUSIC THEORY GUIDE — match concept emotional register to parameters:
-
-SCALE PERSONALITIES (melody_scale):
-- "pent" (minor pentatonic): floating, universal ache, dreamlike comfort — cozy/nostalgic concepts
-- "dorian": bittersweet jazz flavor — the raised 6th creates tension that resolves gently, perfect for late-night productive sadness
-- "phryg" (Phrygian): dark, exotic, Spanish/Japanese edge — mysterious, ancient, deeply melancholy concepts
-- "major_pent": bright, hopeful morning energy — sunlit windows, first coffee, optimistic study, soft beginnings
-- "mixo" (Mixolydian): bluesy confidence, groove-forward — hip hop soul, urban momentum, productive flow
-- "major": resolved, forward-looking, daytime energy — full major scale for bright, clear concepts
-- "lydian": floating, ethereal, spiritual suspension — the raised 4th lifts everything skyward; Nujabes' signature weightless wonder
-
-KEY EMOTIONAL WEIGHT:
-- Am: warmest minor, most versatile — the default lo-fi home
-- Dm: deeper melancholy, the weight of 4am, things unsaid
-- Em: brighter minor, hope inside sadness, nature and spring themes
-- Gm: dark but spacious, neo-soul territory, city at distance
-- Cm: the heaviest — exhaustion, grief turned quiet, 5am darkness
-- C: warmth and resolution, home-key calm, familiar comfort — use with major/major_pent
-- G: open spaces, pastoral brightness, wide sky — use with major/major_pent
-- F: full-bodied warmth, slightly autumnal brightness — use with major/major_pent
-
-PROGRESSIONS by emotional character:
-- 0 (i-VII-VI-VII classic): familiar comfort, the lo-fi heartbeat
-- 1 (study): resolution-focused, forward motion — deadline / working concepts
-- 2 (jazz ii-V-i): sophisticated, smoky room late night, pair with bass_walking=true
-- 3 (modal minor): drifting, spacious — philosophical, ambient, time-passing concepts
-- 5 (deep jazz): complex extensions, dark academia, jazz cafe 2am
-- 6 (Nujabes/Lydian): raised 4th, spiritual floating — Kyoto temples, late-night wonder, Japanese aesthetics
-- 7 (minimal vamp): hypnotic, meditative — long deep-focus, the hours that don't belong to anyone
-- 12 (ambient slow): texture over melody — silence, fog, ma (間) concepts
-- 13 (Dorian Am): bittersweet peak — emotional/nostalgic, the ache of beautiful things
-- 14 (dark Cm): heavy, exhausted but functional — 4am still going, productive sadness
-- 15 (dark descending): melancholy falling motion — rain, loss, letting go, last train
-- 16 (morning I-vi-IV-V): bright major, hopeful forward motion — sunrise, optimism, first coffee
-- 17 (floating morning): warm major float — lazy weekend morning, soft light
-- 18 (G major arc): I-vi-ii-IV warm resolution — afternoon studying, content focus
-- 19 (chill 2-chord vamp): Am9↔Cmaj9 hypnotic but warm — deep flow state
-- 20 (descending chill): IV-iii-ii-I gentle fall — peaceful drift, comfortable
-- 21 (IV-V-vi-I uplifting): bright major climb — energy, motivation, forward feeling
-- 22 (I-V-vi-IV cozy pop): THE iconic cozy loop — warm, familiar, universally pleasant
-- 23 (V-I-IV-I resolution): resolved, settled, warm — satisfaction, good progress
-- 24 (quick major turns): brisk quarter-note chords — upbeat cafe, active morning
-- 25 (I-iii-IV-V build): builds warmth and momentum — productive energy
-- 26 (ii-V-I-IV jazz-funk): swinging jazz-funk turn — active, groove-forward, upbeat
-- 27 (neo-soul groove): Am9-Fmaj9-G7 soul vamp — warm groove, confident energy
-- 28 (I-vi-ii-V jazz C major): Cmaj7-Am9-Dm9-G7 — sophisticated daytime jazz, clean and warm
-- 29 (IV-iii-vi-V G major): Fmaj9-Em7-Am9-D7 — bright flowing arc, pastoral resolve
-- 30 (minor gospel cycle): Gm9-Cm7-Fmaj9-Bbmaj7 — soulful, churchy weight, late-afternoon light
-
-BPM FEEL:
-- 62-68: ultra-slow, meditative drift — chill_beats and ambient territory
-- 68-72: heartbeat tempo, the most introspective, breath slows down
-- 73-78: classic lo-fi zone, gentle forward motion
-- 79-85: alert but calm, chillhop / morning energy, city at night
-- 86-92: brisk, city pop / hip hop territory, more energetic
-
-SUB-GENRE BPM AND CHARACTER GUIDE:
-- cozy_cafe: warm, inviting, Vibraphone/EP2, major-key, medium-tempo — coffee shops, productive study, 78-90 BPM
-- anime_lofi: bright, nostalgic, Japanese-inspired — upbeat major feel, EP2+Vibes, 82-92 BPM
-- summer_vibes: warm/tropical, Vibraphone-led, bossa-tinged, major key — outdoor study, good days, 82-92 BPM
-- study_lofi: classic "lo-fi beats to study to" — clean, focused, not sad, 76-88 BPM
-- jazz_cafe: upbeat cafe jazz with EP2, Vibraphone, ride cymbal — warm social energy, 80-92 BPM
-- piano_lofi: solo EP2 piano focus, delicate, sparse drums — introspective but hopeful, 68-82 BPM
-- lo_fi_funk: funky, upbeat, mixolydian groove, 84-96 BPM — energetic study sessions
-- morning_lofi: bright major-key feel, EP2 piano, gentle drums, hopeful — dawn rituals, 74-84 BPM
-- hip_hop_lofi: punchy groove, strong beat, Rhodes, 80-92 BPM — focused work, urban energy
-- chill_beats: very sparse drums, pad-heavy, meditative — deep study, slow afternoons, 62-74 BPM
-- vaporwave: dreamy, nostalgic, slowed-down warmth — 80s/90s synth nostalgia, GM_WARM_PAD-led, half-time drums, lydian/major, 60-72 BPM
-- lofi_house: rhythmic 4/4 groove meets lo-fi warmth — steady house-influenced kick, EP2 keys, dorian, 88-100 BPM
-- lofi_classical: refined piano + cello counterpoint, classical harmony, minimal drums — focused, elegant, 66-80 BPM
-- bedroom_pop: indie/DIY lo-fi, nylon guitar lead, bright major keys — homespun warmth, 80-90 BPM
-- lofi_rnb: soulful R&B texture, muted trumpet fills, Dilla-influenced rhythm — warm groove, dorian/mixo, 72-84 BPM
-
-CHANNEL IDENTITY: This is a COZY channel. Lean bright and warm, not dark and sad. Dark sub-genres (dark_lofi, lofi_phonk) exist but should only appear when the concept explicitly calls for it.
-
-SWING: higher = more human, more drunk, more vintage. 0.64+ = records played too many times.
-
-Output ONLY valid JSON — no markdown, no explanation:
-{{
-  "key": "Am",
-  "progression": 0,
-  "bpm": 80,
-  "swing": 0.58,
-  "mood": "late night rain",
-  "melody_density": "sparse",
-  "melody_scale": "pent",
-  "bass_walking": false,
-  "drum_pattern_a": 0,
-  "drum_pattern_b": 1,
-  "drum_energy": "medium",
-  "sub_genre": "chillhop"
-}}
-
-Rules:
-- key: one of "Am","Dm","Em","Gm","Cm","C","G","F" — use C/G/F with major/major_pent/lydian scales for bright sub-genres
-- progression: integer 0-30 (use the emotional guide above; 16-30 are bright major/cozy/jazz progressions)
-- bpm: integer 62-92
-- swing: float 0.56-0.70 (higher = more human, more feeling)
-- mood: POETIC phrase — not a genre label, not an adjective stack. Good: "the weight of 4am", "when sadness becomes fuel", "the specific quiet of a city that doesn't know your name", "still here, still going". Bad: "late night rain", "chill study beats".
-- melody_density: "sparse" (more space, more ache) or "medium"
-- melody_scale: "pent", "dorian", "phryg", "major_pent", "mixo", "major", or "lydian"
-- bass_walking: true = jazz club intimacy, false = hypnotic loop
-- drum_pattern_a: integer 0-10 (main sections; 10=brushed jazz — use with lofi_jazz/jazz_cafe)
-- drum_pattern_b: integer 0-10 (B section — different from a; 6=hip hop tight, 7=chill sparse, 8=funk groove, 9=half-time spacious, 10=brushed jazz)
-- drum_energy: "low","medium","high"
-- sub_genre: one of "chillhop","lofi_jazz","dark_lofi","bossa_lofi","neo_soul","ambient","nujabes","city_pop","lofi_phonk","morning_lofi","hip_hop_lofi","chill_beats","cozy_cafe","anime_lofi","summer_vibes","study_lofi","jazz_cafe","piano_lofi","lo_fi_funk","vaporwave","lofi_house","lofi_classical","bedroom_pop","lofi_rnb"
-  Prefer cozy/bright sub-genres unless the concept is explicitly dark or melancholy.
-  Note: instrument selection (guitar, flute, trumpet, marimba, organ, cello) is handled automatically per sub-genre — do not factor this into your choice.
-Match the EMOTIONAL REGISTER of the concept, not just the surface description. 
-IMPORTANT: DO NOT REPEAT YOUR PREVIOUS CHOICES. If you previously chose a generic Am lofi, choose a Lydian vaporwave or a Phrygian dark lofi instead.
-CRITICAL: Use the [UNIQUENESS SEED] to radically shift your parameter choices.
-Output ONLY the JSON."""
-
-
 # ---------------------------------------------------------------------------
 # Procedural mood-phrase composer — generates unique phrases, never repeats
 # ---------------------------------------------------------------------------
@@ -2002,87 +1887,6 @@ def midi_to_wav(midi_path: str, wav_path: str, soundfont: str | None = None) -> 
         sf, midi_path,
     ], check=True, capture_output=True)
 
-
-def apply_lofi_fx(wav_in, wav_out, sub_genre=None, bpm=80, energy='medium'):
-    """
-    Authentic lo-fi signal chain — modelled on SP-404/MPC sampler workflow.
-    sub_genre biases the FX ranges via _SUBGENRE_FX for per-genre character.
-    bpm scales echo delay times inversely (faster tempo = shorter reverb tails).
-    energy scales tremolo depth.
-    """
-    fx = _SUBGENRE_FX.get(sub_genre, {})
-    bits          = random.choice(fx.get('bits', [10, 11, 12, 12]))
-    vinyl_amp     = round(random.uniform(0.025, 0.055), 3)
-    vinyl_vol     = round(random.uniform(*fx.get('vinyl_vol', (0.10, 0.20))), 3)
-    comp_rel      = random.randint(150, 220)
-    tremolo_f     = round(random.uniform(4.0, 5.5), 1)
-    tremolo_d_raw = round(random.uniform(*fx.get('tremolo_d', (0.08, 0.13))), 2)
-    # Energy-scaled tremolo: high energy = more wobble
-    energy_factor = {'low': 0.65, 'medium': 1.0, 'high': 1.45}.get(energy, 1.0)
-    tremolo_d     = round(tremolo_d_raw * energy_factor, 3)
-    wow_depth     = round(random.uniform(0.007, 0.015), 3)
-    chorus_delay  = random.randint(40, 60)
-    chorus_spd    = round(random.uniform(0.20, 0.35), 2)
-    sc_thresh     = round(random.uniform(0.55, 0.68), 2)
-    lpf_freq      = random.randint(*fx.get('lpf', (8500, 11000)))
-    sr_target     = random.choice([22050, 22050, 24000, 26000])
-    # BPM-aware echo: scale delay times inversely with BPM (ref = 80 BPM)
-    # Faster tempo → shorter reverb tails (prevents note bleed at high BPM)
-    bpm_scale  = 80.0 / max(60, bpm)
-    echo_d1    = max(20, int(35  * bpm_scale))   # 35ms @ 80 → 43ms @ 65 → 31ms @ 90
-    echo_d2    = max(40, int(65  * bpm_scale))
-    echo_d3    = max(80, int(130 * bpm_scale))
-
-    filter_chain = (
-        # 1. Remove sub-rumble
-        'highpass=f=100,'
-        # 2. Bitcrusher — log mode = vintage warmth (SP-1200 was 12-bit/26kHz)
-        f'acrusher=level_in=1.0:level_out=0.9:bits={bits}:samples=1:mode=log:aa=0.5,'
-        # 3. Sample-rate reduction — downsample to vintage sampler frequency then back up.
-        #    Creates the aliasing/grit characteristic of MPC/SP-1200 (26kHz) / Fairlight (24kHz).
-        f'aresample={sr_target},aresample=44100,'
-        # 4. Compression — gentle ratio, preserves lo-fi dynamics
-        f'acompressor=threshold=-18dB:ratio=2.5:attack=8:release={comp_rel}:makeup=4dB,'
-        # 5. Tape saturation — threshold controls clip point (lower = more drive/warmth)
-        f'asoftclip=type=tanh:threshold={sc_thresh}:output=0.85,'
-        # 6. Subtle Rhodes chorus — shimmer and stereo width
-        f'chorus=0.75:0.65:{chorus_delay}:0.25:{chorus_spd}:1,'
-        # 7. EQ — lo-fi character curve:
-        #    +3dB@80Hz bass warmth, +2dB@350Hz body,
-        #    -4dB@2.5kHz cut harsh digital grit from bitcrusher,
-        #    +2dB@5.5kHz vinyl presence crunch,
-        #    -3dB treble@7kHz,
-        #    hard rolloff at lpf_freq (8.5-11kHz) — THE defining lo-fi muffle
-        'bass=gain=3:frequency=80:width_type=q:width=0.7,'
-        'equalizer=f=350:t=o:w=2:g=2,'
-        'equalizer=f=2500:t=q:w=1.5:g=-4,'
-        'equalizer=f=5500:t=o:w=1.5:g=2,'
-        'treble=gain=-3:frequency=7000,'
-        f'lowpass=f={lpf_freq}:poles=2,'
-        # 8. Rhodes tremolo — audible wobble (8-13%)
-        f'tremolo=f={tremolo_f}:d={tremolo_d},'
-        # 9. Tape wow — slow pitch waver (was 0.002 = imperceptible)
-        f'vibrato=f=0.5:d={wow_depth},'
-        # 10. Room reverb — 3-tap, BPM-scaled delays (shorter at higher BPM to prevent bleed)
-        f'aecho=0.65:0.45:{echo_d1}|{echo_d2}|{echo_d3}:0.35|0.25|0.15,'
-        # 11. Peak limiter
-        'alimiter=level_in=1:level_out=0.99:limit=0.99:attack=5:release=50:asc=1'
-    )
-
-    subprocess.run([
-        'ffmpeg', '-y',
-        '-i', wav_in,
-        '-f', 'lavfi', '-i', f'anoisesrc=d=7200:c=pink:a={vinyl_amp}',
-        '-filter_complex', (
-            f'[0:a]{filter_chain}[main];'
-            f'[1:a]volume={vinyl_vol}[vinyl];'
-            f'[main][vinyl]amix=inputs=2:duration=first:weights=\'1 1\','
-            f'loudnorm=I=-14:LRA=11:TP=-1[out]'
-        ),
-        '-map', '[out]',
-        '-ar', '44100',
-        '-c:a', 'pcm_s16le', wav_out,
-    ], check=True, capture_output=True)
 
 # ─── ENTRY ────────────────────────────────────────────────────────────────────
 
