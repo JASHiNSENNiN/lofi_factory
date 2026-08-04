@@ -27,6 +27,20 @@ Usage:
 
   # Test locally (no RTMP — writes to stream_test.mp4 for 60 seconds)
   python scripts/stream_live.py --test
+
+Process supervision:
+  This module's own reconnect loop (stream()) only recovers from ffmpeg
+  dying or the RTMP connection dropping — it does NOT recover from the
+  Python process itself crashing (e.g. an unhandled exception outside the
+  reconnect loop, an OOM kill). Run it under a process supervisor with
+  auto-restart (systemd `Restart=always`, pm2, supervisord, a Docker
+  restart policy) so a crash of this script gets restarted from the
+  outside; this file assumes that layer exists, it doesn't provide it.
+
+Alerting:
+  Set LOFI_STREAM_ALERT_WEBHOOK to a Slack/Discord-compatible incoming
+  webhook URL to get pinged after repeated reconnect failures (opt-in,
+  unset by default — see _send_alert()).
 """
 
 import os
@@ -60,6 +74,26 @@ OUTPUT_DIR  = os.path.join(ROOT, "output")
 
 # YouTube RTMP ingest
 YT_RTMP_BASE = "rtmp://a.rtmp.youtube.com/live2"
+
+# Optional disconnect alerting — opt-in only (same pattern as LOFI_LLM_FAILSAFE):
+# unset by default, so a fresh checkout never makes an outbound network call it
+# wasn't explicitly configured for. Any webhook that accepts a JSON POST with a
+# "text" field works (Slack/Discord-compatible incoming webhook URL).
+_ALERT_WEBHOOK       = os.environ.get("LOFI_STREAM_ALERT_WEBHOOK", "")
+_ALERT_AFTER_ATTEMPTS = 5    # first alert once reconnects have failed this many times in a row
+_ALERT_REPEAT_EVERY   = 10   # then re-alert every N more attempts if still down
+
+
+def _send_alert(message: str) -> None:
+    """Best-effort webhook ping — must never let an alerting failure affect
+    the stream itself, so every failure mode here is swallowed silently."""
+    if not _ALERT_WEBHOOK:
+        return
+    try:
+        import requests
+        requests.post(_ALERT_WEBHOOK, json={"text": f"[lofi-factory] {message}"}, timeout=5)
+    except Exception:
+        pass
 
 # EQ zone geometry — 720p-proportional (2/3 of 1080p values).
 # Stream processes entirely at 720p: scale happens FIRST in filtergraph,
@@ -115,13 +149,6 @@ _THEME_AMBIENT = {
     "lofi_rnb":       ("brown", 0.005, 600),   # soulful, warm low-end
 }
 _DEFAULT_AMBIENT = ("brown", 0.003, 800)
-
-# ── Now-playing console log ────────────────────────────────────────────────────
-# Monitor thread writes these for console [now playing] output only.
-# (drawtext overlay removed — visual's baked-in panel is used as-is)
-NOWPLAYING_FILE = "/tmp/lofi_np_title.txt"
-GENRE_FILE      = "/tmp/lofi_np_genre.txt"
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -256,15 +283,6 @@ def _get_track_duration(path):
         return 300.0
 
 
-def _write_nowplaying(title, genre):
-    for path, text in ((NOWPLAYING_FILE, title), (GENRE_FILE, genre)):
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(text)
-        except Exception:
-            pass
-
-
 def _start_track_monitor(tracks, stop_event, on_track_change=None):
     """Background thread: cycles through tracks indefinitely, updating now-playing files.
     Reloads the track list from MUSIC_DIR after each full pass so newly generated
@@ -280,7 +298,6 @@ def _start_track_monitor(tracks, stop_event, on_track_change=None):
                 if stop_event.is_set():
                     return
                 meta = parse_track_meta(track_path)
-                _write_nowplaying(meta["title"], meta["genre"])
                 print(f"\n  [now playing] {meta['title']}  ({meta['genre']})")
                 if on_track_change:
                     try:
@@ -557,9 +574,6 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
     fg = build_eq_filtergraph(theme_name)
     a_color, a_amp, _a_lpf = _THEME_AMBIENT.get(theme_name or "", _DEFAULT_AMBIENT)
 
-    # Write initial placeholder so drawtext has a file to read before first track
-    _write_nowplaying("lofi dreams", "lo-fi hip hop")
-
     # Start now-playing monitor thread + playlist refresher
     monitor_stop = threading.Event()
     on_track_change = title_updater.set_track if title_updater else None
@@ -781,6 +795,12 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
                 delay = min(5 * (2 ** (attempt - 1)), 60)
                 print(f"\n[STREAM] Connection lost (exit={exit_code}). "
                       f"Reconnecting in {delay}s... (attempt {attempt}, Ctrl+C to stop)")
+                if attempt == _ALERT_AFTER_ATTEMPTS or (
+                    attempt > _ALERT_AFTER_ATTEMPTS
+                    and (attempt - _ALERT_AFTER_ATTEMPTS) % _ALERT_REPEAT_EVERY == 0
+                ):
+                    _send_alert(f"stream has failed to reconnect {attempt} times in a row "
+                                f"(last exit code {exit_code}) — still retrying")
                 for _ in range(delay):
                     if _user_interrupted:
                         break

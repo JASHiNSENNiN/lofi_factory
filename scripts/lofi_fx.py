@@ -5,6 +5,16 @@ which gives per-genre character through proper resonant filters, real compressio
 and pitch-wobble that actually sounds like tape.
 
 Falls back to the legacy ffmpeg chain if pedalboard is not available.
+
+Note on "instrument detuning": commonly cited as a lofi-authenticity technique,
+but it's fundamentally a per-note MIDI-generation-time effect (each instrument
+pitch-bent slightly relative to the others), not something a final-mix
+post-processing stage like this one can add after the fact -- a whole-mix
+pitch shift here would just transpose everything together, leaving relative
+pitch relationships (and therefore the "detuned" character) unchanged. The
+existing Chorus stage below is the standard post-processing approximation of
+that same "slightly out of tune" character (continuous micro pitch-modulation
+via a short delay line), so no separate detune stage was added here.
 """
 
 from __future__ import annotations
@@ -76,6 +86,23 @@ def apply_lofi_fx(wav_in: str, wav_out: str, sub_genre: str | None = None,
     except ImportError:
         _apply_ffmpeg_fallback(wav_in, wav_out, sub_genre, bpm, energy)
 
+
+# Stereo width applied after the main FX chain: Pedalboard has no dedicated
+# widener plugin, so this is a hand-rolled mid-side technique (M=(L+R)/2,
+# S=(L-R)/2, scale S, recombine) -- the chain's only prior stereo-field
+# control was Reverb(width=0.7), which shapes the reverb tail only, not the
+# dry signal. >1.0 widens, 1.0 is a no-op, kept modest to avoid mono-fold
+# phase issues on typical playback systems.
+_STEREO_WIDTH_RANGE = (1.05, 1.20)
+
+# Sub-bass warmth/saturation: a parallel-processed, band-limited soft
+# distortion mixed back under the low end, approximating the "muffled bass"
+# / "distorted sub-bass harmonics" character called out as a lofi production
+# staple -- distinct from the main chain's full-band Bitcrush/LowpassFilter,
+# which shape the whole mix rather than the bass specifically.
+_SUB_BASS_CUTOFF_HZ = 150
+_SUB_BASS_DRIVE_DB  = 14.0
+_SUB_BASS_MIX       = 0.22
 
 # Genres that benefit from GSM codec degradation (authentic mobile-phone grit)
 _GSM_GENRES = {"dark_lofi", "lofi_phonk", "vaporwave", "ambient"}
@@ -170,6 +197,13 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
         if ir_wet is not None:
             processed = processed * 0.60 + ir_wet * 0.40
 
+    # Stereo widening (mid-side) -- the main chain above has no dry-signal
+    # stereo-field control beyond Reverb's wet-tail width.
+    processed = _apply_stereo_width(processed, random.uniform(*_STEREO_WIDTH_RANGE))
+
+    # Sub-bass warmth/saturation, parallel-mixed under the low end.
+    processed = _apply_sub_bass_saturation(processed, sr)
+
     # Add vinyl crackle (white noise shaped like old record surface)
     if vinyl_vol > 0.01:
         crackle = _make_crackle(processed.shape[1], vinyl_vol)
@@ -181,6 +215,44 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
         processed = processed * (0.89 / peak)
 
     sf.write(wav_out, processed.T, sr, subtype="PCM_16")
+
+
+def _apply_stereo_width(audio: "np.ndarray", width: float) -> "np.ndarray":
+    """
+    Mid-side stereo widening. `audio` is (channels, samples). No-op for
+    anything other than exactly 2 channels (mono input, or an unexpected
+    channel count, both pass through unchanged rather than guessing).
+    """
+    import numpy as np
+
+    if audio.shape[0] != 2:
+        return audio
+    left, right = audio[0], audio[1]
+    mid  = (left + right) * 0.5
+    side = (left - right) * 0.5 * width
+    widened_left  = mid + side
+    widened_right = mid - side
+    return np.stack([widened_left, widened_right])
+
+
+def _apply_sub_bass_saturation(audio: "np.ndarray", sr: int) -> "np.ndarray":
+    """
+    Parallel-processed sub-bass warmth: isolate content below
+    _SUB_BASS_CUTOFF_HZ with a cheap one-pole lowpass, drive it through soft
+    (tanh) saturation, and mix a modest amount back under the full-band
+    signal -- approximates "muffled"/"distorted sub-bass" character without
+    touching the rest of the frequency spectrum, unlike the main chain's
+    full-band Bitcrush/LowpassFilter.
+    """
+    import numpy as np
+
+    alpha = np.exp(-2.0 * np.pi * _SUB_BASS_CUTOFF_HZ / sr)
+    lowpassed = _lfilter([1.0 - alpha], [1.0, -alpha], audio, axis=-1).astype(np.float32)
+
+    drive = 10 ** (_SUB_BASS_DRIVE_DB / 20.0)
+    saturated = (np.tanh(lowpassed * drive) / np.tanh(drive)).astype(np.float32)
+
+    return (audio + (saturated - lowpassed) * _SUB_BASS_MIX).astype(np.float32)
 
 
 def _apply_ir_reverb(audio: "np.ndarray", sr: int) -> "np.ndarray | None":

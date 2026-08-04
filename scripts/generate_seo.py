@@ -615,7 +615,24 @@ def _clean_tag(t: str) -> str:
     return t.lstrip("#").strip()
 
 
-def build_tags(concept: dict, duration: str) -> list:
+# Theme-tied geographic/cultural tags -- deliberately narrow. The concept
+# generator bans naming a real city/country in the video's narrative text
+# (a video isn't actually "in Tokyo", so claiming that in the description
+# would be misleading), but a handful of visual themes carry a real,
+# already-established cultural identity through their own aesthetic (the
+# neon-signage/rain palette of neon_tokyo, the cherry-blossom imagery of
+# sakura_night) -- tagging that identity as a search keyword is different
+# from the narrative claiming false specificity, and matches the existing
+# precedent of the "city pop" cross-genre pool entry already carrying
+# "japanese city pop" as a tag (see CROSS_GENRE_POOL). Only themes with a
+# genuinely unambiguous cultural association get an entry here.
+_THEME_GEO_TAGS: dict[str, list[str]] = {
+    "neon_tokyo":   ["tokyo lofi", "japan aesthetic", "tokyo night lofi"],
+    "sakura_night": ["japan aesthetic", "sakura season lofi"],
+}
+
+
+def build_tags(concept: dict, duration: str, theme_name: str | None = None) -> list:
     # Strategy: maximize the 500-char YouTube tag budget for new-channel discoverability.
     # YouTube has NO individual tag character limit — fill the full 500-char budget.
     # More tag surface = more search entry points = more impressions on a new channel.
@@ -632,6 +649,9 @@ def build_tags(concept: dict, duration: str) -> list:
 
     # 3. All concept-specific tags from concept generator
     candidates += raw_extra
+
+    # 3b. Theme-tied geographic/cultural tags, if this theme has an entry
+    candidates += _THEME_GEO_TAGS.get(theme_name or "", [])
 
     # 4. Shuffled mid-tier tags for genre variety
     mid_shuffled = TAGS_MID[:]
@@ -1389,7 +1409,7 @@ def generate_seo(theme_name: str = None, duration: str = None,
     chosen_idx      = random.randrange(len(title_variants))
     title           = title_variants[chosen_idx]
     description = build_description(concept, duration)
-    tags        = build_tags(concept, duration)
+    tags        = build_tags(concept, duration, theme_name=theme_name)
 
     # Inject trending tags if available — lofi-relevant only, no cross-genre pollution
     if trends:

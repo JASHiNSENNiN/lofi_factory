@@ -11,6 +11,7 @@ Output: assets/thumb_{theme}_{timestamp}.jpg  (1280×720, JPEG q95)
 """
 
 import os
+import re
 import sys
 import datetime
 
@@ -153,6 +154,54 @@ TITLE_TEMPLATES = {
     "bedroom_pop":    ["bedroom pop lo-fi", "indie study beats", "diy bedroom session", "guitar & soft drums", "homespun lo-fi mix"],
     "lofi_rnb":       ["lofi r&b session", "soul study beats", "neo-soul lo-fi", "soulful night mix", "warm rnb study vibes"],
 }
+
+
+# ── Title-card text derivation ────────────────────────────────────────────────
+
+_EMOJI_RE   = re.compile(
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]+"
+)
+_TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\))\s*$")
+_SHORT_TITLE_MAX_CHARS = 28
+
+
+def _derive_short_title(full_title: str) -> str | None:
+    """
+    Derive a short, thumbnail-card-sized phrase from the actual generated SEO
+    title (e.g. "lofi hip hop · it's midnight and you're still awake — 2
+    hours" -> "it's midnight and you're still awake"), so the thumbnail and
+    the video title agree on what the video is about instead of the
+    thumbnail drawing an unrelated phrase from a small static per-theme pool.
+    Returns None if the derived phrase isn't usable (too short/long after
+    trimming), so the caller can fall back to the theme's template pool.
+    """
+    if not full_title:
+        return None
+    text = _EMOJI_RE.sub("", full_title).strip()
+    # Drop the leading "lofi hip hop · " / "study music · " / "lofi · " tag.
+    if " · " in text:
+        text = text.split(" · ", 1)[1]
+    # Drop a trailing " — <duration>" or "(<duration>)" clause.
+    text = _TRAILING_DURATION_RE.sub("", text).strip(" -—·")
+    if len(text) > _SHORT_TITLE_MAX_CHARS:
+        # Trim to the last full word that fits, rather than rejecting
+        # outright -- most generated clauses run a little over budget, and a
+        # clean word-boundary cut still reads better than falling back to an
+        # unrelated static template phrase.
+        words, trimmed = text.split(), ""
+        for word in words:
+            candidate = f"{trimmed} {word}".strip()
+            if len(candidate) > _SHORT_TITLE_MAX_CHARS:
+                break
+            trimmed = candidate
+        text = trimmed
+        if text.count("(") > text.count(")"):
+            # Truncation landed inside an unclosed parenthetical -- cut
+            # before it rather than leaving a dangling "(" on the card.
+            text = text.rsplit("(", 1)[0].strip()
+    if len(text) < 4:
+        return None
+    return text.lower()
 
 
 # ── Font management ────────────────────────────────────────────────────────────
@@ -518,9 +567,14 @@ def generate_thumbnail(
         choices = TITLE_TEMPLATES.get(theme_name, TITLE_TEMPLATES["cozy_rain"])
         title   = choices[variant % len(choices)]
 
-    # Theme templates → thumbnail text (short, punchy, cozy — not extracted from SEO title)
-    choices     = TITLE_TEMPLATES.get(theme_name, TITLE_TEMPLATES["cozy_rain"])
-    short_title = choices[variant % len(choices)]
+    # Prefer a short phrase derived from the actual generated SEO title, so
+    # thumbnail and video title never disagree about what the video is
+    # about; fall back to the theme's static template pool when the real
+    # title isn't usable as thumbnail text (too long, no title passed, etc).
+    short_title = _derive_short_title(title)
+    if short_title is None:
+        choices     = TITLE_TEMPLATES.get(theme_name, TITLE_TEMPLATES["cozy_rain"])
+        short_title = choices[variant % len(choices)]
 
     seed = abs(variant * 137 + hash(theme_name) % 10000)
     rng  = np.random.default_rng(seed)
