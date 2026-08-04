@@ -101,3 +101,51 @@ def test_quality_gate_pass_rate_across_seeded_tracks(isolated_music_dir, tmp_pat
     scores = [e['quality_score'] for e in entries]
     pass_rate = sum(s >= MIN_QUALITY_SCORE for s in scores) / len(scores)
     assert pass_rate >= 0.5, f"quality gate pass rate {pass_rate} over scores {scores}"
+
+
+# ── build_midi() (v1) -- the ENGINE ACTUALLY RUNNING IN PRODUCTION TODAY ────
+# publish.py's daily auto-run never passes --music-v2 (see the headline
+# finding in the plan doc), so build_midi_v2 being tested above says nothing
+# about what a real scheduled run currently produces. This mirrors that
+# integration coverage for the engine that's actually live.
+
+def test_build_midi_v1_produces_valid_midi_file(isolated_music_dir, tmp_path):
+    random.seed(0)
+    params = gmg.pick_params()
+    out_path = tmp_path / "out_v1.mid"
+    gmg.build_midi(params, str(out_path))
+
+    assert os.path.exists(out_path)
+    mid = mido.MidiFile(str(out_path))
+    assert mid.type == 1
+    assert mid.ticks_per_beat == 480
+
+
+def test_build_midi_v1_seeded_sweep_exercises_all_probabilistic_branches(isolated_music_dir, tmp_path):
+    seen = {'generated_progression': False, 'drum_pattern_a_generated': False}
+    for seed in range(15):
+        random.seed(seed)
+        params = gmg.pick_params()
+        for key in seen:
+            if key in params:
+                seen[key] = True
+        out_path = tmp_path / f"out_v1_{seed}.mid"
+        gmg.build_midi(params, str(out_path))
+        mido.MidiFile(str(out_path))  # must parse without error
+
+    assert all(seen.values()), f"branches never fired across 15 seeds: {seen}"
+
+
+def test_build_midi_v1_quality_gate_pass_rate_across_seeded_tracks(isolated_music_dir, tmp_path):
+    for seed in range(15):
+        random.seed(seed)
+        params = gmg.pick_params()
+        gmg.build_midi(params, str(tmp_path / f"out_v1_{seed}.mid"))
+
+    with open(isolated_music_dir / ".recipe_log.jsonl") as f:
+        entries = [json.loads(line) for line in f if line.strip()]
+
+    assert len(entries) == 15
+    scores = [e['quality_score'] for e in entries]
+    pass_rate = sum(s >= MIN_QUALITY_SCORE for s in scores) / len(scores)
+    assert pass_rate >= 0.5, f"quality gate pass rate {pass_rate} over scores {scores}"
