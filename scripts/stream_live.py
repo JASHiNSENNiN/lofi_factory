@@ -431,7 +431,10 @@ def _start_bg_music_gen(stop_event, concept_hint=None):
         while not stop_event.is_set():
             try:
                 print(f"\n  [bg-gen] Generating track {idx:02d}...")
-                generate_track(idx, concept_hint=concept_hint)
+                # low_priority: this runs concurrently with the real-time
+                # ffmpeg encode driving the actual stream -- yield CPU/IO
+                # priority to it rather than compete (see midi_to_wav).
+                generate_track(idx, concept_hint=concept_hint, low_priority=True)
                 idx += 1
                 _prune_old_tracks()
                 # Generation itself takes 1-3 min — no artificial pause needed

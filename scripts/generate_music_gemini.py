@@ -2291,12 +2291,16 @@ def build_midi(params, output_path):
 
 # ─── RENDER ───────────────────────────────────────────────────────────────────
 
-def midi_to_wav(midi_path: str, wav_path: str, soundfont: str | None = None) -> None:
+_BG_GEN_NICE_LEVEL = 10   # 0 (default) to 19 (lowest); see midi_to_wav's low_priority
+
+
+def midi_to_wav(midi_path: str, wav_path: str, soundfont: str | None = None,
+                 low_priority: bool = False) -> None:
     sf = soundfont or _pick_soundfont()
     # subprocess with capture_output=True — zero ALSA/Jack noise, isolated from parent process.
     # pyfluidsynth was tried here but its start() triggers PortAudio initialisation on this system,
     # which calls C-level abort() on assertion failure — uncatchable by Python exceptions.
-    subprocess.run([
+    cmd = [
         'fluidsynth', '-ni',
         '-F', wav_path, '-r', '44100', '-T', 'wav', '-O', 's16',
         '-R', '0',           # disable FluidSynth reverb (pedalboard chain handles reverb)
@@ -2306,12 +2310,27 @@ def midi_to_wav(midi_path: str, wav_path: str, soundfont: str | None = None) -> 
                              # causing bitcrusher to quantize to only ~21-46 levels (noise).
                              # 3.0 brings signal to ~15% full scale for clean bit-reduction.
         sf, midi_path,
-    ], check=True, capture_output=True)
+    ]
+    # low_priority: used by stream_live.py's background track generation,
+    # which runs concurrently with a real-time ffmpeg encode on the same
+    # (often 2-4 thread) box. FluidSynth rendering is the single heaviest
+    # CPU step in track generation, so this is the highest-value place to
+    # yield scheduling priority to the encode rather than contend with it --
+    # nice/ionice lower this process's priority when the CPU/IO is actually
+    # contended, they don't cap its throughput when the machine is idle (a
+    # systemd CPUQuota would do the latter, which isn't what's wanted for a
+    # background job that should still finish promptly when nothing else is
+    # running). POSIX-only; on Windows (or if nice/ionice aren't installed)
+    # this just runs fluidsynth directly, same as before.
+    if low_priority and os.name == 'posix':
+        cmd = ['nice', '-n', str(_BG_GEN_NICE_LEVEL), 'ionice', '-c3'] + cmd
+    subprocess.run(cmd, check=True, capture_output=True)
 
 
 # ─── ENTRY ────────────────────────────────────────────────────────────────────
 
-def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, song_dna: dict = None):
+def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, song_dna: dict = None,
+                    low_priority: bool = False):
     print(f"\n[Track {index+1}] Picking parameters...")
     if song_dna is not None:
         # lofi-inator: use pre-computed musical DNA instead of random Groq params
@@ -2331,7 +2350,7 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
         build_midi(params, midi_path)
         chosen_sf = _pick_soundfont()
         print(f"  [FluidSynth] Rendering ({os.path.basename(chosen_sf)})...")
-        midi_to_wav(midi_path, raw_wav, soundfont=chosen_sf)
+        midi_to_wav(midi_path, raw_wav, soundfont=chosen_sf, low_priority=low_priority)
         print(f"  [FX] Lo-fi chain ({params.get('sub_genre', '?')})...")
         ts = int(time.time())
         out = os.path.join(MUSIC_DIR, f'track_{ts}_{index:02d}.wav')

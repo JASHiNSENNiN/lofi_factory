@@ -15,6 +15,9 @@
 #   4. enable user lingering so services start at boot without login
 #   5. create the named tunnel + DNS route + config.yml (once you're logged in)
 #   6. enable + start the cloudflared user service
+#   7. OS hardening baseline: UFW (SSH only), Fail2Ban, unattended-upgrades
+#      -- each step skips gracefully (with a warning) if its package isn't
+#      installed, rather than failing the whole script
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -108,6 +111,39 @@ cp "$ROOT/deploy/cloudflared-lofi.service" "$UNIT_DIR/cloudflared-lofi.service"
 systemctl --user daemon-reload
 systemctl --user enable --now cloudflared-lofi.service
 say "cloudflared status: $(systemctl --user is-active cloudflared-lofi.service)"
+
+# ── 7. OS hardening baseline ───────────────────────────────────────────────────
+# Scoped to what a single-purpose personal automation box actually needs, not
+# a full security audit: SSH is the only thing that needs to stay reachable
+# from outside (the web panel goes through the Cloudflare tunnel above, so it
+# needs no inbound port at all). Each check skips gracefully with a warning
+# if its package isn't installed, rather than failing the whole script --
+# `sudo apt install ufw fail2ban unattended-upgrades` covers all three.
+say "Applying OS hardening baseline (UFW, Fail2Ban, unattended-upgrades) ..."
+
+if command -v ufw >/dev/null 2>&1; then
+  # Allow SSH BEFORE enabling -- getting this order backwards on a remote
+  # box is how you lock yourself out.
+  sudo ufw allow OpenSSH >/dev/null 2>&1 || sudo ufw allow ssh >/dev/null 2>&1 || true
+  sudo ufw --force enable >/dev/null 2>&1
+  say "ufw: $(sudo ufw status | head -1)"
+else
+  warn "ufw not installed -- skipping firewall (sudo apt install ufw)"
+fi
+
+if command -v fail2ban-client >/dev/null 2>&1; then
+  sudo systemctl enable --now fail2ban >/dev/null 2>&1
+  say "fail2ban: $(systemctl is-active fail2ban 2>/dev/null || echo unknown)"
+else
+  warn "fail2ban not installed -- skipping (sudo apt install fail2ban)"
+fi
+
+if dpkg -s unattended-upgrades >/dev/null 2>&1; then
+  sudo systemctl enable --now unattended-upgrades >/dev/null 2>&1
+  say "unattended-upgrades: enabled"
+else
+  warn "unattended-upgrades not installed -- skipping (sudo apt install unattended-upgrades)"
+fi
 
 echo
 say "Done. Panel should be live at https://$HOSTNAME"

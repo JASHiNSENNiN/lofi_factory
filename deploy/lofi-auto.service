@@ -9,3 +9,15 @@ WorkingDirectory=/home/jashin/Documents/Lab/lofi_factory
 ExecStart=/home/jashin/Documents/Lab/lofi_factory/venv/bin/python publish.py auto
 # run.py (invoked by `auto`) loads .env itself for any API keys it needs
 TimeoutStartSec=0
+# Memory backstop: ffmpeg encode + FluidSynth render + Pedalboard FX all run
+# in this one process. Without a cap, a stuck/runaway run can OOM the whole
+# box (including lofi-webui). MemoryHigh throttles first; MemoryMax is a
+# hard kill if it's still climbing -- a killed oneshot run just means no
+# video today, which is far better than the whole host going down. Sized
+# for a ~2-4GB VPS; raise both if your box has more headroom.
+# Deliberately NOT setting CPUQuota here: this is a burst job that should
+# finish as fast as possible, and ffmpeg/x264 already self-limit their own
+# thread count (see stream_live.py's x264-params) -- a CPU quota on top
+# would only slow the render down, not protect anything.
+MemoryHigh=1536M
+MemoryMax=2048M

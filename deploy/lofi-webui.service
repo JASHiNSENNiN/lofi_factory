@@ -12,6 +12,11 @@ ExecStart=/home/jashin/Documents/Lab/lofi_factory/venv/bin/python webui.py
 # webui.py loads .env itself (WEBUI_PASSWORD, PUBLIC_BASE_URL, etc.)
 Restart=always
 RestartSec=5
+# A always-on control panel shouldn't need much; capping it means a leak
+# here can't take down lofi-auto's render or the rest of the box. Restart=
+# already handles recovery, so MemoryMax just needs to be a safety net.
+MemoryHigh=256M
+MemoryMax=512M
 
 [Install]
 WantedBy=default.target
