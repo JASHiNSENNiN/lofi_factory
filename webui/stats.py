@@ -55,6 +55,49 @@ def channel_stats(force: bool = False) -> dict:
     return data
 
 
+# ── Per-video engagement (likes/comments, cached) ─────────────────────────────
+_engagement_cache: dict = {}  # video_id -> {"at": float, "likes": int, "comments": int}
+_ENGAGEMENT_TTL = 120
+
+
+def video_engagement(video_ids: list[str]) -> dict[str, dict]:
+    """{video_id: {likes, comments}} via one batched videos.list call (up to 50
+    ids per request, chunked if more). Cached per-id for 2 min; safe/no-throw --
+    missing ids on error just aren't included in the returned dict."""
+    now = time.time()
+    fresh = {vid: {"likes": v["likes"], "comments": v["comments"]}
+             for vid, v in _engagement_cache.items()
+             if vid in video_ids and now - v["at"] < _ENGAGEMENT_TTL}
+    stale = [v for v in video_ids if v not in fresh]
+    if not stale:
+        return fresh
+    if not os.path.exists(config.TOKEN_FILE):
+        return fresh
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+
+        creds = Credentials.from_authorized_user_file(config.TOKEN_FILE, config.SCOPES)
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        yt = build("youtube", "v3", credentials=creds)
+        for i in range(0, len(stale), 50):
+            chunk = stale[i:i + 50]
+            r = yt.videos().list(part="statistics", id=",".join(chunk)).execute()
+            for item in r.get("items", []):
+                st = item.get("statistics", {})
+                entry = {
+                    "likes": int(st.get("likeCount", 0) or 0),
+                    "comments": int(st.get("commentCount", 0) or 0),
+                }
+                _engagement_cache[item["id"]] = {**entry, "at": now}
+                fresh[item["id"]] = entry
+    except Exception:
+        pass
+    return fresh
+
+
 # ── Library (thumbnails ⋈ upload_log) ─────────────────────────────────────────
 def _parse_thumb(path: str) -> dict | None:
     stem = os.path.splitext(os.path.basename(path))[0]

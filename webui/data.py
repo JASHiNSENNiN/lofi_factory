@@ -1,17 +1,25 @@
 """
-data.py — read-only views over the factory's on-disk state for the UI.
-
-Pure reads of files publish.py/run.py already maintain (upload_log.json, the
-output/ folder, live_state). No writes here.
+data.py — read-only views over the factory's on-disk state for the UI, plus
+a small, deliberately narrow set of delete operations for the Library/Samples
+tabs (see delete_render/render_delete_manifest and delete_sample below).
 """
 from __future__ import annotations
 
 import glob
 import json
 import os
+import re
+import time
 from datetime import datetime
 
 from . import config
+
+# Files younger than this are likely still being written by an in-progress
+# render (e.g. an mp4's moov atom isn't written until the encode finishes) --
+# listing them would show a player that can't actually play yet. A 90s grace
+# window comfortably covers the gap without meaningfully delaying visibility
+# of a real finished file.
+_MIN_SAMPLE_AGE_SECS = 90
 
 
 def upload_history(limit: int = 30) -> list[dict]:
@@ -78,6 +86,208 @@ def live_status() -> dict | None:
             alive = False
     state["alive"] = alive
     return state
+
+
+def render_delete_manifest(card: dict) -> list[dict]:
+    """
+    Files a `stats.library()` card positively owns -- the exact set
+    `delete_render` will remove. Deliberately narrow: only the thumbnail
+    (+ its `_alt.jpg` sibling, by naming convention), the local mp4 (+ its
+    `.grade.log`), and that render's own `output/tmp_{ts}/` dir if one is
+    still around. Never touches `music/*.wav` or `visuals/bg_*.mp4` -- those
+    are shared/reused across renders (see run.py's own pruning logic), not
+    1:1 owned by a single render, so deleting them here could silently break
+    other cards. Returns [] entries only for paths that actually exist, so a
+    stale/already-cleaned-up card doesn't show phantom rows in the confirm
+    dialog.
+    """
+    paths: list[str] = []
+
+    thumb = card.get("thumb")
+    if thumb and os.path.exists(thumb):
+        paths.append(thumb)
+        stem, ext = os.path.splitext(thumb)
+        alt = f"{stem}_alt{ext}"
+        if os.path.exists(alt):
+            paths.append(alt)
+
+    video_file = card.get("video_file")
+    if video_file:
+        video_path = os.path.join(config.OUTPUT_DIR, video_file)
+        if os.path.exists(video_path):
+            paths.append(video_path)
+        grade_log = video_path + ".grade.log"
+        if os.path.exists(grade_log):
+            paths.append(grade_log)
+        m = re.search(r"(\d{8}_\d{6})", video_file)
+        if m:
+            tmp_dir = os.path.join(config.OUTPUT_DIR, f"tmp_{m.group(1)}")
+            if os.path.isdir(tmp_dir):
+                for root, _dirs, files in os.walk(tmp_dir):
+                    for f in files:
+                        paths.append(os.path.join(root, f))
+                paths.append(tmp_dir)  # dir itself, removed last
+
+    manifest = []
+    for p in paths:
+        try:
+            size = 0 if os.path.isdir(p) else os.path.getsize(p)
+        except OSError:
+            size = 0
+        manifest.append({"path": p, "name": os.path.basename(p), "size_bytes": size})
+    return manifest
+
+
+def delete_render(card: dict) -> list[str]:
+    """Delete exactly the files render_delete_manifest(card) identifies. Best-
+    effort per-file (a partial failure doesn't abort the rest); returns the
+    paths actually removed.
+
+    Refuses outright while any render job is running -- a real incident, not
+    a hypothetical: a user deleted the one card showing (an in-progress
+    render's own thumbnail/video, which stats.library() has no way to
+    distinguish from a finished one) while it was still being written,
+    permanently losing an hours-long encode's output the moment ffmpeg
+    closed the now-unlinked file. Blocking delete entirely during any run is
+    coarser than strictly necessary (it also blocks deleting unrelated old
+    renders), but correlating "this card == that specific running job"
+    isn't reliable before the job's [RESULT] line lands, and simple +
+    guaranteed-safe beats clever + still-losable here.
+    """
+    import shutil
+
+    from . import jobs
+    if jobs.manager.is_busy():
+        raise RuntimeError(
+            "A render is in progress -- delete is disabled until it finishes, "
+            "so an in-progress file can't be deleted out from under it.")
+
+    manifest = render_delete_manifest(card)
+    removed = []
+    for entry in manifest:
+        p = entry["path"]
+        try:
+            if os.path.isdir(p):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.remove(p)
+            removed.append(p)
+        except OSError:
+            continue
+    return removed
+
+
+def _wav_duration_secs(path: str) -> float | None:
+    import wave
+    try:
+        with wave.open(path, "rb") as wf:
+            return wf.getnframes() / wf.getframerate()
+    except Exception:
+        return None
+
+
+def _ffprobe_duration_secs(path: str) -> float | None:
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=10,
+        )
+        return float(out.stdout.strip())
+    except Exception:
+        return None
+
+
+def music_samples(limit: int = 60) -> list[dict]:
+    """Standalone generated tracks in music/*.wav -- these are full, playable
+    soundtracks (or stems) rendered before any video assembly, invisible to
+    the rest of the UI today. Newest first."""
+    paths = sorted(
+        glob.glob(os.path.join(config.MUSIC_DIR, "track_*.wav")),
+        key=os.path.getmtime, reverse=True,
+    )
+    out = []
+    now = time.time()
+    for path in paths[:limit]:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if now - st.st_mtime < _MIN_SAMPLE_AGE_SECS:
+            continue  # likely still being written by an in-progress render
+        meta = {}
+        meta_path = path + ".meta.json"
+        if os.path.exists(meta_path):
+            try:
+                meta = json.load(open(meta_path))
+            except Exception:
+                meta = {}
+        dur = _wav_duration_secs(path)
+        out.append({
+            "name": os.path.basename(path),
+            "path": path,
+            "title": meta.get("title") or os.path.basename(path),
+            "genre": meta.get("genre"),
+            "size_mb": round(st.st_size / 1_048_576, 1),
+            "duration_secs": dur,
+            "modified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+        })
+    return out
+
+
+def visual_samples(limit: int = 60) -> list[dict]:
+    """Background visual loops in visuals/bg_*.mp4 -- silent, theme-tagged,
+    reused across renders. Newest first."""
+    paths = sorted(
+        glob.glob(os.path.join(config.VISUALS_DIR, "bg_*.mp4")),
+        key=os.path.getmtime, reverse=True,
+    )
+    out = []
+    now = time.time()
+    for path in paths[:limit]:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if now - st.st_mtime < _MIN_SAMPLE_AGE_SECS:
+            continue  # likely still being written by an in-progress render
+        name = os.path.basename(path)
+        m = re.match(r"^bg_(?P<theme>.+)_\d{8}_\d{6}\.mp4$", name)
+        theme = m["theme"].replace("_", " ") if m else "unknown"
+        out.append({
+            "name": name,
+            "path": path,
+            "theme": theme,
+            "size_mb": round(st.st_size / 1_048_576, 1),
+            "duration_secs": _ffprobe_duration_secs(path),
+            "modified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+        })
+    return out
+
+
+def delete_sample(path: str) -> bool:
+    """Delete one music/visual sample file (+ its .meta.json sidecar for
+    music tracks, if present). `path` must resolve inside MUSIC_DIR or
+    VISUALS_DIR -- rejects anything else so this can't be pointed at
+    arbitrary files."""
+    real = os.path.realpath(path)
+    allowed_roots = (os.path.realpath(config.MUSIC_DIR), os.path.realpath(config.VISUALS_DIR))
+    if not any(real.startswith(root + os.sep) for root in allowed_roots):
+        return False
+    if not os.path.isfile(real):
+        return False
+    try:
+        os.remove(real)
+    except OSError:
+        return False
+    meta = real + ".meta.json"
+    if os.path.exists(meta):
+        try:
+            os.remove(meta)
+        except OSError:
+            pass
+    return True
 
 
 def cookies_status() -> dict:

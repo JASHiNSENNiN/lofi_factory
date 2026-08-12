@@ -451,6 +451,19 @@ def main():
     print(f"  Title:     {seo['title']}")
     print("=" * 60)
 
+    # Machine-readable summary of what this run produced, for the webui's
+    # JobManager to parse (see webui/jobs.py's _pump()) -- gives it an exact
+    # artifact list instead of relying on stats.py's fuzzy nearest-timestamp
+    # join for anything rendered from now on.
+    _alt_guess = thumb_path.rsplit(".", 1)[0] + "_alt.jpg"
+    _result = {
+        "video": video_path,
+        "thumb": thumb_path,
+        "thumb_alt": _alt_guess if os.path.exists(_alt_guess) else "",
+        "seo": seo_path,
+    }
+    print(f"[RESULT] {_json.dumps(_result)}")
+
 
 if __name__ == "__main__":
     main()

@@ -14,11 +14,19 @@ ENV_FILE = os.path.join(ROOT, ".env")
 
 # ── Paths (kept in sync with publish.py so a web login == a CLI login) ────────
 CLIENT_SECRET = os.path.join(ROOT, "client_secret.json")
+# Separate OAuth client for the device-code flow (Settings -> "Connect via
+# device code"). Google requires a client of type "TVs and Limited Input
+# devices" for this grant -- a "Web application" client (CLIENT_SECRET above)
+# is rejected by the device/code endpoint, hence the second file rather than
+# reusing the same one.
+CLIENT_SECRET_DEVICE = os.path.join(ROOT, "client_secret_device.json")
 TOKEN_FILE = os.path.join(ROOT, "token.json")
 COOKIES_FILE = os.path.join(ROOT, "cookies.txt")
 UPLOAD_LOG = os.path.join(ROOT, "upload_log.json")
 OUTPUT_DIR = os.path.join(ROOT, "output")
 ASSETS_DIR = os.path.join(ROOT, "assets")
+MUSIC_DIR = os.path.join(ROOT, "music")
+VISUALS_DIR = os.path.join(ROOT, "visuals")
 PYTHON = os.path.join(ROOT, "venv", "bin", "python")
 if not os.path.exists(PYTHON):  # fall back to whatever runs us
     import sys

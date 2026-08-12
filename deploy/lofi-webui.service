@@ -7,9 +7,13 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=/home/jashin/Documents/Lab/lofi_factory
-ExecStart=/home/jashin/Documents/Lab/lofi_factory/venv/bin/python webui.py
+WorkingDirectory=/home/jashin/lofi_factory
+ExecStart=/home/jashin/lofi_factory/venv/bin/python webui.py
 # webui.py loads .env itself (WEBUI_PASSWORD, PUBLIC_BASE_URL, etc.)
+# `render` grants VAAPI (/dev/dri/renderD128) access for hardware video
+# encoding without needing a full login-session refresh for the group
+# change to take effect -- systemd applies this directly to the process.
+SupplementaryGroups=render
 Restart=always
 RestartSec=5
 # A always-on control panel shouldn't need much; capping it means a leak

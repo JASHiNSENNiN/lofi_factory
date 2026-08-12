@@ -506,10 +506,13 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
             # (confirmed via /proc/<pid>/task/*/wchan) after essentially
             # finishing the encode. libx264 ignores ffmpeg's generic -threads,
             # hence -x264-params (same fix already used in stream_live.py's
-            # live-encode path).
+            # live-encode path). `threads=4` alone was NOT sufficient -- a
+            # second real run deadlocked again with 36 threads on futex_wait_
+            # queue despite it, meaning x264's lookahead/slice threading was
+            # still scaling independently. Pinning those explicitly too.
             "-filter_threads", "4",
             "-c:v", "libx264",
-            "-x264-params", "threads=4",
+            "-x264-params", "threads=4:lookahead-threads=1:sliced-threads=0",
             # Fixed 8 Mbps target — predictable file size, meets YouTube's
             # recommended 1080p bitrate. CRF 18 + ultrafast was producing
             # 30-40 Mbps (huge files, slow).

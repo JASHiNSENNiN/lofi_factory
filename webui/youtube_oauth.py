@@ -133,3 +133,117 @@ def disconnect() -> None:
         os.remove(config.TOKEN_FILE)
     except FileNotFoundError:
         pass
+
+
+# ── Device-code flow (no redirect_uri at all) ─────────────────────────────────
+# For deployments where the redirect-based flow above can't work reliably --
+# e.g. Tailscale-only with client-side MagicDNS problems, or any network where
+# the browser doing the consent can't reach back to this box's exact public
+# hostname. Google's device authorization grant (RFC 8628) sidesteps the whole
+# redirect_uri requirement: the user visits a short, always-reachable Google
+# URL (verification_url, normally google.com/device) on ANY device/network and
+# types a short code -- no connection to this server needed for that step at
+# all. This server just polls Google until the user finishes.
+#
+# Requires a *separate* OAuth client of type "TVs and Limited Input devices"
+# in Google Cloud Console -- the existing Web application client is rejected
+# by the device/code endpoint (confirmed by Google's own client-type
+# restrictions on this grant).
+_DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
+_DEVICE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+
+
+def device_client_status() -> dict:
+    """Presence/type check for client_secret_device.json (Settings UI)."""
+    present = os.path.exists(config.CLIENT_SECRET_DEVICE)
+    ctype = None
+    if present:
+        try:
+            data = json.load(open(config.CLIENT_SECRET_DEVICE))
+            for key in ("installed", "web"):
+                if key in data:
+                    ctype = key
+                    break
+        except Exception:
+            pass
+    return {"present": present, "client_type": ctype}
+
+
+def _device_client_id_secret() -> tuple[str, str]:
+    data = json.load(open(config.CLIENT_SECRET_DEVICE))
+    section = data.get("installed") or data.get("web")
+    if not section:
+        raise ValueError("client_secret_device.json has neither 'installed' nor 'web' key")
+    return section["client_id"], section["client_secret"]
+
+
+def device_flow_start() -> dict:
+    """
+    Kick off the device authorization grant. Returns
+    {device_code, user_code, verification_url, interval, expires_in} for the
+    UI to display and start polling with device_flow_poll().
+    """
+    import requests
+
+    if not os.path.exists(config.CLIENT_SECRET_DEVICE):
+        raise FileNotFoundError(
+            "client_secret_device.json not uploaded -- create a 'TVs and Limited "
+            "Input devices' OAuth client in Google Cloud Console and upload it "
+            "in Settings first.")
+    client_id, _secret = _device_client_id_secret()
+    resp = requests.post(_DEVICE_CODE_URL, data={
+        "client_id": client_id,
+        "scope": " ".join(config.SCOPES),
+    }, timeout=15)
+    resp.raise_for_status()
+    body = resp.json()
+    return {
+        "device_code": body["device_code"],
+        "user_code": body["user_code"],
+        # Google's field is usually verification_url, occasionally
+        # verification_uri depending on API version -- accept either.
+        "verification_url": body.get("verification_url") or body.get("verification_uri"),
+        "interval": body.get("interval", 5),
+        "expires_in": body.get("expires_in", 1800),
+    }
+
+
+class DeviceFlowPending(Exception):
+    """Raised by device_flow_poll while the user hasn't finished consenting yet."""
+
+
+def device_flow_poll(device_code: str) -> None:
+    """
+    Check once whether the user has completed the device-code consent. Raises
+    DeviceFlowPending if not done yet (caller should retry after `interval`
+    seconds), or any other Exception on a real failure (expired, denied).
+    On success, writes token.json exactly like the redirect flow does.
+    """
+    import requests
+
+    client_id, client_secret = _device_client_id_secret()
+    resp = requests.post(_DEVICE_TOKEN_URL, data={
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "device_code": device_code,
+        "grant_type": _DEVICE_GRANT_TYPE,
+    }, timeout=15)
+    body = resp.json()
+    if resp.status_code == 200:
+        from google.oauth2.credentials import Credentials
+
+        creds = Credentials(
+            token=body["access_token"],
+            refresh_token=body.get("refresh_token"),
+            token_uri=_DEVICE_TOKEN_URL,
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=config.SCOPES,
+        )
+        _write_token(creds)
+        return
+    error = body.get("error", "unknown_error")
+    if error in ("authorization_pending", "slow_down"):
+        raise DeviceFlowPending(error)
+    raise RuntimeError(f"Device auth failed: {error} — {body.get('error_description', '')}")

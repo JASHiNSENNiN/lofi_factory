@@ -9,6 +9,7 @@ any connected page can attach and watch the live output.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -30,6 +31,12 @@ class Job:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     lines: deque[str] = field(default_factory=lambda: deque(maxlen=_MAX_LINES))
+    # Exact artifact paths this run produced (video/thumb/thumb_alt/seo), parsed
+    # from run.py's `[RESULT] {...}` summary line on success -- see _pump().
+    # Empty for jobs that didn't emit one (older command types, failures,
+    # publish.py-only runs): callers should fall back to stats.py's
+    # nearest-timestamp join in that case, not assume this is always populated.
+    artifacts: dict = field(default_factory=dict)
     _proc: asyncio.subprocess.Process | None = None
     # UI callbacks: (line) -> None and () -> None for status changes.
     _line_subs: set[Callable[[str], None]] = field(default_factory=set)
@@ -125,7 +132,13 @@ class JobManager:
             job._proc = proc
             assert proc.stdout is not None
             async for raw in proc.stdout:
-                job._emit_line(raw.decode(errors="replace").rstrip("\n"))
+                line = raw.decode(errors="replace").rstrip("\n")
+                if line.startswith("[RESULT] "):
+                    try:
+                        job.artifacts = json.loads(line[len("[RESULT] "):])
+                    except Exception:
+                        pass
+                job._emit_line(line)
             await proc.wait()
             job.returncode = proc.returncode
             job.status = "success" if proc.returncode == 0 else "failed"

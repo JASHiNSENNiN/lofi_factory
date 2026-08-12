@@ -14,6 +14,7 @@ from collections import deque
 
 from webui import config
 from webui.app import (
+    _card_from_artifacts,
     _latest_ffmpeg_progress,
     _parse_ffmpeg_progress,
     _stage_from_lines,
@@ -184,6 +185,63 @@ def test_job_manager_marks_success_on_zero_exit():
     job = asyncio.run(run())
     assert job.status == "success"
     assert job.returncode == 0
+
+
+def test_job_manager_parses_result_line_into_artifacts():
+    async def run():
+        mgr = JobManager()
+        job = await mgr.run("ok", [
+            "-c",
+            "import json; print('[RESULT] ' + json.dumps("
+            "{'video': 'output/lofi_x.mp4', 'thumb': 'assets/thumb_x.jpg', "
+            "'thumb_alt': '', 'seo': 'assets/seo_x.json'}))",
+        ])
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if not job.running:
+                break
+        return job
+
+    job = asyncio.run(run())
+    assert job.status == "success"
+    assert job.artifacts == {
+        "video": "output/lofi_x.mp4", "thumb": "assets/thumb_x.jpg",
+        "thumb_alt": "", "seo": "assets/seo_x.json",
+    }
+
+
+def test_job_manager_artifacts_empty_when_no_result_line():
+    async def run():
+        mgr = JobManager()
+        job = await mgr.run("ok", ["-c", "print('no result line here')"])
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if not job.running:
+                break
+        return job
+
+    job = asyncio.run(run())
+    assert job.artifacts == {}
+
+
+def test_card_from_artifacts_builds_openable_card():
+    j = Job(id="t", name="render", cmd=[], status="success")
+    j.artifacts = {
+        "video": "output/lofi_x.mp4", "thumb": "assets/thumb_x.jpg",
+        "thumb_alt": "", "seo": "assets/seo_x.json",
+    }
+    card = _card_from_artifacts(j)
+    assert card == {
+        "theme": "", "dt": None,
+        "thumb": "assets/thumb_x.jpg", "thumb_name": "thumb_x.jpg",
+        "title": "render", "url": None, "video_id": None,
+        "video_file": "lofi_x.mp4", "when": "",
+    }
+
+
+def test_card_from_artifacts_none_without_video():
+    j = Job(id="t", name="render", cmd=[], status="success")
+    assert _card_from_artifacts(j) is None
 
 
 def test_job_manager_marks_failed_on_nonzero_exit():

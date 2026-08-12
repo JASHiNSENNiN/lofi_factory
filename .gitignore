@@ -4,6 +4,7 @@
 !.env.example
 token.json
 client_secret.json
+client_secret_device.json
 cookies.txt
 *cookies*.txt
 certs/

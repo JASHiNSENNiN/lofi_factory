@@ -22,6 +22,7 @@ from . import auth, automation, config, data, jobs, stats, theme, youtube_oauth
 NAV = [
     ("studio", "Studio", "graphic_eq"),
     ("library", "Library", "grid_view"),
+    ("samples", "Samples", "library_music"),
     ("live", "Live", "sensors"),
     ("trends", "Trends", "trending_up"),
     ("analytics", "Analytics", "insights"),
@@ -291,6 +292,27 @@ _STATUS_ICON = {"running": "sync", "success": "check_circle",
                  "failed": "error", "cancelled": "block"}
 
 
+def _card_from_artifacts(j) -> dict | None:
+    """Build a Library-card-shaped dict straight from a Job's exact artifact
+    paths (see jobs.py's [RESULT]-line parsing) -- lets Runs history open/
+    delete a render precisely, without stats.library()'s fuzzy timestamp
+    join (which this job may not even show up in yet on a fast page check)."""
+    art = j.artifacts
+    if not art.get("video"):
+        return None
+    thumb = art.get("thumb", "")
+    return {
+        "theme": "", "dt": None,
+        "thumb": thumb,
+        "thumb_name": os.path.basename(thumb) if thumb else "",
+        "title": j.name,
+        "url": None,
+        "video_id": None,
+        "video_file": os.path.basename(art["video"]),
+        "when": "",
+    }
+
+
 def _runs_table(history: list) -> None:
     if not history:
         ui.label("No runs yet this session.").classes(theme.SUB + " mt-1")
@@ -298,6 +320,7 @@ def _runs_table(history: list) -> None:
     with ui.column().classes("w-full gap-1 mt-2"):
         for j in history:
             color = _STATUS_COLOR.get(j.status, "#a89db5")
+            card = _card_from_artifacts(j) if j.status == "success" else None
             with ui.row().classes("w-full items-center gap-3 no-wrap").style(
                     "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
                 ui.icon(_STATUS_ICON.get(j.status, "help")).style(f"color:{color}")
@@ -306,31 +329,172 @@ def _runs_table(history: list) -> None:
                 ui.label(_fmt_elapsed(j.duration)).classes(theme.SUB).style("min-width:60px")
                 ui.label(_last_stage(j) if j.status == "failed" else "")\
                     .classes(theme.SUB).style("overflow:hidden;text-overflow:ellipsis")
+                if card:
+                    ui.button("View", icon="visibility",
+                              on_click=lambda card=card: _open_detail([card], 0))\
+                        .props("flat dense color=primary")
 
 
-def _library_grid(cards: list[dict]) -> None:
+def _library_grid(cards: list[dict], on_change=lambda: None) -> None:
     if not cards:
         ui.label("No renders yet.").classes(theme.SUB)
         return
     with ui.element("div").classes(
             "w-full grid gap-3 mt-2").style(
             "grid-template-columns:repeat(auto-fill,minmax(190px,1fr))"):
-        for c in cards:
-            with ui.element("div").classes("libcard").on("click", lambda c=c: _open_detail(c)):
-                ui.image(f"/media/{c['thumb_name']}").props("ratio=1.7778 fit=cover")
+        for i, c in enumerate(cards):
+            with ui.element("div").classes("libcard").style("position:relative")\
+                    .on("click", lambda i=i: _open_detail(cards, i, on_change)):
+                if c.get("video_file"):
+                    # Hover-to-preview: swap the static poster for the actual clip
+                    # (muted, looping, loaded on demand) while the pointer is over
+                    # the card, same interaction as hover-video-player-style
+                    # galleries -- gives a real motion preview without needing to
+                    # open the detail dialog for every card. Bound via NiceGUI's
+                    # mouseenter/mouseleave (not inline onmouseenter= HTML attrs --
+                    # ui.html() strips those as an XSS precaution, confirmed via a
+                    # real DOM dump showing every other attribute survived except
+                    # the two on* handlers).
+                    with ui.element("div").style("position:relative") as media:
+                        ui.image(f"/media/{c['thumb_name']}")\
+                            .props("ratio=1.7778 fit=cover loading=lazy")
+                        ui.html(
+                            f'<video muted loop preload="none" playsinline '
+                            f'style="display:none;position:absolute;inset:0;'
+                            f'width:100%;height:100%;object-fit:cover" '
+                            f'src="/videos/{c["video_file"]}"></video>'
+                        )
+                    mid = media.id
+
+                    async def _hover_enter(mid=mid) -> None:
+                        # A slow/backgrounded client tab can miss the default
+                        # 1s response window (seen for real: TimeoutError from
+                        # a mobile session over a Tailscale relay hop) -- the
+                        # JS still runs client-side regardless, we just don't
+                        # need to wait for confirmation, so swallow it rather
+                        # than let it surface as an unhandled exception.
+                        try:
+                            await ui.run_javascript(
+                                f"const m=document.getElementById('c{mid}');"
+                                f"const v=m&&m.querySelector('video');"
+                                f"const p=m&&m.querySelector('.q-img,img');"
+                                f"if(v){{v.style.display='block';v.play().catch(()=>{{}});}}"
+                                f"if(p)p.style.display='none';",
+                                timeout=5.0,
+                            )
+                        except TimeoutError:
+                            pass
+
+                    async def _hover_leave(mid=mid) -> None:
+                        try:
+                            await ui.run_javascript(
+                                f"const m=document.getElementById('c{mid}');"
+                                f"const v=m&&m.querySelector('video');"
+                                f"const p=m&&m.querySelector('.q-img,img');"
+                                f"if(v){{v.pause();v.style.display='none';}}"
+                                f"if(p)p.style.display='block';",
+                                timeout=5.0,
+                            )
+                        except TimeoutError:
+                            pass
+
+                    media.on("mouseenter", _hover_enter)
+                    media.on("mouseleave", _hover_leave)
+                else:
+                    ui.image(f"/media/{c['thumb_name']}")\
+                        .props("ratio=1.7778 fit=cover loading=lazy")
                 with ui.element("div").classes("meta"):
                     ui.label(c["title"]).classes("t")
                     ui.label(f"{c['theme']} · {c['when']}").classes("d")
+                ui.button(icon="delete_outline") \
+                    .props("flat round dense color=white") \
+                    .style("position:absolute; top:6px; right:6px; "
+                           "background:rgba(20,14,26,0.55)") \
+                    .on("click.stop", lambda c=c: _confirm_delete_render(c, on_change))
 
 
-def _open_detail(c: dict) -> None:
+def _confirm_delete_render(c: dict, on_change) -> None:
+    busy = jobs.manager.is_busy()
+    manifest = [] if busy else data.render_delete_manifest(c)
+    total_bytes = sum(m["size_bytes"] for m in manifest)
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
+            .style("max-width:480px"):
+        ui.label(f"Delete “{c['title']}”?").classes(theme.H)
+        if busy:
+            ui.label("A render is in progress — delete is disabled until it "
+                     "finishes (this protects against deleting a file that's "
+                     "still being written).").classes(theme.SUB)
+        elif not manifest:
+            ui.label("No local files found for this render (already cleaned up, "
+                     "or it only exists on YouTube).").classes(theme.SUB)
+        else:
+            ui.label(f"{len(manifest)} file(s), {total_bytes / 1_048_576:.0f} MB total — "
+                     f"this cannot be undone.").classes(theme.SUB)
+            with ui.column().classes("w-full gap-1").style(
+                    "max-height:180px; overflow-y:auto"):
+                for m in manifest:
+                    with ui.row().classes("w-full justify-between no-wrap"):
+                        ui.label(m["name"]).classes("text-sm").style(
+                            "overflow:hidden;text-overflow:ellipsis;white-space:nowrap")
+                        ui.label(f"{m['size_bytes'] / 1_048_576:.1f} MB")\
+                            .classes(f"text-sm {theme.SUB}")
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=dlg.close).props("flat")
+
+            def do_delete() -> None:
+                try:
+                    removed = data.delete_render(c)
+                except RuntimeError as e:
+                    ui.notify(str(e), type="negative")
+                    return
+                dlg.close()
+                ui.notify(f"Deleted {len(removed)} file(s)."
+                          if removed else "Nothing to delete.", type="positive")
+                on_change()
+
+            ui.button("Delete", icon="delete", on_click=do_delete, color="negative") \
+                .props("unelevated" if manifest else "flat disable")
+    dlg.open()
+
+
+def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
+    c = cards[index]
     with ui.dialog() as dlg, ui.element("div").classes("studio-card w-full gap-3")\
             .style("max-width:760px"):
         with ui.row().classes("w-full items-start justify-between no-wrap"):
             with ui.column().classes("gap-0"):
                 ui.label(c["title"]).classes(theme.H)
                 ui.label(f"{c['theme']} · {c['when']}").classes(theme.SUB)
-            ui.button(icon="close", on_click=dlg.close).props("flat round dense")
+            with ui.row().classes("gap-1 no-wrap"):
+                ui.button(icon="delete_outline", color="negative",
+                          on_click=lambda: (dlg.close(), _confirm_delete_render(c, on_change)))\
+                    .props("flat round dense")
+                ui.button(icon="close", on_click=dlg.close).props("flat round dense")
+
+        # ── Lightbox-style prev/next (click or ←/→) — browse the whole set
+        # without closing and reopening from the grid each time. ─────────────
+        if len(cards) > 1:
+            def goto(delta: int) -> None:
+                dlg.close()
+                _open_detail(cards, (index + delta) % len(cards), on_change)
+
+            with ui.row().classes("w-full items-center justify-between no-wrap"):
+                ui.button(icon="chevron_left", on_click=lambda: goto(-1)) \
+                    .props("flat dense").tooltip("Previous (←)")
+                ui.label(f"{index + 1} / {len(cards)}").classes(theme.SUB)
+                ui.button(icon="chevron_right", on_click=lambda: goto(1)) \
+                    .props("flat dense").tooltip("Next (→)")
+
+            def on_key(e) -> None:
+                if not e.action.keydown:
+                    return
+                if e.key == "ArrowLeft":
+                    goto(-1)
+                elif e.key == "ArrowRight":
+                    goto(1)
+
+            kb = ui.keyboard(on_key=on_key)
+            dlg.on("hide", lambda: kb.delete())
 
         # ── Player ──────────────────────────────────────────────────────────
         if c.get("video_id"):
@@ -409,7 +573,7 @@ def view_library(root) -> None:
                     cards = [c for c in cards
                              if q in c["title"].lower() or q in c["theme"].lower()]
                 with grid_container:
-                    _library_grid(cards)
+                    _library_grid(cards, on_change=render)
                     if not q and len(cards) >= state["limit"]:
                         ui.button("Load more", icon="expand_more", on_click=load_more)\
                             .props("flat dense color=primary").classes("mt-3")
@@ -587,6 +751,75 @@ def view_analytics(root) -> None:
                             ui.label(f"{row['avg_watch_min']:.0f} min avg watch")\
                                 .classes(theme.SUB)
                             ui.label(f"n={row['n']}").classes(theme.SUB)
+
+        if data_dict:
+            with ui.element("div").classes("studio-card w-full"):
+                ui.label("Per-video performance").classes(theme.H)
+                ui.label("Every tracked upload, most-clicked first. Click a row to open it "
+                         "(retention chart, player) the same way as from Library.")\
+                    .classes(theme.SUB)
+
+                vids = list(data_dict.keys())
+                engagement = stats.video_engagement(vids)
+                card_by_vid = {c["video_id"]: c for c in stats.library(limit=200)
+                               if c.get("video_id")}
+
+                rows = []
+                for vid, d in data_dict.items():
+                    eng = engagement.get(vid, {})
+                    rows.append({
+                        "video_id": vid,
+                        "title": d.get("title") or vid,
+                        "pillar": d.get("pillar") or "—",
+                        "ctr": d.get("videoThumbnailImpressionsClickRate", 0) or 0,
+                        "views": int(d.get("views", 0) or 0),
+                        "watch_min": round(d.get("averageViewDuration", 0) or 0) // 60,
+                        "likes": eng.get("likes"),
+                        "comments": eng.get("comments"),
+                    })
+                rows.sort(key=lambda r: r["ctr"], reverse=True)
+
+                with ui.column().classes("w-full gap-1 mt-2").style(
+                        "max-height:420px; overflow-y:auto"):
+                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                            "padding:4px; opacity:0.6"):
+                        ui.label("Title").classes(theme.SUB).style("min-width:220px; flex:2")
+                        ui.label("Pillar").classes(theme.SUB).style("min-width:100px")
+                        ui.label("CTR").classes(theme.SUB).style("min-width:60px")
+                        ui.label("Views").classes(theme.SUB).style("min-width:70px")
+                        ui.label("Watch").classes(theme.SUB).style("min-width:60px")
+                        ui.label("Likes").classes(theme.SUB).style("min-width:60px")
+                        ui.label("Comments").classes(theme.SUB).style("min-width:70px")
+                    for r in rows:
+                        card = card_by_vid.get(r["video_id"])
+
+                        def _open(r=r, card=card) -> None:
+                            if card:
+                                _open_detail([card], 0)
+                            elif r["video_id"]:
+                                ui.navigate.to(
+                                    f"https://youtube.com/watch?v={r['video_id']}",
+                                    new_tab=True)
+
+                        with ui.row().classes("w-full items-center gap-3 no-wrap cursor-pointer")\
+                                .style("padding:6px 4px; "
+                                       "border-bottom:1px solid rgba(255,255,255,0.06)")\
+                                .on("click", _open):
+                            ui.label(r["title"]).classes("text-sm").style(
+                                "min-width:220px; flex:2; overflow:hidden; "
+                                "text-overflow:ellipsis; white-space:nowrap")
+                            ui.label(r["pillar"]).classes("text-sm").style("min-width:100px")
+                            ui.label(f"{r['ctr'] * 100:.1f}%").classes("text-sm")\
+                                .style("min-width:60px")
+                            ui.label(stats.fmt_count(r["views"])).classes("text-sm")\
+                                .style("min-width:70px")
+                            ui.label(f"{r['watch_min']}m").classes("text-sm")\
+                                .style("min-width:60px")
+                            ui.label(stats.fmt_count(r["likes"]) if r["likes"] is not None else "—")\
+                                .classes("text-sm").style("min-width:60px")
+                            ui.label(stats.fmt_count(r["comments"])
+                                     if r["comments"] is not None else "—")\
+                                .classes("text-sm").style("min-width:70px")
 
         swapped = [{"video_id": vid, **d} for vid, d in data_dict.items() if d.get("thumb_swapped")]
         with ui.element("div").classes("studio-card w-full"):
@@ -841,6 +1074,85 @@ def view_settings(root) -> None:
 
             refresh_yt()
 
+            with ui.column().classes("gap-2 w-full mt-3"):
+                ui.separator()
+                ui.label("Alternative: connect via device code").classes(theme.H)
+                ui.label(
+                    "No redirect back to this box needed -- works even if your device can't "
+                    "resolve this box's hostname (e.g. a phone with Tailscale MagicDNS "
+                    "trouble). You visit a plain Google page and type a short code instead. "
+                    "Needs a separate 'TVs and Limited Input devices' OAuth client from "
+                    "Google Cloud Console (Web application clients are rejected for this).")\
+                    .classes(theme.SUB)
+
+                dstatus = youtube_oauth.device_client_status()
+                if not dstatus["present"]:
+                    async def on_device_client_upload(e) -> None:
+                        raw = await e.file.read()
+                        try:
+                            parsed = json.loads(raw)
+                        except Exception:
+                            ui.notify("Not valid JSON.", type="negative")
+                            return
+                        if not ({"web", "installed"} & parsed.keys()):
+                            ui.notify("Doesn't look like an OAuth client_secret.json.",
+                                     type="negative")
+                            return
+                        fd = os.open(config.CLIENT_SECRET_DEVICE,
+                                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "wb") as f:
+                            f.write(raw)
+                        ui.notify("Device OAuth client saved", type="positive")
+                        set_view("settings")
+
+                    ui.upload(on_upload=on_device_client_upload, auto_upload=True,
+                              label="Upload TV/device OAuth client JSON")\
+                        .props("accept=.json color=primary").classes("max-w-md")
+                else:
+                    state = {"timer": None}
+                    prompt = ui.column().classes("gap-1 w-full")
+
+                    async def start_device_flow() -> None:
+                        if state["timer"]:
+                            state["timer"].active = False
+                        prompt.clear()
+                        try:
+                            d = youtube_oauth.device_flow_start()
+                        except Exception as e:
+                            ui.notify(f"Couldn't start device flow: {e}", type="negative")
+                            return
+                        with prompt:
+                            ui.label("Go to:").classes(theme.SUB)
+                            ui.label(d["verification_url"]).classes("font-mono text-sm")
+                            ui.label("Enter this code:").classes(theme.SUB + " mt-1")
+                            ui.label(d["user_code"]).classes("text-lg font-bold")\
+                                .style("letter-spacing:3px")
+                            with ui.row().classes("items-center gap-2 mt-1"):
+                                ui.spinner()
+                                ui.label("Waiting for you to finish on Google's site...")\
+                                    .classes(theme.SUB)
+
+                        async def poll() -> None:
+                            try:
+                                youtube_oauth.device_flow_poll(d["device_code"])
+                            except youtube_oauth.DeviceFlowPending:
+                                return
+                            except Exception as e:
+                                state["timer"].active = False
+                                prompt.clear()
+                                with prompt:
+                                    ui.label(f"Failed: {e}").classes("text-negative text-sm")
+                                return
+                            state["timer"].active = False
+                            prompt.clear()
+                            ui.notify("YouTube connected!", type="positive")
+                            refresh_yt()
+
+                        state["timer"] = ui.timer(max(d["interval"], 5), poll)
+
+                    ui.button("Connect via device code", icon="qr_code_2",
+                              on_click=start_device_flow).props("color=primary")
+
         with theme.card("yt-dlp cookies",
                         "Server IPs are bot-gated by YouTube. Upload a Netscape cookies.txt "
                         "(browser logged into YouTube) to enable audio covers."):
@@ -914,9 +1226,95 @@ def view_settings(root) -> None:
                 .props("flat dense color=primary").classes("mt-2")
 
 
+def _fmt_dur(secs: float | None) -> str:
+    if secs is None:
+        return "—"
+    m, s = divmod(int(secs), 60)
+    return f"{m}:{s:02d}"
+
+
+def _confirm_delete_sample(path: str, name: str, on_change) -> None:
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
+            .style("max-width:420px"):
+        ui.label(f"Delete “{name}”?").classes(theme.H)
+        ui.label("This cannot be undone.").classes(theme.SUB)
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=dlg.close).props("flat")
+
+            def do_delete() -> None:
+                ok = data.delete_sample(path)
+                dlg.close()
+                ui.notify("Deleted." if ok else "Delete failed.",
+                          type="positive" if ok else "negative")
+                on_change()
+
+            ui.button("Delete", icon="delete", on_click=do_delete, color="negative")\
+                .props("unelevated")
+    dlg.open()
+
+
+def view_samples(root) -> None:
+    with root:
+        busy = jobs.manager.is_busy()
+
+        with ui.element("div").classes("studio-card w-full"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Music tracks").classes(theme.H)
+                ui.button("Refresh", icon="refresh",
+                          on_click=lambda: set_view("samples")).props(
+                          "flat dense color=primary")
+            if busy:
+                ui.label("A render is running — samples it may be using are "
+                         "temporarily protected from deletion.").classes(theme.SUB)
+
+            tracks = data.music_samples()
+            if not tracks:
+                ui.label("No generated tracks yet.").classes(theme.SUB)
+            for t in tracks:
+                with ui.column().classes("w-full gap-1").style(
+                        "padding:10px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                    with ui.row().classes("w-full items-center justify-between no-wrap"):
+                        with ui.column().classes("gap-0"):
+                            ui.label(t["title"]).classes("text-sm font-medium")
+                            sub = f"{t['genre'] + ' · ' if t.get('genre') else ''}" \
+                                  f"{_fmt_dur(t['duration_secs'])} · {t['size_mb']} MB · " \
+                                  f"{t['modified']}"
+                            ui.label(sub).classes(theme.SUB)
+                        ui.button(icon="delete_outline", color="negative",
+                                  on_click=lambda t=t: _confirm_delete_sample(
+                                      t["path"], t["name"], lambda: set_view("samples")))\
+                            .props("flat round dense").set_visibility(not busy)
+                    ui.html(
+                        f'<audio controls preload="none" style="width:100%;height:32px" '
+                        f'src="/music/{t["name"]}"></audio>'
+                    )
+
+        with ui.element("div").classes("studio-card w-full mt-4"):
+            ui.label("Visual loops").classes(theme.H)
+            visuals = data.visual_samples()
+            if not visuals:
+                ui.label("No visual loops yet.").classes(theme.SUB)
+            with ui.element("div").classes("w-full grid gap-3 mt-2").style(
+                    "grid-template-columns:repeat(auto-fill,minmax(220px,1fr))"):
+                for v in visuals:
+                    with ui.column().classes("gap-1"):
+                        ui.html(
+                            f'<video controls preload="metadata" muted '
+                            f'style="width:100%;border-radius:12px" '
+                            f'src="/visuals/{v["name"]}"></video>'
+                        )
+                        with ui.row().classes("w-full items-center justify-between no-wrap"):
+                            ui.label(f"{v['theme']} · {_fmt_dur(v['duration_secs'])} · "
+                                     f"{v['size_mb']} MB").classes(theme.SUB)
+                            ui.button(icon="delete_outline", color="negative",
+                                      on_click=lambda v=v: _confirm_delete_sample(
+                                          v["path"], v["name"], lambda: set_view("samples")))\
+                                .props("flat round dense").set_visibility(not busy)
+
+
 VIEWS = {
     "studio": view_studio, "library": view_library, "live": view_live,
-    "trends": view_trends, "analytics": view_analytics,
+    "trends": view_trends, "analytics": view_analytics, "samples": view_samples,
     "automation": view_automation, "settings": view_settings,
 }
 
@@ -1035,6 +1433,8 @@ def run() -> None:
     auth.install(app)
     app.add_static_files("/media", config.ASSETS_DIR)
     app.add_static_files("/videos", config.OUTPUT_DIR)
+    app.add_static_files("/music", config.MUSIC_DIR)
+    app.add_static_files("/visuals", config.VISUALS_DIR)
 
     ssl_kwargs = {}
     if config.SSL_CERTFILE and config.SSL_KEYFILE:
