@@ -53,6 +53,33 @@ def latest_video() -> str | None:
     return vids[0]["path"] if vids else None
 
 
+def live_status() -> dict | None:
+    """live_state.json plus a real liveness check against ffmpeg_pid.
+
+    None means no broadcast has been started (or state was cleared after one
+    ended). A non-None result with alive=False means the state file thinks a
+    stream is running but the ffmpeg process behind it has actually died --
+    same "CRASHED / STALE" distinction the TUI dashboard makes.
+    """
+    path = os.path.join(config.ROOT, "live_state.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        state = json.load(open(path))
+    except Exception:
+        return None
+    pid = state.get("ffmpeg_pid")
+    alive = False
+    if pid:
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except (ProcessLookupError, PermissionError):
+            alive = False
+    state["alive"] = alive
+    return state
+
+
 def cookies_status() -> dict:
     path = config.COOKIES_FILE
     if os.path.exists(path):

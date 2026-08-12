@@ -8,11 +8,13 @@ Output: output/lofi_TIMESTAMP.mp4
 """
 
 import os
+import re
 import sys
 import subprocess
 import glob
 import random
 import datetime
+import time as _time
 
 MUSIC_DIR = os.path.join(os.path.dirname(__file__), "..", "music")
 VISUALS_DIR = os.path.join(os.path.dirname(__file__), "..", "visuals")
@@ -297,6 +299,111 @@ def _pre_grade_visual(visual_path: str, tmp_dir: str) -> str:
     return out
 
 
+class _StallTimeout(Exception):
+    """Raised when ffmpeg stops making encode progress but hasn't exited."""
+    def __init__(self, last_progress: float):
+        self.last_progress = last_progress
+
+
+class _HardTimeout(Exception):
+    """Raised when the absolute wall-clock cap is hit regardless of progress."""
+
+
+_TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.?\d*)")
+_STALL_SECS = 600  # kill + report if encode progress hasn't advanced in this long
+
+
+def _tail_progress_secs(log_path: str) -> float | None:
+    """Latest ffmpeg `time=HH:MM:SS` progress marker from the tail of the (\\r-updated) log."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode(errors="replace")
+    except Exception:
+        return None
+    matches = _TIME_RE.findall(tail.replace("\r", "\n"))
+    if not matches:
+        return None
+    hh, mm, ss = matches[-1]
+    return int(hh) * 3600 + int(mm) * 60 + float(ss)
+
+
+def _wait_with_stall_watchdog(proc: subprocess.Popen, log_path: str, target_secs: int,
+                               *, stall_secs: int = _STALL_SECS, poll_interval: float = 15,
+                               hard_timeout_secs: int | None = None) -> int:
+    """
+    Poll an ffmpeg subprocess for real encode progress instead of only enforcing a
+    single total timeout. Kills + raises early if progress genuinely stalls (an
+    encoder-thread deadlock has been observed in practice -- see apply_vhs_grade's
+    comment), rather than waiting out the full hard cap doing nothing.
+
+    stall_secs/poll_interval/hard_timeout_secs are overridable for testing; production
+    callers should rely on the defaults.
+    """
+    hard_deadline = _time.time() + (hard_timeout_secs if hard_timeout_secs is not None
+                                     else target_secs * 12)
+    last_progress = 0.0
+    last_progress_at = _time.time()
+
+    while True:
+        ret = proc.poll()
+        if ret is not None:
+            return ret
+
+        now = _time.time()
+        if now > hard_deadline:
+            proc.kill()
+            proc.wait()
+            raise _HardTimeout()
+
+        cur = _tail_progress_secs(log_path)
+        if cur is not None and cur > last_progress:
+            last_progress = cur
+            last_progress_at = now
+        elif now - last_progress_at > stall_secs:
+            proc.kill()
+            proc.wait()
+            raise _StallTimeout(last_progress)
+
+        _time.sleep(poll_interval)
+
+
+_VAAPI_DEVICE = "/dev/dri/renderD128"
+_vaapi_checked: bool | None = None  # cached per-process; probing costs ~1s
+
+
+def _vaapi_available() -> bool:
+    """
+    Real capability probe (not just checking the device file exists) for
+    Intel/AMD VAAPI H.264 hardware encoding. Measured ~7x faster than the
+    software libx264 path on this box's Intel Quick Sync (4.1x realtime vs
+    0.56x). Cached after the first call. Must fail closed (return False) on
+    any error -- missing device, missing driver, no permission, or a VPS
+    with no GPU passthrough at all are all normal and should silently fall
+    back to the software path, not break the render.
+    """
+    global _vaapi_checked
+    if _vaapi_checked is not None:
+        return _vaapi_checked
+    if not os.path.exists(_VAAPI_DEVICE):
+        _vaapi_checked = False
+        return False
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=0.5:size=320x240:rate=5",
+            "-vaapi_device", _VAAPI_DEVICE,
+            "-vf", "format=nv12,hwupload",
+            "-c:v", "h264_vaapi",
+            "-f", "null", "-",
+        ], capture_output=True, timeout=15)
+        _vaapi_checked = result.returncode == 0
+    except Exception:
+        _vaapi_checked = False
+    return _vaapi_checked
+
+
 def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
     """
     Overlay audio-reactive EQ bars + progress bar on a pre-graded visual.
@@ -328,7 +435,7 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
     PW  = PX1 - PX0
     ph_y = PY + PH // 2 - 7
 
-    filtergraph = ";".join([
+    filter_stages = [
         # 1. Temporal film grain only (static grade already baked into input)
         "[0:v]noise=c0s=8:c0f=t+u[vgraded]",
 
@@ -361,49 +468,97 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
         # 7. Ambient audio
         f"[1:a]lowpass=f={a_lpf}[ambient]",
         "[a_mix][ambient]amix=inputs=2:weights='1 0.09':duration=first[aout]",
-    ])
+    ]
+
+    # Hardware encode (Intel/AMD VAAPI) when actually available and working --
+    # a real ~7x speedup measured on this box (4.1x realtime hw vs 0.56x sw)
+    # over the software libx264 path below, which was the root reason the
+    # VHS-grade stage took ~1.8 hours for a 1-hour video. Probed once (cheap,
+    # cached) and always falls back to the proven software path on any VPS
+    # without a usable GPU -- this must keep working on hardware that has no
+    # /dev/dri at all, per DEPLOYMENT.md's generic-VPS target.
+    use_vaapi = _vaapi_available()
+    video_map = "[vout]"
+    if use_vaapi:
+        filter_stages.append("[vout]format=nv12,hwupload[vout_hw]")
+        video_map = "[vout_hw]"
+    filtergraph = ";".join(filter_stages)
 
     log_path = output_video + ".grade.log"
     est_mins = target_secs // 60
-    print(f"  Encoding video ({est_mins} min) — progress in: {log_path}")
+    encoder_desc = "hardware (VAAPI)" if use_vaapi else "software (libx264)"
+    print(f"  Encoding video ({est_mins} min, {encoder_desc}) — progress in: {log_path}")
+
+    device_args = []
+    if use_vaapi:
+        # Must come before -filter_complex: hwupload (used in the filtergraph
+        # above) needs the device context already registered when it runs.
+        device_args = ["-vaapi_device", _VAAPI_DEVICE]
+        video_args = [
+            "-c:v", "h264_vaapi",
+            "-b:v", "8000k", "-maxrate", "10000k", "-bufsize", "20000k",
+        ]
+    else:
+        video_args = [
+            # Pin thread counts explicitly instead of ffmpeg/x264 auto-detect: a
+            # real render on this box's 4-core i3-7100U deadlocked with all 38
+            # auto-spawned x264 worker threads permanently blocked on a futex
+            # (confirmed via /proc/<pid>/task/*/wchan) after essentially
+            # finishing the encode. libx264 ignores ffmpeg's generic -threads,
+            # hence -x264-params (same fix already used in stream_live.py's
+            # live-encode path).
+            "-filter_threads", "4",
+            "-c:v", "libx264",
+            "-x264-params", "threads=4",
+            # Fixed 8 Mbps target — predictable file size, meets YouTube's
+            # recommended 1080p bitrate. CRF 18 + ultrafast was producing
+            # 30-40 Mbps (huge files, slow).
+            "-b:v", "8000k", "-maxrate", "10000k", "-bufsize", "20000k",
+            "-preset", "ultrafast",
+            "-pix_fmt", "yuv420p",
+        ]
 
     try:
         with open(log_path, "w") as log_fh:
-            subprocess.run([
+            proc = subprocess.Popen([
                 "ffmpeg", "-y",
                 "-i", input_video,
                 "-f", "lavfi", "-i", f"anoisesrc=d={target_secs}:c={a_color}:a={a_amp}",
+                *device_args,
                 "-filter_complex", filtergraph,
-                "-map", "[vout]", "-map", "[aout]",
+                "-map", video_map, "-map", "[aout]",
                 "-t", str(target_secs),
-                "-c:v", "libx264",
-                # Fixed 8 Mbps target — predictable file size, meets YouTube's recommended
-                # 1080p bitrate. CRF 18 + ultrafast was producing 30-40 Mbps (huge files, slow).
-                "-b:v", "8000k", "-maxrate", "10000k", "-bufsize", "20000k",
-                "-preset", "ultrafast",
-                "-pix_fmt", "yuv420p",
+                *video_args,
                 # No +faststart: avoids a full file rewrite at the end (saves hours on large files)
                 "-c:a", "aac", "-b:a", "192k",
                 "-stats",
                 output_video,
-            ], check=True, stdout=log_fh, stderr=log_fh,
-               timeout=target_secs * 4)
+            ], stdout=log_fh, stderr=log_fh)
+            returncode = _wait_with_stall_watchdog(proc, log_path, target_secs)
+        if returncode != 0:
+            print(f"[ASSEMBLE] ffmpeg failed (exit {returncode}) — last lines of {log_path}:")
+            try:
+                with open(log_path) as lf:
+                    for line in lf.read().splitlines()[-20:]:
+                        print(f"  {line}")
+            except Exception:
+                pass
+            raise RuntimeError(f"[ASSEMBLE] ffmpeg exited {returncode}")
         try:
             os.remove(log_path)
         except Exception:
             pass
-    except subprocess.CalledProcessError as e:
-        print(f"[ASSEMBLE] ffmpeg failed (exit {e.returncode}) — last lines of {log_path}:")
-        try:
-            with open(log_path) as lf:
-                for line in lf.read().splitlines()[-20:]:
-                    print(f"  {line}")
-        except Exception:
-            pass
-        raise RuntimeError(f"[ASSEMBLE] ffmpeg exited {e.returncode}") from None
-    except subprocess.TimeoutExpired:
+    except _StallTimeout as e:
         raise RuntimeError(
-            f"[ASSEMBLE] Video grade timed out after {target_secs * 4}s — "
+            f"[ASSEMBLE] Video grade stalled — no encode progress for {_STALL_SECS}s "
+            f"(stuck at {e.last_progress:.0f}/{target_secs}s, process killed). This is a "
+            "hang (e.g. an encoder-thread deadlock), not just slowness -- check "
+            f"{log_path.replace('.grade.log', '')}.grade.log if it's still around, or "
+            "rerun with a fresh temp dir."
+        ) from None
+    except _HardTimeout:
+        raise RuntimeError(
+            f"[ASSEMBLE] Video grade timed out after {target_secs * 12}s — "
             "input video may be corrupt or hardware is too slow."
         )
 

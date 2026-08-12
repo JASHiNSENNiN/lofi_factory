@@ -10,6 +10,7 @@ import os
 import secrets
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+ENV_FILE = os.path.join(ROOT, ".env")
 
 # ── Paths (kept in sync with publish.py so a web login == a CLI login) ────────
 CLIENT_SECRET = os.path.join(ROOT, "client_secret.json")
@@ -60,6 +61,15 @@ def redirect_uri() -> str:
 HTTP_HOST = _env("WEBUI_HOST", "127.0.0.1")
 HTTP_PORT = int(_env("WEBUI_PORT", "8080") or "8080")
 
+# ── TLS (optional -- e.g. a Tailscale MagicDNS cert via `tailscale cert`) ──────
+# Only used if both files exist; otherwise the app serves plain HTTP as before
+# (the right choice behind a Cloudflare Tunnel or SSH port-forward, which
+# terminate TLS themselves). Needed for Tailscale-only deployments because
+# Google's OAuth "Web application" client type requires both a real domain
+# (not a bare IP) *and* HTTPS for any non-localhost redirect URI.
+SSL_CERTFILE = _env("WEBUI_SSL_CERTFILE")
+SSL_KEYFILE = _env("WEBUI_SSL_KEYFILE")
+
 # ── Pipeline option catalogs (mirror run.py / publish.py) ─────────────────────
 THEMES = [
     "random", "cozy_rain", "midnight_cafe", "purple_dusk", "amber_night",
@@ -75,3 +85,54 @@ STREAM_QUALITY = ["720p15", "720p", "1080p", "1080p60"]
 def is_configured() -> bool:
     """True once a password is set — otherwise we run in setup-warning mode."""
     return bool(WEBUI_PASSWORD)
+
+
+# ── Render defaults (persisted to .env, read fresh each render dialog open) ───
+DEFAULT_THEME = _env("DEFAULT_THEME", "random")
+DEFAULT_DURATION = _env("DEFAULT_DURATION", "2 hours")
+DEFAULT_PRIVACY = _env("DEFAULT_PRIVACY", "public")
+
+
+# ── .env editing (Settings tab) ─────────────────────────────────────────────
+# Changes here take effect on next `lofi-webui` restart -- the process only
+# reads .env once at startup (see webui.py's load_dotenv() call). The UI makes
+# that explicit rather than pretending a live reload happens.
+def read_env_file() -> dict[str, str]:
+    """Parse .env into {KEY: value}, ignoring comments/blank lines."""
+    values: dict[str, str] = {}
+    if not os.path.exists(ENV_FILE):
+        return values
+    with open(ENV_FILE) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            values[k.strip()] = v.strip()
+    return values
+
+
+def write_env_value(key: str, value: str) -> None:
+    """Update (or append) KEY=value in .env, preserving other lines/comments."""
+    if "\n" in value or "\r" in value:
+        # A newline in the value would inject extra, uncontrolled lines into .env
+        # (e.g. a pasted multi-line value could silently add unrelated KEY=VALUE
+        # entries). .env doesn't support multi-line values without quoting we
+        # don't implement, so reject rather than corrupt.
+        raise ValueError(f"{key}: value can't contain a newline")
+    lines: list[str] = []
+    if os.path.exists(ENV_FILE):
+        with open(ENV_FILE) as f:
+            lines = f.readlines()
+    found = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped == key or stripped.startswith(f"{key}="):
+            lines[i] = f"{key}={value}\n"
+            found = True
+            break
+    if not found:
+        lines.append(f"{key}={value}\n")
+    with open(ENV_FILE, "w") as f:
+        f.writelines(lines)
+    os.chmod(ENV_FILE, 0o600)

@@ -181,7 +181,19 @@ def main():
     }
 
     duration_was_set = args.duration is not None
-    duration         = args.duration or random.choices(ALL_DURATIONS, weights=DURATION_WEIGHTS, k=1)[0]
+    if duration_was_set:
+        duration = args.duration
+    else:
+        # Combine the hand-tuned strategic prior (DURATION_WEIGHTS) with a
+        # performance-informed multiplier from real watch-time data, same
+        # 0.5x-2.0x/needs-5-samples pattern generate_seo.py's pillar weighting
+        # already uses -- nudges toward durations that actually retain viewers
+        # rather than replacing the strategic prior outright.
+        from scripts.assemble_video import DURATION_MAP
+        from scripts.analytics import duration_weights as _duration_weights
+        _dw = _duration_weights(DURATION_MAP)
+        combined_weights = [w * _dw.get(d, 1.0) for d, w in zip(ALL_DURATIONS, DURATION_WEIGHTS)]
+        duration = random.choices(ALL_DURATIONS, weights=combined_weights, k=1)[0]
     args.duration    = duration
     music_count      = args.music_count if args.music_count is not None else DURATION_MUSIC_COUNT.get(duration, 6)
 
@@ -300,12 +312,31 @@ def main():
     print("\n[4/5] Generating thumbnail...")
     import time
     from scripts.generate_thumbnail_cozy import generate_thumbnail
+    thumb_variant = int(time.time()) % 100
     thumb_path, thumb_title = generate_thumbnail(
         theme_name=suggested_theme or theme,
         duration=args.duration,
         title=seo.get("title"),
-        variant=int(time.time()) % 100
+        variant=thumb_variant
     )
+
+    # Also generate a real alt variant for analytics.swap_low_ctr_thumbnails()
+    # -- that feature existed but had nothing to swap to (no alt thumbnail was
+    # ever produced). Different title-template variant + RNG seed so it's a
+    # genuinely different candidate, not a near-duplicate. Renamed to sit next
+    # to the primary thumbnail (thumb_..._alt.jpg) so publish.py's logged
+    # thumb_file + "_alt" suffix finds it later without any timestamp guessing.
+    try:
+        alt_raw_path, _ = generate_thumbnail(
+            theme_name=suggested_theme or theme,
+            duration=args.duration,
+            title=seo.get("title"),
+            variant=thumb_variant + 1,
+        )
+        alt_path = thumb_path.rsplit(".", 1)[0] + "_alt.jpg"
+        os.replace(alt_raw_path, alt_path)
+    except Exception as _e:
+        print(f"  [THUMB] alt variant skipped ({_e})")
 
     # ── STEP 5: Assemble or Stream ─────────────────────────────
     if args.stream:

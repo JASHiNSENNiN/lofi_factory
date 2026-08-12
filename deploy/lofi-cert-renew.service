@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew the Tailscale MagicDNS TLS cert for lofi-webui (one run; triggered by lofi-cert-renew.timer)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jashin/lofi_factory
+ExecStart=/home/jashin/lofi_factory/deploy/lofi-cert-renew.sh
+TimeoutStartSec=120

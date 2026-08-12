@@ -1404,9 +1404,15 @@ def generate_seo(theme_name: str = None, duration: str = None,
         print("  [SEO] Generating concept...")
         concept = pick_concept(trends)
 
-    # Generate 3 title variants; randomly pick one for upload diversity tracking
+    # Generate 3 title variants; pick one for upload diversity tracking, weighted
+    # by past per-slot CTR for this pillar once enough data exists (same
+    # 0.5x-2.0x/needs-5-samples pattern as _pillar_weights()) -- falls back to
+    # uniform random for any variant slot without performance data yet.
     title_variants  = generate_title_variants(concept, duration, trends, n=3)
-    chosen_idx      = random.randrange(len(title_variants))
+    from scripts.analytics import title_variant_weights as _title_variant_weights
+    _tvw = _title_variant_weights().get(concept.get("pillar"), [])
+    _weights = (_tvw + [1.0] * len(title_variants))[:len(title_variants)]
+    chosen_idx      = random.choices(range(len(title_variants)), weights=_weights, k=1)[0]
     title           = title_variants[chosen_idx]
     description = build_description(concept, duration)
     tags        = build_tags(concept, duration, theme_name=theme_name)

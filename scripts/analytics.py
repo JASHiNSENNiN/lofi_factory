@@ -183,6 +183,7 @@ def sync_analytics() -> dict:
                 "title":             entry.get("title"),
                 "title_variants":    entry.get("title_variants", []),
                 "title_chosen_idx":  entry.get("title_chosen_idx", 0),
+                "duration_secs":     entry.get("duration_secs"),
                 "upload_date":       upload_date,
                 "fetched_at":        now.isoformat(),
             }
@@ -197,19 +198,25 @@ def sync_analytics() -> dict:
     return analytics
 
 
-def report(analytics: dict | None = None) -> None:
-    """Print CTR and watch time grouped by pillar, sorted best-first."""
-    if analytics is None:
-        if not os.path.exists(ANALYTICS_LOG):
-            print("[analytics] No data. Run sync first.")
-            return
+def load_analytics() -> dict:
+    """Load assets/analytics_log.json, or {} if missing/unreadable."""
+    if not os.path.exists(ANALYTICS_LOG):
+        return {}
+    try:
         with open(ANALYTICS_LOG) as f:
-            analytics = json.load(f)
+            return json.load(f)
+    except Exception:
+        return {}
 
-    if not analytics:
-        print("[analytics] No data yet.")
-        return
 
+def compute_pillar_stats(analytics: dict) -> dict:
+    """
+    Pure computation (no printing) so both the CLI report() and the webui
+    Analytics view can consume it. Returns:
+      {"by_pillar": [{"pillar", "avg_ctr", "avg_views", "avg_watch_min", "n",
+                       "marker"}, ...] sorted best-CTR-first,
+       "channel_avg_ctr": float, "n_total": int}
+    """
     from collections import defaultdict
     by_pillar: dict[str, list] = defaultdict(list)
     for data in analytics.values():
@@ -223,17 +230,125 @@ def report(analytics: dict | None = None) -> None:
     all_ctrs = [c for rows in by_pillar.values() for c, _, _ in rows]
     channel_avg = sum(all_ctrs) / len(all_ctrs) if all_ctrs else 0
 
+    rows_out = []
+    for pillar, rows in sorted(by_pillar.items(), key=lambda x: -sum(c for c, _, __ in x[1]) / len(x[1])):
+        avg_ctr = sum(c for c, _, __ in rows) / len(rows)
+        avg_views = sum(v for _, __, v in rows) / len(rows)
+        avg_wt = sum(w for _, w, __ in rows) / len(rows)
+        marker = "▲" if avg_ctr > channel_avg * 1.1 else ("▼" if avg_ctr < channel_avg * 0.9 else " ")
+        rows_out.append({
+            "pillar": pillar, "avg_ctr": avg_ctr, "avg_views": avg_views,
+            "avg_watch_min": avg_wt, "n": len(rows), "marker": marker,
+        })
+
+    return {"by_pillar": rows_out, "channel_avg_ctr": channel_avg, "n_total": len(all_ctrs)}
+
+
+def duration_weights(duration_map: dict[str, int], analytics: dict | None = None) -> dict[str, float]:
+    """
+    Per-duration-label weight multipliers derived from analytics_log.json, same
+    shape as generate_seo.py's _pillar_weights(): 0.5x-2.0x based on
+    averageViewDuration (watch time per view -- the metric that actually
+    matters for the "maximize watch time" strategy behind run.py's
+    DURATION_WEIGHTS), uniform 1.0 for any bucket with fewer than 5 samples.
+
+    Each video's measured duration_secs is bucketed to its *nearest* label in
+    duration_map (upload_log only stores the real ffprobe length, not which
+    label was requested -- renders can run a bit long/short).
+    """
+    labels = list(duration_map.keys())
+    default = {label: 1.0 for label in labels}
+    if analytics is None:
+        analytics = load_analytics()
+    if not analytics:
+        return default
+
+    from collections import defaultdict as _dd
+    by_label: dict[str, list[float]] = _dd(list)
+    for entry in analytics.values():
+        secs = entry.get("duration_secs")
+        avd = entry.get("averageViewDuration")
+        if not secs or avd is None:
+            continue
+        nearest = min(labels, key=lambda label: abs(duration_map[label] - secs))
+        by_label[nearest].append(float(avd))
+
+    if not any(len(v) >= 5 for v in by_label.values()):
+        return default
+
+    all_avd = [v for rows in by_label.values() for v in rows]
+    channel_avg = sum(all_avd) / len(all_avd) if all_avd else 0
+    if channel_avg == 0:
+        return default
+
+    weights = dict(default)
+    for label, rows in by_label.items():
+        if len(rows) >= 5:
+            weights[label] = max(0.5, min(2.0, (sum(rows) / len(rows)) / channel_avg))
+    return weights
+
+
+def title_variant_weights(analytics: dict | None = None) -> dict[str, list[float]]:
+    """
+    Per-pillar list of CTR-based weights for title_variants[i], same 0.5x-2.0x/
+    ≥5-samples pattern. Returns {pillar: [w_0, w_1, w_2, ...]} sized to however
+    many variant slots that pillar has seen chosen at least once -- callers
+    should pad/fall back to 1.0 for any index beyond what's returned (a variant
+    slot with zero observed picks has no performance data yet).
+    """
+    if analytics is None:
+        analytics = load_analytics()
+    if not analytics:
+        return {}
+
+    from collections import defaultdict as _dd
+    by_pillar_idx: dict[str, dict[int, list[float]]] = _dd(lambda: _dd(list))
+    for entry in analytics.values():
+        pillar = entry.get("pillar")
+        idx = entry.get("title_chosen_idx")
+        ctr = entry.get("videoThumbnailImpressionsClickRate")
+        if pillar and idx is not None and ctr is not None:
+            by_pillar_idx[pillar][int(idx)].append(float(ctr))
+
+    result: dict[str, list[float]] = {}
+    for pillar, idx_rows in by_pillar_idx.items():
+        all_ctrs = [c for rows in idx_rows.values() for c in rows]
+        if len(all_ctrs) < 5:
+            continue
+        channel_avg = sum(all_ctrs) / len(all_ctrs)
+        if channel_avg == 0:
+            continue
+        max_idx = max(idx_rows.keys())
+        weights = [1.0] * (max_idx + 1)
+        for idx, rows in idx_rows.items():
+            if len(rows) >= 5:
+                weights[idx] = max(0.5, min(2.0, (sum(rows) / len(rows)) / channel_avg))
+        result[pillar] = weights
+    return result
+
+
+def report(analytics: dict | None = None) -> None:
+    """Print CTR and watch time grouped by pillar, sorted best-first."""
+    if analytics is None:
+        if not os.path.exists(ANALYTICS_LOG):
+            print("[analytics] No data. Run sync first.")
+            return
+        analytics = load_analytics()
+
+    if not analytics:
+        print("[analytics] No data yet.")
+        return
+
+    result = compute_pillar_stats(analytics)
+
     print(f"\n{'PILLAR':16s} {'AVG CTR':>8s} {'AVG VIEWS':>10s} {'AVG WATCH(min)':>15s} {'N':>4s}")
     print("─" * 58)
-    for pillar, rows in sorted(by_pillar.items(), key=lambda x: -sum(c for c,_,__ in x[1])/len(x[1])):
-        avg_ctr   = sum(c for c,_,__ in rows) / len(rows)
-        avg_views = sum(v for _,__,v in rows) / len(rows)
-        avg_wt    = sum(w for _,w,__ in rows) / len(rows)
-        marker    = "▲" if avg_ctr > channel_avg * 1.1 else ("▼" if avg_ctr < channel_avg * 0.9 else " ")
-        print(f"{marker} {pillar:14s} {avg_ctr:>8.2%} {avg_views:>10.0f} {avg_wt:>15.1f} {len(rows):>4d}")
+    for row in result["by_pillar"]:
+        print(f"{row['marker']} {row['pillar']:14s} {row['avg_ctr']:>8.2%} "
+              f"{row['avg_views']:>10.0f} {row['avg_watch_min']:>15.1f} {row['n']:>4d}")
 
     print("─" * 58)
-    print(f"  {'channel avg':14s} {channel_avg:>8.2%}  (n={len(all_ctrs)})")
+    print(f"  {'channel avg':14s} {result['channel_avg_ctr']:>8.2%}  (n={result['n_total']})")
     print()
 
 
@@ -283,11 +398,16 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None) -> None:
         if not (max_age <= udt <= min_age):
             continue
 
-        # Find alternate thumbnail — validate path stays within assets/
-        entry    = vid_to_entry.get(vid, {})
-        vid_file = entry.get("video_file", "")
-        ts_part  = vid_file.replace("lofi_", "").replace(".mp4", "") if vid_file else ""
-        alt_path = os.path.join(ROOT, "assets", f"thumb_{ts_part}_alt.jpg") if ts_part else ""
+        # Find alternate thumbnail — validate path stays within assets/.
+        # Derived from the exact thumbnail filename logged at upload time
+        # (thumb_file), not guessed from the video's timestamp -- the two
+        # don't necessarily match (thumbnail generation happens before final
+        # assembly picks its own timestamp) and thumb filenames carry a theme
+        # prefix the video filename doesn't.
+        entry      = vid_to_entry.get(vid, {})
+        thumb_file = entry.get("thumb_file", "")
+        alt_path = (os.path.join(ROOT, "assets", thumb_file.rsplit(".", 1)[0] + "_alt.jpg")
+                    if thumb_file else "")
 
         if not alt_path:
             continue

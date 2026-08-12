@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly check/renewal of the Tailscale MagicDNS TLS cert (lofi-cert-renew.service)
+
+[Timer]
+# Weekly is frequent enough relative to a 90-day cert lifetime and
+# --min-validity=720h (30 days) in the script -- renews well before expiry,
+# cheap no-op the rest of the time.
+OnCalendar=weekly
+Persistent=true
+Unit=lofi-cert-renew.service
+
+[Install]
+WantedBy=timers.target

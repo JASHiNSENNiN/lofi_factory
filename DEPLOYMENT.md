@@ -15,8 +15,18 @@ scoped accordingly (see [Assumptions](#assumptions)).
   without an active login session; `setup.sh` enables it for you.
 - The web control panel is reached through a **Cloudflare Tunnel**, not a
   directly exposed port — `deploy/setup.sh` sets this up. If you don't want
-  that, skip step 5 below and reach the panel over SSH port-forwarding
-  instead (`ssh -L 8080:localhost:8080 you@vps`).
+  that, two alternatives:
+  - SSH port-forwarding: skip step 5 below, `ssh -L 8080:localhost:8080 you@vps`.
+  - **Tailscale-only** (no public exposure at all, no tunnel setup, works from
+    any device on your tailnet): set `WEBUI_HOST` in `.env` to the box's
+    Tailscale IP (`tailscale ip -4`) instead of `127.0.0.1`, firewall the
+    port to just the tailscale interface (`sudo ufw allow in on tailscale0
+    to any port 8080 proto tcp`), and set `PUBLIC_BASE_URL` to
+    `http://<tailscale-ip>:8080` (needed even without a public tunnel — the
+    YouTube OAuth redirect URI is derived from it, and without it OAuth only
+    works from a browser running on the box itself). Skip the `cloudflared`
+    parts of step 5 entirely; `setup.sh` detects there's no tunnel to set up
+    and stops gracefully on its own once it gets there.
 - This box is dedicated to this pipeline. The hardening steps below are the
   sensible baseline for that, not a full CIS-benchmark server audit.
 

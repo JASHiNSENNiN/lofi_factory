@@ -92,26 +92,47 @@ def _log_index() -> list[dict]:
     return out
 
 
+def _video_index() -> list[dict]:
+    """Local rendered mp4s in output/, parsed for their embedded timestamp."""
+    out = []
+    for path in glob.glob(os.path.join(config.OUTPUT_DIR, "*.mp4")):
+        m = re.search(r"(\d{8})_(\d{6})", os.path.basename(path))
+        if not m:
+            continue
+        try:
+            dt = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        out.append({"dt": dt, "path": path, "name": os.path.basename(path)})
+    return out
+
+
+def _nearest(dt, candidates: list[dict], window_secs: int = 120) -> dict | None:
+    best_delta, best = window_secs, None
+    for c in candidates:
+        if not c.get("dt"):
+            continue
+        delta = abs((c["dt"] - dt).total_seconds())
+        if delta <= best_delta:
+            best_delta, best = delta, c
+    return best
+
+
 def library(limit: int = 24) -> list[dict]:
     """
-    Newest-first render cards: {theme, dt, thumb, title, url, video_id, when}.
-    Thumbnails are matched to uploads by closest timestamp (±120s).
+    Newest-first render cards: {theme, dt, thumb, title, url, video_id, video_file, when}.
+    Thumbnails are matched to uploads and local mp4s by closest timestamp (±120s).
     """
     thumbs = [t for t in (_parse_thumb(p)
               for p in glob.glob(os.path.join(config.ASSETS_DIR, "thumb_*.jpg"))) if t]
     thumbs.sort(key=lambda t: t["dt"], reverse=True)
     logs = _log_index()
+    videos = _video_index()
 
     cards = []
     for t in thumbs[:limit]:
-        match = None
-        best = 120
-        for e in logs:
-            if not e["dt"]:
-                continue
-            delta = abs((e["dt"] - t["dt"]).total_seconds())
-            if delta <= best:
-                best, match = delta, e
+        match = _nearest(t["dt"], logs)
+        vid = _nearest(t["dt"], videos)
         cards.append({
             "theme": t["theme"].replace("_", " "),
             "dt": t["dt"],
@@ -120,9 +141,45 @@ def library(limit: int = 24) -> list[dict]:
             "title": (match or {}).get("title") or t["theme"].replace("_", " "),
             "url": (match or {}).get("url"),
             "video_id": (match or {}).get("video_id"),
+            "video_file": (vid or {}).get("name"),
             "when": t["dt"].strftime("%b %d, %Y"),
         })
     return cards
+
+
+# ── Audience retention (YouTube Analytics API) ─────────────────────────────────
+def retention(video_id: str) -> list[dict] | None:
+    """
+    [{t: elapsed-video-ratio 0..1, pct: audience watch ratio}, ...] for one video,
+    or None if unavailable (not connected, API error, or not enough view data yet).
+    Uses the same yt-analytics.readonly scope already requested at login.
+    """
+    if not video_id or not os.path.exists(config.TOKEN_FILE):
+        return None
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from googleapiclient.discovery import build
+
+        creds = Credentials.from_authorized_user_file(config.TOKEN_FILE, config.SCOPES)
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        yta = build("youtubeAnalytics", "v2", credentials=creds)
+        r = yta.reports().query(
+            ids="channel==MINE",
+            startDate="2005-01-01",
+            endDate=datetime.utcnow().strftime("%Y-%m-%d"),
+            metrics="audienceWatchRatio",
+            dimensions="elapsedVideoTimeRatio",
+            filters=f"video=={video_id}",
+            sort="elapsedVideoTimeRatio",
+        ).execute()
+        rows = r.get("rows") or []
+        if not rows:
+            return None
+        return [{"t": row[0], "pct": row[1]} for row in rows]
+    except Exception:
+        return None
 
 
 def fmt_count(n: int | None) -> str:

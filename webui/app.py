@@ -7,6 +7,9 @@ Design system in theme.py, spec in DESIGN.md. Run via:  python webui.py
 """
 from __future__ import annotations
 
+import json
+import os
+import re
 import time
 
 from fastapi import Request
@@ -21,6 +24,7 @@ NAV = [
     ("library", "Library", "grid_view"),
     ("live", "Live", "sensors"),
     ("trends", "Trends", "trending_up"),
+    ("analytics", "Analytics", "insights"),
     ("automation", "Automation", "autorenew"),
     ("settings", "Settings", "settings"),
 ]
@@ -57,6 +61,55 @@ def _last_stage(job) -> str:
     return "starting…"
 
 
+# Ported from dashboard.py's TUI stage-detection / ffmpeg progress parsing so the
+# web log gets the same friendly stage names + progress bar as the terminal one.
+def _parse_ffmpeg_progress(line: str) -> dict | None:
+    """Parse an ffmpeg -stats line: frame=1234 fps=24.0 time=01:00:00 speed=1.0x"""
+    if "time=" not in line:
+        return None
+    result = {}
+    for part in line.split():
+        if "=" in part:
+            k, _, v = part.partition("=")
+            result[k.strip()] = v.strip()
+    return result if result else None
+
+
+def _stage_from_lines(job) -> str | None:
+    for line in reversed(job.lines):
+        low = line.lower()
+        if "[assemble] duration:" in low:
+            return "Assembling video"
+        if "[upload]" in line:
+            return "Uploading to YouTube"
+        if "[2/5]" in line or "music" in low:
+            return "Generating music"
+        if "[1/5]" in line or "visual" in low:
+            return "Rendering visual"
+        if "[3/5]" in line or "seo" in low:
+            return "Generating SEO"
+        if "[4/5]" in line or "thumbnail" in low:
+            return "Generating thumbnail"
+    return None
+
+
+def _target_secs(job) -> int | None:
+    for line in job.lines:
+        if line.startswith("[ASSEMBLE] Duration:"):
+            m = re.search(r"\((\d+)s\)", line)
+            if m:
+                return int(m.group(1))
+    return None
+
+
+def _latest_ffmpeg_progress(job) -> dict | None:
+    for line in reversed(job.lines):
+        parsed = _parse_ffmpeg_progress(line)
+        if parsed:
+            return parsed
+    return None
+
+
 def _fmt_elapsed(secs: float) -> str:
     m, s = divmod(int(secs), 60)
     h, m = divmod(m, 60)
@@ -64,11 +117,16 @@ def _fmt_elapsed(secs: float) -> str:
 
 
 def render_dialog() -> None:
+    yt_connected = youtube_oauth.status()["connected"]
     with ui.dialog() as dlg, ui.element("div").classes("studio-card w-96 gap-3"):
         ui.label("New render").classes(theme.H)
-        tsel = ui.select(config.THEMES, value="random", label="Theme").classes("w-full")
-        dsel = ui.select(config.DURATIONS, value="2 hours", label="Duration").classes("w-full")
-        psel = ui.select(config.PRIVACY, value="public", label="Privacy").classes("w-full")
+        tsel = ui.select(config.THEMES, value=config.DEFAULT_THEME, label="Theme").classes("w-full")
+        dsel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION, label="Duration").classes("w-full")
+        psel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY, label="Privacy").classes("w-full")
+        if not yt_connected:
+            ui.label("YouTube isn't connected yet — connect it in Settings before uploading. "
+                     "\"Render only\" works fine without it.").classes(theme.SUB)\
+                .style("color:#e8a45c")
 
         async def go(upload: bool) -> None:
             if jobs.manager.is_busy():
@@ -92,7 +150,11 @@ def render_dialog() -> None:
         with ui.row().classes("w-full justify-end gap-2 mt-1"):
             ui.button("Cancel", on_click=dlg.close).props("flat color=primary")
             ui.button("Render only", on_click=lambda: go(False)).props("color=secondary")
-            ui.button("Render + Upload", on_click=lambda: go(True)).props("color=primary")
+            upload_btn = ui.button("Render + Upload", on_click=lambda: go(True))\
+                .props("color=primary")
+            if not yt_connected:
+                upload_btn.disable()
+                upload_btn.tooltip("Connect YouTube in Settings first")
     dlg.open()
 
 
@@ -135,13 +197,39 @@ def view_studio(root) -> None:
                 status.text = "● RENDERING"
                 status.style("color:#e8a45c")
                 ttl.text = j.name
-                sub.text = f"{_fmt_elapsed(time.time() - j.started_at)} elapsed · {_last_stage(j)}"
+                stage = _stage_from_lines(j) or _last_stage(j)
+                elapsed = _fmt_elapsed(time.time() - j.started_at)
+                fp = _latest_ffmpeg_progress(j)
+                pct = None
+                if fp and fp.get("time"):
+                    target = _target_secs(j)
+                    if target:
+                        try:
+                            hh, mm, ss = (int(float(x)) for x in fp["time"].split(":")[:3])
+                            pct = min((hh * 3600 + mm * 60 + ss) / target, 1.0)
+                        except (ValueError, ZeroDivisionError):
+                            pct = None
+                if pct is not None:
+                    sub.text = f"{elapsed} elapsed · {stage} · {pct * 100:.0f}% · speed {fp.get('speed', '?')}"
+                    prog.props(remove="indeterminate")
+                    prog.value = pct
+                else:
+                    detail = f" · speed {fp['speed']}" if fp and fp.get("speed") else ""
+                    sub.text = f"{elapsed} elapsed · {stage}{detail}"
+                    prog.props(add="indeterminate")
                 prog.visible = True
             elif jobs.manager.stream_running():
                 status.text = "🔴 LIVE"
                 status.style("color:#e8849a")
                 ttl.text = "Broadcasting"
                 sub.text = f"{_fmt_elapsed(time.time() - jobs.manager.stream.started_at)} on air"
+                prog.visible = False
+            elif jobs.manager.current is not None and jobs.manager.current.status == "failed":
+                j = jobs.manager.current
+                status.text = "⚠ FAILED"
+                status.style("color:#e8849a")
+                ttl.text = j.name
+                sub.text = f"Last run failed · {_last_stage(j)}"
                 prog.visible = False
             else:
                 status.text = "● IDLE"
@@ -154,22 +242,30 @@ def view_studio(root) -> None:
         ui.timer(1.0, refresh_hero)
 
         # ── Stat cards ─────────────────────────────────────────────────────────
-        with ui.row().classes("w-full gap-4 no-wrap"):
-            cells = {}
-            for key, label in [("subs", "Subscribers"), ("views", "Views"),
-                               ("videos", "Videos")]:
-                with ui.element("div").classes("stat grow"):
-                    cells[key] = ui.label("—").classes("stat-num")
-                    ui.label(label).classes("stat-lbl")
+        if not youtube_oauth.status()["connected"]:
+            with ui.row().classes("w-full items-center justify-between studio-card")\
+                    .style("background:rgba(232,164,92,0.08) !important"):
+                ui.label("Connect YouTube to see channel stats (subscribers, views, videos).")\
+                    .classes(theme.SUB)
+                ui.button("Connect", icon="link",
+                          on_click=lambda: set_view("settings")).props("dense color=primary")
+        else:
+            with ui.row().classes("w-full gap-4 no-wrap"):
+                cells = {}
+                for key, label in [("subs", "Subscribers"), ("views", "Views"),
+                                   ("videos", "Videos")]:
+                    with ui.element("div").classes("stat grow"):
+                        cells[key] = ui.label("—").classes("stat-num")
+                        ui.label(label).classes("stat-lbl")
 
-        def refresh_stats() -> None:
-            s = stats.channel_stats()
-            cells["subs"].text = stats.fmt_count(s["subs"])
-            cells["views"].text = stats.fmt_count(s["views"])
-            cells["videos"].text = stats.fmt_count(s["videos"])
+            def refresh_stats() -> None:
+                s = stats.channel_stats()
+                cells["subs"].text = stats.fmt_count(s["subs"])
+                cells["views"].text = stats.fmt_count(s["views"])
+                cells["videos"].text = stats.fmt_count(s["videos"])
 
-        refresh_stats()
-        ui.timer(30.0, refresh_stats)
+            refresh_stats()
+            ui.timer(30.0, refresh_stats)
 
         # ── Library preview ────────────────────────────────────────────────────
         with ui.element("div").classes("studio-card w-full"):
@@ -179,9 +275,37 @@ def view_studio(root) -> None:
                     .props("flat dense color=primary")
             _library_grid(stats.library(limit=8))
 
+        # ── Run history ─────────────────────────────────────────────────────────
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Recent runs").classes(theme.H)
+            _runs_table(jobs.manager.history[:10])
+
         # ── Collapsible live output ────────────────────────────────────────────
         with ui.expansion("Live output", icon="terminal").classes("studio-card w-full"):
             live_log(lambda: jobs.manager.current, height="h-72")
+
+
+_STATUS_COLOR = {"running": "#e8a45c", "success": "#6fcaa8",
+                  "failed": "#e8849a", "cancelled": "#a89db5"}
+_STATUS_ICON = {"running": "sync", "success": "check_circle",
+                 "failed": "error", "cancelled": "block"}
+
+
+def _runs_table(history: list) -> None:
+    if not history:
+        ui.label("No runs yet this session.").classes(theme.SUB + " mt-1")
+        return
+    with ui.column().classes("w-full gap-1 mt-2"):
+        for j in history:
+            color = _STATUS_COLOR.get(j.status, "#a89db5")
+            with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                    "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                ui.icon(_STATUS_ICON.get(j.status, "help")).style(f"color:{color}")
+                ui.label(j.name).classes("text-sm font-medium").style("min-width:140px")
+                ui.label(j.status).classes("text-sm").style(f"color:{color}; min-width:80px")
+                ui.label(_fmt_elapsed(j.duration)).classes(theme.SUB).style("min-width:60px")
+                ui.label(_last_stage(j) if j.status == "failed" else "")\
+                    .classes(theme.SUB).style("overflow:hidden;text-overflow:ellipsis")
 
 
 def _library_grid(cards: list[dict]) -> None:
@@ -192,30 +316,140 @@ def _library_grid(cards: list[dict]) -> None:
             "w-full grid gap-3 mt-2").style(
             "grid-template-columns:repeat(auto-fill,minmax(190px,1fr))"):
         for c in cards:
-            def open_url(u=c["url"]):
-                if u:
-                    ui.navigate.to(u, new_tab=True)
-                else:
-                    ui.notify("No public URL for this render", type="info")
-            with ui.element("div").classes("libcard").on("click", open_url):
+            with ui.element("div").classes("libcard").on("click", lambda c=c: _open_detail(c)):
                 ui.image(f"/media/{c['thumb_name']}").props("ratio=1.7778 fit=cover")
                 with ui.element("div").classes("meta"):
                     ui.label(c["title"]).classes("t")
                     ui.label(f"{c['theme']} · {c['when']}").classes("d")
 
 
+def _open_detail(c: dict) -> None:
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card w-full gap-3")\
+            .style("max-width:760px"):
+        with ui.row().classes("w-full items-start justify-between no-wrap"):
+            with ui.column().classes("gap-0"):
+                ui.label(c["title"]).classes(theme.H)
+                ui.label(f"{c['theme']} · {c['when']}").classes(theme.SUB)
+            ui.button(icon="close", on_click=dlg.close).props("flat round dense")
+
+        # ── Player ──────────────────────────────────────────────────────────
+        if c.get("video_id"):
+            ui.html(
+                f'<iframe width="100%" height="380" style="border-radius:14px;border:0" '
+                f'src="https://www.youtube.com/embed/{c["video_id"]}" '
+                f'allowfullscreen></iframe>'
+            )
+        elif c.get("video_file"):
+            ui.html(
+                f'<video controls preload="metadata" style="width:100%;border-radius:14px" '
+                f'poster="/media/{c["thumb_name"]}">'
+                f'<source src="/videos/{c["video_file"]}" type="video/mp4"></video>'
+            )
+        else:
+            ui.image(f"/media/{c['thumb_name']}").props("fit=cover")\
+                .style("width:100%;border-radius:14px")
+
+        # ── Metadata ────────────────────────────────────────────────────────
+        with ui.row().classes("w-full gap-4 no-wrap"):
+            if c.get("video_file"):
+                try:
+                    st = os.stat(os.path.join(config.OUTPUT_DIR, c["video_file"]))
+                    with ui.element("div").classes("stat grow"):
+                        ui.label(f"{st.st_size / 1_048_576:.0f} MB").classes("stat-num")
+                        ui.label("File size").classes("stat-lbl")
+                except OSError:
+                    pass
+            with ui.element("div").classes("stat grow"):
+                ui.label("YouTube" if c.get("video_id") else "Local only").classes("stat-num")
+                ui.label("Status").classes("stat-lbl")
+        if c.get("url"):
+            ui.link("Open on YouTube ↗", c["url"], new_tab=True).classes("text-sm")
+
+        # ── Audience retention (uploaded videos with view data only) ──────────
+        if c.get("video_id"):
+            ui.separator()
+            ui.label("Audience retention").classes(theme.H)
+            points = stats.retention(c["video_id"])
+            if points:
+                xs = [round(p["t"] * 100) for p in points]
+                ys = [round(p["pct"] * 100, 1) for p in points]
+                ui.echart({
+                    "grid": {"left": 40, "right": 16, "top": 16, "bottom": 28},
+                    "xAxis": {"type": "category", "data": xs,
+                              "name": "% of video", "axisLabel": {"color": "#a89db5"}},
+                    "yAxis": {"type": "value", "name": "% watching",
+                              "axisLabel": {"color": "#a89db5"}},
+                    "series": [{"type": "line", "data": ys, "smooth": True,
+                                "areaStyle": {"opacity": 0.15}, "color": "#e8a45c"}],
+                }).classes("w-full").style("height:220px")
+            else:
+                ui.label("No retention data yet — needs more views, or check that YouTube "
+                         "is connected in Settings.").classes(theme.SUB)
+    dlg.open()
+
+
 def view_library(root) -> None:
     with root:
         with ui.element("div").classes("studio-card w-full"):
-            with ui.row().classes("w-full items-center justify-between"):
+            with ui.row().classes("w-full items-center justify-between gap-3 no-wrap"):
                 ui.label("Library").classes(theme.H)
+                search = ui.input(placeholder="Search title or theme...")\
+                    .props("dense clearable").classes("grow max-w-xs")
                 ui.button("Refresh", icon="refresh",
                           on_click=lambda: set_view("library")).props("flat dense color=primary")
-            _library_grid(stats.library(limit=48))
+
+            state = {"limit": 48}
+            grid_container = ui.column().classes("w-full")
+
+            def render() -> None:
+                grid_container.clear()
+                cards = stats.library(limit=state["limit"])
+                q = (search.value or "").strip().lower()
+                if q:
+                    cards = [c for c in cards
+                             if q in c["title"].lower() or q in c["theme"].lower()]
+                with grid_container:
+                    _library_grid(cards)
+                    if not q and len(cards) >= state["limit"]:
+                        ui.button("Load more", icon="expand_more", on_click=load_more)\
+                            .props("flat dense color=primary").classes("mt-3")
+
+            def load_more() -> None:
+                state["limit"] += 48
+                render()
+
+            # No debounce needed: this filters an already-fetched in-memory list
+            # (stats.library() reads local files, no network call per keystroke).
+            search.on_value_change(render)
+            render()
 
 
 def view_live(root) -> None:
     with root:
+        with ui.element("div").classes("studio-card w-full"):
+            pill = ui.label().classes("pill")
+            detail = ui.label("").classes(theme.SUB)
+
+            def refresh_live_status() -> None:
+                st = data.live_status()
+                if st is None:
+                    pill.text = "○ OFFLINE"
+                    pill.style("color:#a89db5")
+                    detail.text = "No active broadcast."
+                elif st["alive"]:
+                    pill.text = "🔴 LIVE"
+                    pill.style("color:#6fcaa8")
+                    started = (st.get("started_at") or "")[:16].replace("T", " ")
+                    detail.text = f"{st.get('title', '')} · started {started}"
+                else:
+                    pill.text = "⚠ CRASHED / STALE"
+                    pill.style("color:#e8849a")
+                    detail.text = ("live_state.json says a stream is running, but the ffmpeg "
+                                   "process is gone. Use Force kill / End stream to clean up.")
+
+            refresh_live_status()
+            ui.timer(5.0, refresh_live_status)
+
         with theme.card("Live stream", "Start, end, or inspect a 24/7 broadcast."):
             with ui.row().classes("items-end gap-4"):
                 qsel = ui.select(config.STREAM_QUALITY, value="720p15", label="Quality").classes("w-40")
@@ -230,14 +464,25 @@ def view_live(root) -> None:
                 except RuntimeError as e:
                     ui.notify(str(e), type="warning")
 
+            async def end() -> None:
+                try:
+                    await jobs.manager.run("end", ["publish.py", "end"], slot="stream")
+                except RuntimeError as e:
+                    ui.notify(str(e), type="warning")
+
+            async def check_status() -> None:
+                try:
+                    await jobs.manager.run("status", ["publish.py", "status"], slot="stream")
+                except RuntimeError as e:
+                    ui.notify(str(e), type="warning")
+
             with ui.row().classes("gap-3 mt-2"):
                 ui.button("Start stream", icon="sensors", on_click=start).props("color=primary")
-                ui.button("End stream", icon="stop_circle",
-                          on_click=lambda: jobs.manager.run("end", ["publish.py", "end"]))\
-                    .props("color=negative")
-                ui.button("Status", icon="info",
-                          on_click=lambda: jobs.manager.run("status", ["publish.py", "status"]))\
-                    .props("flat color=primary")
+                ui.button("End stream", icon="stop_circle", on_click=end).props("color=negative")
+                ui.button("Status", icon="info", on_click=check_status).props("flat color=primary")
+                ui.button("Force kill", icon="power_settings_new",
+                          on_click=lambda: jobs.manager.cancel(slot="stream"))\
+                    .props("flat color=negative")
         with theme.card("Stream output"):
             live_log(lambda: jobs.manager.stream or jobs.manager.current, height="h-80")
 
@@ -265,6 +510,103 @@ def view_trends(root) -> None:
                       on_click=run_inator).props("color=primary").classes("mt-2")
         with theme.card("Output"):
             live_log(lambda: jobs.manager.current, height="h-72")
+
+
+_PILLAR_MARKER_COLOR = {"▲": "#6fcaa8", "▼": "#e8849a", " ": "#e8a45c"}
+
+
+def view_analytics(root) -> None:
+    with root:
+        from scripts import analytics as analytics_mod
+
+        data_dict = analytics_mod.load_analytics()
+        result = analytics_mod.compute_pillar_stats(data_dict)
+
+        def do_sync() -> None:
+            try:
+                analytics_mod.sync_analytics()
+                ui.notify("Analytics synced", type="positive")
+            except Exception as e:  # noqa: BLE001 -- surface any sync failure, don't crash the page
+                ui.notify(f"Sync failed: {e}", type="negative")
+                return
+            set_view("analytics")
+
+        with ui.element("div").classes("studio-card w-full"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Performance by pillar").classes(theme.H)
+                ui.button("Sync now", icon="sync", on_click=do_sync)\
+                    .props("flat dense color=primary")
+            ui.label("How CTR/watch-time compares across SEO title pillars, based on "
+                     "uploads 7-90 days old. Feeds back into which pillar gets picked more "
+                     "often for future renders (see generate_seo.py's pillar weighting).")\
+                .classes(theme.SUB)
+
+            if not result["by_pillar"]:
+                ui.label("No analytics data yet. Needs uploaded videos with 7+ days of view "
+                         "history, then hit Sync now (or run "
+                         "`python scripts/analytics.py --report` on the server).")\
+                    .classes(theme.SUB + " mt-3")
+            else:
+                with ui.row().classes("w-full gap-4 no-wrap mt-2"):
+                    with ui.element("div").classes("stat grow"):
+                        ui.label(f"{result['channel_avg_ctr'] * 100:.1f}%").classes("stat-num")
+                        ui.label("Channel avg CTR").classes("stat-lbl")
+                    with ui.element("div").classes("stat grow"):
+                        ui.label(str(result["n_total"])).classes("stat-num")
+                        ui.label("Videos tracked").classes("stat-lbl")
+
+                pillars = [r["pillar"] for r in result["by_pillar"]]
+                ctrs = [round(r["avg_ctr"] * 100, 2) for r in result["by_pillar"]]
+                colors = [_PILLAR_MARKER_COLOR.get(r["marker"], "#e8a45c")
+                          for r in result["by_pillar"]]
+                ui.echart({
+                    "grid": {"left": 60, "right": 16, "top": 16, "bottom": 40},
+                    "xAxis": {"type": "category", "data": pillars,
+                              "axisLabel": {"color": "#a89db5", "rotate": 20}},
+                    "yAxis": {"type": "value", "name": "avg CTR %",
+                              "axisLabel": {"color": "#a89db5"}},
+                    "series": [{
+                        "type": "bar", "data": [
+                            {"value": v, "itemStyle": {"color": c}}
+                            for v, c in zip(ctrs, colors)
+                        ],
+                    }],
+                }).classes("w-full mt-3").style("height:260px")
+
+                with ui.column().classes("w-full gap-1 mt-2"):
+                    for row in result["by_pillar"]:
+                        color = _PILLAR_MARKER_COLOR.get(row["marker"], "#e8a45c")
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.label(row["marker"] or "·").style(f"color:{color}")
+                            ui.label(row["pillar"]).classes("text-sm font-medium")\
+                                .style("min-width:120px")
+                            ui.label(f"{row['avg_ctr'] * 100:.1f}% CTR").classes("text-sm")\
+                                .style(f"color:{color}; min-width:90px")
+                            ui.label(f"{row['avg_views']:.0f} avg views").classes(theme.SUB)
+                            ui.label(f"{row['avg_watch_min']:.0f} min avg watch")\
+                                .classes(theme.SUB)
+                            ui.label(f"n={row['n']}").classes(theme.SUB)
+
+        swapped = [{"video_id": vid, **d} for vid, d in data_dict.items() if d.get("thumb_swapped")]
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Thumbnail A/B testing").classes(theme.H)
+            ui.label("Runs automatically with the daily analytics sync (lofi-analytics.timer): "
+                     "any video 7-30 days old with CTR below 70% of the channel average gets "
+                     "its thumbnail swapped to the alt variant generated alongside it during "
+                     "render.").classes(theme.SUB)
+            if not swapped:
+                ui.label("No swaps yet.").classes(theme.SUB + " mt-2")
+            else:
+                with ui.column().classes("w-full gap-1 mt-2"):
+                    for s in swapped:
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.icon("swap_horiz").style("color:#e8a45c")
+                            ui.label(s.get("title", s["video_id"])).classes("text-sm")\
+                                .style("min-width:200px")
+                            ui.label(f"swapped {s.get('thumb_swapped_at', '')[:10]}")\
+                                .classes(theme.SUB)
 
 
 def view_automation(root) -> None:
@@ -403,6 +745,39 @@ def view_automation(root) -> None:
             ui.context.client.on_disconnect(stop_tail)
 
 
+def _env_field(label: str, key: str, *, secret: bool = False) -> None:
+    """One .env-backed settings row: input + Save, reused for every credential field."""
+    current = config.read_env_file().get(key, "")
+    with ui.row().classes("w-full items-end gap-3 no-wrap"):
+        if secret:
+            inp = ui.input(label, password=True, password_toggle_button=True)\
+                .props('placeholder="leave blank to keep current"').classes("grow")
+
+            def relabel(has_value: bool) -> None:
+                inp.props(f'label="{label} ({"set" if has_value else "not set"})"')
+
+            relabel(bool(current))
+        else:
+            inp = ui.input(label, value=current).classes("grow")
+
+        def save(inp=inp, key=key, secret=secret) -> None:
+            val = (inp.value or "").strip()
+            if secret and not val:
+                ui.notify("No change (left blank)", type="info")
+                return
+            try:
+                config.write_env_value(key, val)
+            except ValueError as e:
+                ui.notify(str(e), type="negative")
+                return
+            ui.notify(f"{key} saved — restart the panel to apply", type="positive")
+            if secret:
+                inp.value = ""
+                relabel(True)
+
+        ui.button("Save", on_click=save).props("flat dense color=primary")
+
+
 def view_settings(root) -> None:
     with root:
         with theme.card("YouTube account"):
@@ -426,6 +801,30 @@ def view_settings(root) -> None:
                     if not st["client_present"]:
                         ui.label("⚠ client_secret.json missing — add it to the repo root.")\
                             .classes("text-warning text-sm").style("color:#e8a45c")
+
+                        async def on_client_secret_upload(e) -> None:
+                            raw = await e.file.read()
+                            try:
+                                parsed = json.loads(raw)
+                            except Exception:
+                                ui.notify("Not valid JSON — check you exported the OAuth "
+                                         "client file from Google Cloud Console.",
+                                         type="negative")
+                                return
+                            if not ({"web", "installed"} & parsed.keys()):
+                                ui.notify("Doesn't look like an OAuth client_secret.json — "
+                                         "missing a top-level 'web' or 'installed' key.",
+                                         type="negative")
+                                return
+                            fd = os.open(config.CLIENT_SECRET, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                            with os.fdopen(fd, "wb") as f:
+                                f.write(raw)
+                            ui.notify("client_secret.json saved", type="positive")
+                            refresh_yt()
+
+                        ui.upload(on_upload=on_client_secret_upload, auto_upload=True,
+                                  label="Upload client_secret.json")\
+                            .props("accept=.json color=primary").classes("max-w-md")
                     elif st["needs_web_client"]:
                         ui.label("⚠ Desktop OAuth client + tunnel: in-browser re-login needs a "
                                  "Web-application client. (Local login works as-is.)")\
@@ -433,6 +832,12 @@ def view_settings(root) -> None:
                     ui.label("Redirect URI for Google Cloud Console:").classes(theme.SUB + " mt-1")
                     ui.label(st["redirect_uri"]).classes("font-mono text-sm")\
                         .style("background:rgba(0,0,0,.35);padding:3px 8px;border-radius:8px")
+                    ui.label(
+                        "⚠ Before relying on unattended auto-uploads: publish the OAuth "
+                        "consent screen to Production in Google Cloud Console. Apps left in "
+                        "Testing mode get refresh tokens that expire after 7 days, which "
+                        "silently breaks lofi-auto's scheduled runs once it happens."
+                    ).classes("text-sm mt-2").style("color:#e8a45c")
 
             refresh_yt()
 
@@ -450,9 +855,10 @@ def view_settings(root) -> None:
                     cookie_status.text = "❌ no cookies.txt — downloads fall back to MIDI"
                     cookie_status.style("color:#e8849a")
 
-            def on_upload(e) -> None:
+            async def on_upload(e) -> None:
+                raw = await e.file.read()
                 with open(config.COOKIES_FILE, "wb") as f:
-                    f.write(e.content.read())
+                    f.write(raw)
                 refresh_cookie()
                 ui.notify("cookies.txt saved", type="positive")
 
@@ -460,10 +866,58 @@ def view_settings(root) -> None:
                 .props("accept=.txt color=primary").classes("max-w-md")
             refresh_cookie()
 
+        with theme.card("Integrations & credentials",
+                        "Saved to .env — restart lofi-webui.service to apply. Secret fields "
+                        "never show their current value, only whether one is set; leave "
+                        "blank to keep it unchanged."):
+            _env_field("YouTube stream key", "YT_STREAM_KEY", secret=True)
+            _env_field("YouTube channel ID", "YT_CHANNEL_ID")
+            ui.separator()
+
+            llm_current = config.read_env_file().get("LOFI_LLM_FAILSAFE", "") == "1"
+            llm_switch = ui.switch(
+                "Allow LLM failsafe (Groq/Gemini) when procedural generation fails",
+                value=llm_current)
+
+            def save_llm_failsafe() -> None:
+                config.write_env_value("LOFI_LLM_FAILSAFE", "1" if llm_switch.value else "")
+                ui.notify("Saved — restart the panel to apply", type="positive")
+
+            llm_switch.on_value_change(save_llm_failsafe)
+            _env_field("Groq API key", "GROQ_API_KEY", secret=True)
+            _env_field("Gemini API key", "GEMINI_API_KEY", secret=True)
+            _env_field("Gemini API key (backup)", "GEMINI_API_KEY_BACKUP", secret=True)
+            ui.separator()
+            _env_field("Spotify client ID", "SPOTIFY_CLIENT_ID")
+            _env_field("Spotify client secret", "SPOTIFY_CLIENT_SECRET", secret=True)
+            ui.separator()
+            _env_field("Stream alert webhook (Slack/Discord)", "LOFI_STREAM_ALERT_WEBHOOK")
+
+        with theme.card("Render defaults",
+                        "Pre-selected values when opening \"New render\" — saves re-picking "
+                        "the same options every time. Takes effect after restarting the panel."):
+            with ui.row().classes("w-full items-end gap-4"):
+                dt_sel = ui.select(config.THEMES, value=config.DEFAULT_THEME,
+                                    label="Default theme").classes("w-48")
+                dd_sel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION,
+                                    label="Default duration").classes("w-40")
+                dp_sel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY,
+                                    label="Default privacy").classes("w-36")
+
+            def save_render_defaults() -> None:
+                config.write_env_value("DEFAULT_THEME", dt_sel.value)
+                config.write_env_value("DEFAULT_DURATION", dd_sel.value)
+                config.write_env_value("DEFAULT_PRIVACY", dp_sel.value)
+                ui.notify("Render defaults saved — restart the panel to apply", type="positive")
+
+            ui.button("Save defaults", icon="save", on_click=save_render_defaults)\
+                .props("flat dense color=primary").classes("mt-2")
+
 
 VIEWS = {
     "studio": view_studio, "library": view_library, "live": view_live,
-    "trends": view_trends, "automation": view_automation, "settings": view_settings,
+    "trends": view_trends, "analytics": view_analytics,
+    "automation": view_automation, "settings": view_settings,
 }
 
 # Per-client mutable holder for the active view + nav element refs.
@@ -479,7 +933,15 @@ def index() -> None:
     state = {"current": "studio"}
     nav_refs: dict[str, object] = {}
 
-    with ui.left_drawer(value=True, fixed=True).classes("studio-sidebar p-3"):
+    drawer = ui.left_drawer(value=False).classes("studio-sidebar p-3")\
+        .props("breakpoint=768 show-if-above bordered")
+
+    with ui.header().classes("lg:hidden items-center gap-2 px-3 py-2")\
+            .style("background:#100d16 !important; border-bottom:1px solid rgba(232,164,92,0.16)"):
+        ui.button(icon="menu", on_click=drawer.toggle).props("flat round dense color=white")
+        ui.label("🎧 LO-FI FACTORY").classes("studio-brand")
+
+    with drawer:
         with ui.row().classes("items-center gap-2 px-2 pt-1 pb-3"):
             ui.label("🎧").classes("text-2xl")
             ui.label("LO-FI FACTORY").classes("studio-brand")
@@ -488,7 +950,7 @@ def index() -> None:
             with item:
                 ui.icon(icon)
                 ui.label(label)
-            item.on("click", lambda k=key: _set(k))
+            item.on("click", lambda k=key: _nav_click(k))
             nav_refs[key] = item
         ui.element("div").classes("grow")
         with ui.element("div").classes("nav-item").on(
@@ -506,6 +968,14 @@ def index() -> None:
                 el.classes(add="active")
         content.clear()
         VIEWS[name](content)
+
+    async def _nav_click(name: str) -> None:
+        _set(name)
+        # Only auto-close on mobile -- show-if-above keeps it pinned open on desktop
+        # regardless, but only in response to an actual resize, not every render, so an
+        # unconditional hide() here would also collapse it on wide screens.
+        if await ui.run_javascript("window.innerWidth < 768"):
+            drawer.hide()
 
     global set_view
     set_view = _set
@@ -564,6 +1034,16 @@ def yt_callback(request: Request):
 def run() -> None:
     auth.install(app)
     app.add_static_files("/media", config.ASSETS_DIR)
+    app.add_static_files("/videos", config.OUTPUT_DIR)
+
+    ssl_kwargs = {}
+    if config.SSL_CERTFILE and config.SSL_KEYFILE:
+        if os.path.exists(config.SSL_CERTFILE) and os.path.exists(config.SSL_KEYFILE):
+            ssl_kwargs = {"ssl_certfile": config.SSL_CERTFILE, "ssl_keyfile": config.SSL_KEYFILE}
+        else:
+            print(f"[webui] WEBUI_SSL_CERTFILE/KEYFILE set but not found on disk "
+                  f"-- serving plain HTTP")
+
     ui.run(
         host=config.HTTP_HOST,
         port=config.HTTP_PORT,
@@ -572,4 +1052,5 @@ def run() -> None:
         reload=False,
         show=False,
         dark=True,
+        **ssl_kwargs,
     )

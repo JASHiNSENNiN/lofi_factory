@@ -6,6 +6,7 @@ token.json
 client_secret.json
 cookies.txt
 *cookies*.txt
+certs/
 
 # --- Python ---
 __pycache__/

@@ -697,6 +697,14 @@ def cmd_upload(args):
         "concept":          seo.get("concept", ""),
         "seo_ref":          seo.get("ref_id", ""),
         "video_file":       os.path.basename(video_path),
+        # Which thumbnail actually got uploaded -- needed so
+        # analytics.swap_low_ctr_thumbnails() can find the matching
+        # thumb_*_alt.jpg by exact name instead of guessing.
+        "thumb_file":       os.path.basename(thumb_path) if thumb_path else None,
+        # Actual measured length, not just the requested --duration label --
+        # feeds analytics.duration_weights() so duration choice can eventually
+        # be informed by watch-time performance the same way pillar choice is.
+        "duration_secs":    get_video_duration(video_path),
         "timestamp":        datetime.datetime.now(datetime.timezone.utc).isoformat(),
     })
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily schedule for the Lo-fi Factory analytics sync (lofi-analytics.service)
+
+[Timer]
+# Once daily at 06:00 -- offset from lofi-auto.timer's midnight run so the two
+# don't compete for CPU/network on a slow box. Analytics sync itself is cheap
+# (API calls + small JSON I/O), so exact timing isn't sensitive.
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+Unit=lofi-analytics.service
+
+[Install]
+WantedBy=timers.target
