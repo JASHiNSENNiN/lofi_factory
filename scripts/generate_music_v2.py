@@ -37,7 +37,7 @@ from scripts.generate_music_gemini import (  # noqa: E402
     build_texture, build_counter_melody,
     _SUBGENRE_CONFIG, _SWING_RANGE, _SWING_DEFAULT, _COZY_SUBGENRES,
     _SUBGENRE_FX, _SUBGENRE_TEXTURE, _SUBGENRE_DRUM_KITS, _DEFAULT_DRUM_KIT_POOL,
-    _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT,
+    _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT, generate_song_form,
     maybe_sub_chord, _tension, _apply_tension_to_drums, _chord_pcs_at_bar,
     pick_params, _build_diverse_params,
     _save_melody_pitch_classes, _append_recipe_log, _append_audio_quality_log,
@@ -1063,6 +1063,14 @@ def build_midi_v2(params: dict, output_path: str) -> str:
 
     form_name = _FORM_BY_SUBGENRE.get(sub_genre, 'standard')
     form      = _SONG_FORMS[form_name]
+    # ~25% of the time, use the generative form-grammar instead — see the
+    # matching comment in generate_music_gemini.build_midi().
+    if random.random() < 0.25:
+        try:
+            form = generate_song_form()
+            form_name = 'generative'
+        except Exception as e:
+            print(f"  [form] Generative form grammar failed ({e}) — using '{form_name}'")
     TOTAL     = sum(prog_bars * n for _, n in form)
     fill_bars: set[int] = set()
     c = 0

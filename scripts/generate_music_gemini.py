@@ -2102,6 +2102,86 @@ _FORM_BY_SUBGENRE = {
     'lofi_jazz':      'extended',
 }
 
+# ─── GENERATIVE SONG-FORM GRAMMAR ──────────────────────────────────────────
+# An ADDITIONAL, more varied alternative to the 5 hand-authored _SONG_FORMS
+# above, not a replacement — wired into build_midi()/build_midi_v2() with a
+# per-track probability roll (see there), same style as the other Stage-3
+# optional-generative-layer toggles (harmony engine, CA rhythm, etc.).
+#
+# Grammar (informal EBNF, matching the existing (label, num_prog_loops) form
+# shape build_midi already consumes):
+#     form   := 'I' ('A' break? 'B')+ 'O'
+#     break  := 'BR' | ε                      (optional, ~45% of the time)
+# i.e. intro, then one or more (A section, then one-or-more optional-break+B
+# groups), then outro — a direct generative expansion of the same section
+# vocabulary the curated forms already use ('I'/'A'/'BR'/'B'/'O'), so it
+# drops into the exact same consumption code with zero changes there.
+#
+# Bounded by construction (not by discard-and-retry) so it always
+# terminates and never produces a "wildly long or degenerate" structure:
+# loop counts are drawn from small per-label ranges, and the running total
+# is hard-capped at _FORM_GRAMMAR_MAX_TOTAL_LOOPS (comparable in scale to
+# the existing hand-authored forms' 5-16 loop range) by refusing/clamping
+# any addition that would exceed it.
+_FORM_GRAMMAR_LOOP_RANGES = {
+    'I': (1, 2), 'A': (2, 5), 'BR': (1, 2), 'B': (2, 5), 'O': (1, 2),
+}
+_FORM_GRAMMAR_MAX_TOTAL_LOOPS = 20
+_FORM_GRAMMAR_MAX_TOP_GROUPS = 2
+_FORM_GRAMMAR_MAX_B_REPEATS = 2
+_FORM_GRAMMAR_BREAK_PROB = 0.45
+
+
+def generate_song_form(seed: int | None = None) -> list[tuple[str, int]]:
+    """
+    Generate a song form by seeded random expansion of the
+    'I (A (BR? B)+)+ O' grammar above. Returns a list of
+    (section_label, num_prog_loops) tuples — the exact same shape as
+    _SONG_FORMS entries, so it's a drop-in alternative wherever a form is
+    consumed. Deterministic given `seed` (uses a local Random instance so
+    it never disturbs the pipeline's global random stream when called with
+    an explicit seed); uses the shared global stream when seed is None,
+    consistent with how the rest of this module's optional generative
+    layers behave when wired into the real per-track pipeline (determinism
+    then comes from whatever top-level seed the caller set, not a
+    per-feature seed threaded through params).
+    """
+    rng = random.Random(seed) if seed is not None else random
+
+    def _loops(label: str) -> int:
+        lo, hi = _FORM_GRAMMAR_LOOP_RANGES[label]
+        return rng.randint(lo, hi)
+
+    intro_loops = _loops('I')
+    form: list[tuple[str, int]] = [('I', intro_loops)]
+    total = intro_loops
+
+    n_top_groups = rng.randint(1, _FORM_GRAMMAR_MAX_TOP_GROUPS)
+    for _ in range(n_top_groups):
+        if total >= _FORM_GRAMMAR_MAX_TOTAL_LOOPS:
+            break
+        a_loops = min(_loops('A'), max(1, _FORM_GRAMMAR_MAX_TOTAL_LOOPS - total))
+        form.append(('A', a_loops))
+        total += a_loops
+
+        n_b_repeats = rng.randint(1, _FORM_GRAMMAR_MAX_B_REPEATS)
+        for _ in range(n_b_repeats):
+            if total >= _FORM_GRAMMAR_MAX_TOTAL_LOOPS:
+                break
+            if rng.random() < _FORM_GRAMMAR_BREAK_PROB:
+                br_loops = _loops('BR')
+                if total + br_loops <= _FORM_GRAMMAR_MAX_TOTAL_LOOPS:
+                    form.append(('BR', br_loops))
+                    total += br_loops
+            b_loops = min(_loops('B'), max(1, _FORM_GRAMMAR_MAX_TOTAL_LOOPS - total))
+            form.append(('B', b_loops))
+            total += b_loops
+
+    outro_loops = _loops('O')
+    form.append(('O', outro_loops))
+    return form
+
+
 # Secondary genre-specific instrument texture layer
 # (program, style) — style controls rhythm pattern for that instrument character
 _SUBGENRE_TEXTURE = {
@@ -2278,6 +2358,17 @@ def build_midi(params, output_path):
     # ── Song form ───────────────────────────────────────────────
     form_name = _FORM_BY_SUBGENRE.get(sub_genre, 'standard')
     form = _SONG_FORMS[form_name]
+    # ~25% of the time, use the generative form-grammar (see
+    # generate_song_form) instead of the hand-authored form above — an
+    # additional source of structural variety, not a replacement; same
+    # try/except-guarded, per-track-probability-gated pattern as this
+    # module's other optional generative layers.
+    if random.random() < 0.25:
+        try:
+            form = generate_song_form()
+            form_name = 'generative'
+        except Exception as e:
+            print(f"  [form] Generative form grammar failed ({e}) — using '{form_name}'")
 
     # Total bars and fill bars (last bar before each section transition)
     TOTAL = sum(prog_bars * n for _, n in form)
