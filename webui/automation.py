@@ -14,15 +14,39 @@ import asyncio
 
 import auto_service as _svc
 
+from . import system_admin
+
 MIN_INTERVAL_HOURS = _svc.MIN_INTERVAL_HOURS
 VALID_INTERVALS = _svc.VALID_INTERVALS
 
 status = _svc.status
-start = _svc.start
-stop = _svc.stop
-set_enabled = _svc.set_enabled
 run_now = _svc.run_now
-set_schedule = _svc.set_schedule
+
+
+# start/stop/set_enabled/set_schedule are thin wrappers (rather than the
+# plain aliases the rest of this module uses) so each successful admin
+# action gets an audit-log entry -- see system_admin.audit_log. Raised
+# exceptions from _svc propagate before the log call, so a failed systemctl
+# call is never recorded as if it had succeeded.
+def start() -> None:
+    _svc.start()
+    system_admin.audit_log("automation_start", {})
+
+
+def stop() -> None:
+    _svc.stop()
+    system_admin.audit_log("automation_stop", {})
+
+
+def set_enabled(enabled: bool) -> None:
+    _svc.set_enabled(enabled)
+    system_admin.audit_log("automation_set_enabled", {"enabled": enabled})
+
+
+def set_schedule(start_hour: int = 0, every_hours: int = 24) -> None:
+    _svc.set_schedule(start_hour, every_hours)
+    system_admin.audit_log(
+        "automation_set_schedule", {"start_hour": start_hour, "every_hours": every_hours})
 
 
 async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:

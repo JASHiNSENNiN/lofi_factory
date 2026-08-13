@@ -12,7 +12,7 @@ import re
 import time
 from datetime import datetime
 
-from . import config
+from . import config, system_admin
 
 # Files younger than this are likely still being written by an in-progress
 # render (e.g. an mp4's moov atom isn't written until the encode finishes) --
@@ -174,6 +174,9 @@ def delete_render(card: dict) -> list[str]:
             removed.append(p)
         except OSError:
             continue
+    if removed:
+        system_admin.audit_log(
+            "render_delete", {"video_file": card.get("video_file"), "removed": removed})
     return removed
 
 

@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from webui import config, data
+from webui import config, data, system_admin
 from webui.jobs import Job, manager
 
 
@@ -15,6 +15,10 @@ def _isolated_dirs(tmp_path, monkeypatch):
         d = tmp_path / name.lower()
         d.mkdir()
         monkeypatch.setattr(config, name, str(d))
+    # delete_render writes an admin-audit entry -- isolate it too, otherwise
+    # every test in this file that deletes a render pollutes the real repo's
+    # assets/admin_audit.jsonl.
+    monkeypatch.setattr(system_admin, "AUDIT_LOG", str(tmp_path / "admin_audit.jsonl"))
     yield
     manager.current = None  # don't leak busy-state into other tests
 
@@ -65,6 +69,24 @@ def test_delete_render_removes_everything():
     assert not os.path.exists(card["thumb"])
     assert not os.path.exists(os.path.join(config.OUTPUT_DIR, card["video_file"]))
     assert not os.path.exists(os.path.join(config.OUTPUT_DIR, "tmp_20260101_000000"))
+
+
+def test_delete_render_writes_audit_log_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_admin, "AUDIT_LOG", str(tmp_path / "admin_audit.jsonl"))
+    card = _make_render_files()
+    data.delete_render(card)
+    entries = system_admin.audit_log_tail()
+    assert entries[0]["action"] == "render_delete"
+    assert entries[0]["detail"]["video_file"] == card["video_file"]
+
+
+def test_delete_render_no_audit_entry_when_nothing_removed(tmp_path, monkeypatch):
+    monkeypatch.setattr(system_admin, "AUDIT_LOG", str(tmp_path / "admin_audit.jsonl"))
+    card = {"theme": "x", "dt": None, "thumb": "", "thumb_name": "",
+            "title": "x", "url": None, "video_id": None,
+            "video_file": None, "when": ""}
+    data.delete_render(card)
+    assert system_admin.audit_log_tail() == []
 
 
 def test_delete_render_refuses_while_job_running():
