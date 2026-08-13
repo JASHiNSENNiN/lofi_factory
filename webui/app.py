@@ -1431,6 +1431,10 @@ def yt_callback(request: Request):
 
 def run() -> None:
     auth.install(app)
+    # Batch upload queue: start draining assets/job_queue.json once the event
+    # loop is up (see webui/jobs.py's JobQueue — additive to the existing
+    # single-job model, so this is the only new startup wiring it needs).
+    app.on_startup(jobs.start_queue_drain)
     app.add_static_files("/media", config.ASSETS_DIR)
     app.add_static_files("/videos", config.OUTPUT_DIR)
     app.add_static_files("/music", config.MUSIC_DIR)
