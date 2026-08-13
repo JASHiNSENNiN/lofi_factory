@@ -463,6 +463,108 @@ class Motif:
         return Motif(self.pitches[:n], self.durations[:n], self.velocities[:n])
 
 
+# ── 3b. L-system motif/phrase generator ──────────────────────────────────────
+# Lindenmayer-system generative grammar (Prusinkiewicz & Lindenmayer, "The
+# Algorithmic Beauty of Plants") applied to melody instead of plant geometry:
+# an axiom string is iteratively expanded via per-symbol production rules,
+# then the resulting symbol string is interpreted as a sequence of melodic
+# operations on a scale-degree cursor. An ADDITIONAL phrase-generation
+# source alongside the classical transforms above (retrograde/invert/
+# transpose/augment/fragment) — wired into _apply_motif_variation's
+# variation pool as one more selectable entry, not a replacement for any of
+# the existing ones. Deterministic given a seed, matching the rest of the
+# pipeline's reproducibility conventions.
+
+# Melodic alphabet:
+#   U - step up one scale degree      D - step down one scale degree
+#   S - repeat (sustain) current note T - transpose (toggle +1 octave)
+#   [ - push (save) cursor state      ] - pop (restore) cursor state —
+#       classic Lindenmayer bracketed-branching notation, giving the
+#       melody a "return to a home note" character instead of a pure
+#       one-way random walk.
+_LSYSTEM_PRESETS: list[tuple[str, dict[str, str]]] = [
+    ('U', {'U': 'UDU', 'D': 'DUD'}),            # symmetric zigzag fractal
+    ('U', {'U': 'U[D]U', 'D': 'D[U]D'}),        # branching zigzag, returns to branch point
+    ('US', {'U': 'US', 'D': 'DS', 'S': 'US'}),  # terraced ascending steps with sustains
+    ('U', {'U': 'UUD', 'D': 'DDU'}),            # asymmetric climb
+    ('T', {'T': 'UTD', 'U': 'U', 'D': 'D'}),    # octave-anchored motif
+]
+
+
+def _lsystem_expand(axiom: str, rules: dict[str, str], iterations: int, max_len: int = 64) -> str:
+    """
+    Iteratively expand an L-system axiom via per-symbol production rules.
+    Bounded: stops expanding (keeping the last valid generation) once the
+    NEXT expansion would exceed `max_len`, so output length stays musically
+    bounded rather than growing exponentially the way raw L-system expansion
+    normally does (that unbounded growth is the point for plant geometry,
+    but a melodic phrase needs a sane, bounded length).
+    """
+    s = axiom
+    for _ in range(max(0, iterations)):
+        nxt = ''.join(rules.get(ch, ch) for ch in s)
+        if len(nxt) > max_len:
+            break
+        s = nxt
+    return s
+
+
+def _lsystem_to_pitches(symbols: str, scale_notes: list[int], start_idx: int) -> list[int]:
+    """Interpret an L-system symbol string as melodic operations on a
+    scale-degree cursor (see the alphabet comment above). Non-melodic
+    symbols other than U/D/S/T/[/] are ignored. Emits one pitch per U/D/S/T
+    symbol encountered (push/pop only affect state, they emit nothing)."""
+    n = len(scale_notes)
+    if n == 0:
+        return []
+    idx = max(0, min(n - 1, start_idx))
+    octave_offset = 0
+    stack: list[tuple[int, int]] = []
+    pitches: list[int] = []
+    for ch in symbols:
+        if ch == 'U':
+            idx = min(n - 1, idx + 1)
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == 'D':
+            idx = max(0, idx - 1)
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == 'S':
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == 'T':
+            octave_offset = 12 if octave_offset == 0 else 0   # toggle; avoids runaway octave drift
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == '[':
+            stack.append((idx, octave_offset))
+        elif ch == ']':
+            if stack:
+                idx, octave_offset = stack.pop()
+    return pitches
+
+
+def generate_lsystem_motif(scale_notes: list[int], length: int = 8,
+                            seed: int | None = None) -> Motif:
+    """
+    Generate a melodic Motif via L-system string expansion (see module
+    comment above). Picks one of a small pool of axiom+production-rule
+    presets, expands it a bounded number of iterations, then walks the
+    resulting symbol string as scale-degree operations. Deterministic given
+    `seed` (uses a local Random instance so it never disturbs the pipeline's
+    global random stream when called with an explicit seed).
+    """
+    if not scale_notes:
+        return Motif([60])
+    rng = random.Random(seed) if seed is not None else random
+    axiom, rules = rng.choice(_LSYSTEM_PRESETS)
+    iterations = rng.choice([2, 3, 3, 4])
+    symbols = _lsystem_expand(axiom, rules, iterations, max_len=max(8, length * 4))
+    start_idx = rng.randrange(len(scale_notes))
+    pitches = _lsystem_to_pitches(symbols, scale_notes, start_idx)
+    if not pitches:
+        pitches = [scale_notes[start_idx]]
+    length = max(1, length)
+    return Motif(pitches[:length])
+
+
 def _generate_motif_v2(scale_notes: list[int], length: int = 4) -> Motif:
     """Generate a seed motif using stepwise motion."""
     if not scale_notes:
@@ -479,7 +581,7 @@ def _generate_motif_v2(scale_notes: list[int], length: int = 4) -> Motif:
 
 def _apply_motif_variation(motif: Motif, scale_notes: list[int], var_idx: int,
                             section: str = 'A') -> list[int]:
-    """Apply one of 8 variations; return list of pitches clamped to scale range."""
+    """Apply one of 9 variations; return list of pitches clamped to scale range."""
     root = scale_notes[len(scale_notes) // 2]
     lo, hi = scale_notes[0], scale_notes[-1]
 
@@ -492,6 +594,13 @@ def _apply_motif_variation(motif: Motif, scale_notes: list[int], var_idx: int,
         lambda m: m.fragment(max(2, len(m.pitches) // 2)).retrograde(),
         lambda m: m,                        # literal repeat
         lambda m: m.transpose(4 if random.random() < 0.5 else -4),
+        # L-system-generated phrase (see generate_lsystem_motif) — an
+        # additional GENERATIVE source alongside the classical transforms
+        # above, rather than a transform of `m` itself. Unseeded here (uses
+        # the pipeline's global random stream) so it stays governed by
+        # whatever top-level seed the caller set, same as every other
+        # variation in this pool.
+        lambda m: generate_lsystem_motif(scale_notes, length=max(3, len(m.pitches))),
     ]
     # B section: prefer slower feel — augment is conceptual (we stretch spacing externally)
     if section == 'B':
