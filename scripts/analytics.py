@@ -2,20 +2,27 @@
 analytics.py — YouTube Analytics per-video tracking and pillar performance reporting.
 
 Fetches CTR, impressions, views, and watch time for each uploaded video after it has
-had at least MIN_AGE_DAYS of data. Stores results locally in assets/analytics_log.json,
-which feeds the pillar weight system in generate_seo.py.
+had at least MIN_AGE_DAYS of data. Stores results locally in assets/analytics_log.json
+as an append-only longitudinal time series (one dated snapshot per sync per video,
+not a single overwritten row) -- this is the foundation the pillar/duration/title
+bandit weighting, forecasting, and change-point detection below all build on.
 
 Usage:
     python scripts/analytics.py                # sync eligible videos
     python scripts/analytics.py --report       # sync + print CTR by pillar
-    python scripts/analytics.py --swap-thumbs  # sync + swap low-CTR thumbnails
+    python scripts/analytics.py --swap-thumbs  # sync + swap low-CTR thumbnails (z-test gated)
 """
 import argparse
 import datetime
 import json
+import math
 import os
+import random
 import re
+import statistics
 import sys
+
+from scripts.bandit import ThompsonSamplingBandit
 
 ROOT          = os.path.join(os.path.dirname(__file__), "..")
 
@@ -33,8 +40,20 @@ MAX_AGE_DAYS  = 90   # stop tracking after 90 days (stable)
 # Metrics split by query type — engagement supports per-video filter;
 # reach metrics are channel-scoped and require dimensions=video.
 # See fetch_video_metrics() for how these are used.
-METRICS_ENGAGEMENT = "views,estimatedMinutesWatched,averageViewDuration"
+METRICS_ENGAGEMENT = "views,estimatedMinutesWatched,averageViewDuration,likes,comments"
 METRICS_REACH      = "videoThumbnailImpressions,videoThumbnailImpressionsClickRate"
+
+# Metric fields that live inside a per-sync snapshot (see _migrate_entry() /
+# latest_metrics()). Everything else logged for a video (pillar, concept,
+# title, duration_secs, upload_date, thumb_swapped, ab_variant, ...) is
+# time-invariant metadata and stays at the top level of the video's entry.
+_METRIC_KEYS = (
+    "views", "estimatedMinutesWatched", "averageViewDuration",
+    "videoThumbnailImpressionsClickRate", "videoThumbnailImpressions",
+    "likes", "comments",
+)
+
+_PILLARS = ["temporal", "activity", "emotional", "aesthetic", "cross_genre"]
 
 
 def _get_analytics_service():
@@ -86,9 +105,9 @@ def fetch_video_metrics(
     """
     Query YouTube Analytics for one video. Returns metric dict or None.
 
-    Engagement metrics (views, watch time) support per-video filtering.
-    Reach metrics (impressions, CTR) are channel-scoped — we query with
-    dimensions=video and find our video's row client-side.
+    Engagement metrics (views, watch time, likes, comments) support per-video
+    filtering. Reach metrics (impressions, CTR) are channel-scoped — we query
+    with dimensions=video and find our video's row client-side.
     """
     result: dict = {}
 
@@ -131,32 +150,117 @@ def fetch_video_metrics(
     return result if result else None
 
 
+# ── Longitudinal storage: migration + read helpers ──────────────────────────
+def _is_history_format(entry: dict) -> bool:
+    return isinstance(entry, dict) and isinstance(entry.get("history"), list)
+
+
+def _migrate_entry(entry: dict) -> dict:
+    """
+    Upgrade one video's analytics_log.json entry to the longitudinal
+    {"history": [snapshot, ...], **metadata} shape if it's still the old
+    flat single-snapshot shape. Idempotent -- already-migrated entries pass
+    through unchanged. Never raises (falls back to wrapping the entry as-is
+    so a malformed old row doesn't crash the whole load).
+    """
+    try:
+        if _is_history_format(entry):
+            return entry
+        snapshot = {k: entry[k] for k in _METRIC_KEYS if k in entry}
+        snapshot["date"] = str(entry.get("fetched_at") or entry.get("upload_date") or "")[:10]
+        if entry.get("fetched_at"):
+            snapshot["fetched_at"] = entry["fetched_at"]
+        metadata = {k: v for k, v in entry.items() if k not in _METRIC_KEYS}
+        metadata["history"] = [snapshot] if snapshot.get("date") else []
+        return metadata
+    except Exception:
+        return {"history": [], **(entry if isinstance(entry, dict) else {})}
+
+
+def latest_metrics(entry: dict) -> dict:
+    """
+    Return the most recent metrics snapshot for a video's analytics entry.
+
+    Works with both the new longitudinal {"history": [...]} format and the
+    old flat single-snapshot format (which is also what unit tests pass
+    directly, so this must never require migration to work) -- if `entry`
+    has no "history" list, it's treated as an already-flat metrics dict.
+    """
+    if _is_history_format(entry):
+        hist = entry.get("history") or []
+        return hist[-1] if hist else {}
+    return entry or {}
+
+
+def _load_raw_analytics() -> dict:
+    if not os.path.exists(ANALYTICS_LOG):
+        return {}
+    try:
+        with open(ANALYTICS_LOG) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def load_analytics() -> dict:
+    """
+    Load assets/analytics_log.json, migrating any old flat-format entries to
+    the new longitudinal {"history": [...]} shape in memory (the file itself
+    is only rewritten by sync_analytics()/swap_low_ctr_thumbnails(), so a
+    read-only call never touches disk). Returns {} if missing/unreadable.
+    """
+    raw = _load_raw_analytics()
+    return {vid: _migrate_entry(e) for vid, e in raw.items()}
+
+
+def load_analytics_history() -> dict[str, list[dict]]:
+    """{video_id: [snapshot, ...]} — the full longitudinal series per video,
+    sorted oldest-first. Used by the cohort/growth chart, CUSUM change-point
+    detection, and forecasting."""
+    analytics = load_analytics()
+    out = {}
+    for vid, entry in analytics.items():
+        hist = sorted(entry.get("history") or [], key=lambda s: s.get("date", ""))
+        out[vid] = hist
+    return out
+
+
 def sync_analytics() -> dict:
     """
-    Fetch analytics for all eligible uploads and write analytics_log.json.
-    Returns the full analytics dict.
+    Fetch analytics for all eligible uploads and append a dated snapshot to
+    each video's history in analytics_log.json (append-only longitudinal
+    series -- a video already being tracked gets a *new* row each sync, not
+    an overwritten one, so growth/velocity can be reconstructed later).
+    Re-running sync_analytics() the same day is idempotent: a video that
+    already has a snapshot dated today is skipped (no duplicate row, no
+    wasted API quota). Returns the full (migrated, longitudinal-format)
+    analytics dict.
     """
     uploads: list[dict] = []
     if os.path.exists(UPLOAD_LOG):
         with open(UPLOAD_LOG) as f:
             uploads = json.load(f)
 
-    analytics: dict = {}
-    if os.path.exists(ANALYTICS_LOG):
-        with open(ANALYTICS_LOG) as f:
-            analytics = json.load(f)
+    analytics = load_analytics()
 
     now    = datetime.datetime.now(datetime.timezone.utc)
     today  = now.strftime("%Y-%m-%d")
     min_dt = now - datetime.timedelta(days=MIN_AGE_DAYS)
     max_dt = now - datetime.timedelta(days=MAX_AGE_DAYS)
 
+    def _already_synced_today(vid: str) -> bool:
+        container = analytics.get(vid)
+        if not container:
+            return False
+        hist = container.get("history") or []
+        return bool(hist) and hist[-1].get("date") == today
+
     eligible = [
         e for e in uploads
         if e.get("type") == "upload"
         and e.get("video_id")
         and _YT_ID_RE.match(str(e["video_id"]))
-        and e["video_id"] not in analytics
+        and not _already_synced_today(e["video_id"])
         and e.get("timestamp", "")[:10] <= min_dt.strftime("%Y-%m-%d")
         and e.get("timestamp", "")[:10] >= max_dt.strftime("%Y-%m-%d")
     ]
@@ -176,17 +280,35 @@ def sync_analytics() -> dict:
         if metrics:
             ctr   = metrics.get("videoThumbnailImpressionsClickRate", 0) or 0
             views = int(metrics.get("views", 0) or 0)
-            analytics[vid] = {
-                **metrics,
-                "pillar":            entry.get("pillar"),
-                "concept":           entry.get("concept"),
-                "title":             entry.get("title"),
-                "title_variants":    entry.get("title_variants", []),
-                "title_chosen_idx":  entry.get("title_chosen_idx", 0),
-                "duration_secs":     entry.get("duration_secs"),
-                "upload_date":       upload_date,
-                "fetched_at":        now.isoformat(),
+
+            container = analytics.get(vid)
+            if container is None:
+                # New video — randomized initial A/B thumbnail-variant label
+                # (see swap_low_ctr_thumbnails()'s z-test-gated swap, which
+                # toggles this field). Randomizing which label ("A"/"B") a
+                # video starts on avoids a systematic bias where "primary
+                # thumbnail" always maps to the same variant slot across the
+                # whole channel history.
+                container = {
+                    "pillar":           entry.get("pillar"),
+                    "concept":          entry.get("concept"),
+                    "title":            entry.get("title"),
+                    "title_variants":   entry.get("title_variants", []),
+                    "title_chosen_idx": entry.get("title_chosen_idx", 0),
+                    "duration_secs":    entry.get("duration_secs"),
+                    "upload_date":      upload_date,
+                    "ab_variant":       random.choice(["A", "B"]),
+                    "history":          [],
+                }
+                analytics[vid] = container
+
+            snapshot = {
+                **{k: v for k, v in metrics.items() if k in _METRIC_KEYS},
+                "date":       today,
+                "fetched_at": now.isoformat(),
             }
+            container["history"].append(snapshot)
+
             updated += 1
             print(f"  {vid}  CTR={ctr:.2%}  views={views}  pillar={entry.get('pillar', '?')}")
 
@@ -196,17 +318,6 @@ def sync_analytics() -> dict:
 
     print(f"[analytics] synced {updated} video(s). total tracked: {len(analytics)}")
     return analytics
-
-
-def load_analytics() -> dict:
-    """Load assets/analytics_log.json, or {} if missing/unreadable."""
-    if not os.path.exists(ANALYTICS_LOG):
-        return {}
-    try:
-        with open(ANALYTICS_LOG) as f:
-            return json.load(f)
-    except Exception:
-        return {}
 
 
 def compute_pillar_stats(analytics: dict) -> dict:
@@ -220,10 +331,11 @@ def compute_pillar_stats(analytics: dict) -> dict:
     from collections import defaultdict
     by_pillar: dict[str, list] = defaultdict(list)
     for data in analytics.values():
+        m   = latest_metrics(data)
         p   = data.get("pillar") or "unknown"
-        ctr = data.get("videoThumbnailImpressionsClickRate")
-        wt  = data.get("estimatedMinutesWatched")
-        v   = data.get("views")
+        ctr = m.get("videoThumbnailImpressionsClickRate")
+        wt  = m.get("estimatedMinutesWatched")
+        v   = m.get("views")
         if ctr is not None:
             by_pillar[p].append((float(ctr), float(wt or 0), float(v or 0)))
 
@@ -244,13 +356,188 @@ def compute_pillar_stats(analytics: dict) -> dict:
     return {"by_pillar": rows_out, "channel_avg_ctr": channel_avg, "n_total": len(all_ctrs)}
 
 
+# ── Composite engagement score (feeds bandit binarization) ─────────────────
+def composite_engagement_score(entry: dict, duration_secs: float | None = None) -> float | None:
+    """
+    Weighted composite KPI combining four engagement signals into one score
+    in [0, 1] -- used as the bandit's success/failure binarization input
+    (see _bandit_weights()) instead of raw CTR alone, since CTR only rewards
+    a clicky thumbnail/title and says nothing about whether the video then
+    actually held attention or drove real interaction.
+
+    Weights (retention-first, since that's what YouTube's own recommender
+    leans on most heavily; CTR next since it's still the biggest lever this
+    channel directly controls via titles/thumbnails; likes/comments last as
+    lower-volume, noisier signals):
+        watch_ratio   0.40   averageViewDuration / duration_secs
+        ctr           0.35   videoThumbnailImpressionsClickRate
+        like_rate     0.15   likes / views
+        comment_rate  0.10   comments / views
+
+    Any component whose inputs aren't available is dropped and the
+    remaining weights are renormalized to sum to 1.0 -- this degrades
+    gracefully for older logged entries that predate like/comment tracking,
+    or callers that only have CTR (e.g. title_variant_weights()). Returns
+    None if *no* component has usable data.
+    """
+    m = latest_metrics(entry)
+    duration_secs = duration_secs or entry.get("duration_secs")
+    views = m.get("views")
+
+    components: list[tuple[float, float]] = []  # (weight, value in [0,1])
+
+    avd = m.get("averageViewDuration")
+    if avd is not None and duration_secs:
+        try:
+            watch_ratio = max(0.0, min(1.0, float(avd) / float(duration_secs)))
+            components.append((0.40, watch_ratio))
+        except (TypeError, ZeroDivisionError):
+            pass
+
+    ctr = m.get("videoThumbnailImpressionsClickRate")
+    if ctr is not None:
+        components.append((0.35, max(0.0, min(1.0, float(ctr)))))
+
+    likes = m.get("likes")
+    if likes is not None and views:
+        try:
+            components.append((0.15, max(0.0, min(1.0, float(likes) / float(views)))))
+        except (TypeError, ZeroDivisionError):
+            pass
+
+    comments = m.get("comments")
+    if comments is not None and views:
+        try:
+            components.append((0.10, max(0.0, min(1.0, float(comments) / float(views)))))
+        except (TypeError, ZeroDivisionError):
+            pass
+
+    if not components:
+        return None
+    total_w = sum(w for w, _ in components)
+    return sum(w * v for w, v in components) / total_w
+
+
+def binarize_above_median(values: list[float]) -> list[bool]:
+    """
+    Split a list of scores into successes (True, >= pooled median) and
+    failures (False, < median). Median-split rather than a fixed absolute
+    cutoff so binarization automatically adapts to each channel's own
+    baseline performance (a 3% CTR might be great for a small channel and
+    poor for a big one) -- the same philosophy the old code used when it
+    compared every metric against a *channel average* rather than a fixed
+    number. Ties go to the median value counting as a success (>=).
+    """
+    if not values:
+        return []
+    med = statistics.median(values)
+    return [v >= med for v in values]
+
+
+def _build_bucket_bandit(buckets: dict[str, list[float]]) -> ThompsonSamplingBandit:
+    """
+    Build a Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py) with
+    one arm per bucket label, updated from `buckets` ({label: [scores]})
+    binarized against the *pooled* median across all buckets
+    (binarize_above_median's median-split — see that function's docstring
+    for why). Shared by _bandit_weights() (derives the weight multiplier)
+    and pillar_bandit_posteriors() (exposes the raw posterior for the
+    dashboard). Every label in `buckets` becomes an arm even if its value
+    list is empty (starts at the uninformative Beta(1,1) prior).
+    """
+    bandit = ThompsonSamplingBandit(list(buckets.keys()))
+    all_vals = [x for rows in buckets.values() for x in rows]
+    if not all_vals:
+        return bandit
+    median = statistics.median(all_vals)
+    for label, rows in buckets.items():
+        successes = sum(1 for x in rows if x >= median)
+        failures = len(rows) - successes
+        bandit.update_counts(label, successes, failures)
+    return bandit
+
+
+def _bandit_weights(buckets: dict[str, list[float]], min_samples: int = 5) -> dict[str, float] | None:
+    """
+    Shared bandit-backed weight computation used by pillar_weights(),
+    duration_weights(), and title_variant_weights().
+
+    `buckets` is {arm_label: [composite_score_or_ctr, ...]} built by the
+    caller (one value per observed video/variant) and fed to
+    _build_bucket_bandit(). The returned weight for each arm with
+    >= min_samples observations is its posterior mean normalized against
+    the channel-pooled posterior mean (one combined arm over every
+    observation, so it's weighted by sample size rather than a naive
+    average-of-arm-means), clamped to [0.5, 2.0] — the same output contract
+    and clamp range the old raw-mean-ratio multiplier had, so callers
+    (duration_weights() / title_variant_weights() / pillar_weights()) don't
+    need to change, but it's now backed by a real Bayesian posterior instead
+    of a noisy small-sample mean ratio.
+
+    Arms with fewer than min_samples observations are omitted from the
+    returned dict (caller keeps its own neutral 1.0 default for those).
+    Returns None if *no* arm has reached min_samples yet.
+    """
+    if not any(len(v) >= min_samples for v in buckets.values()):
+        return None
+
+    bandit = _build_bucket_bandit(buckets)
+
+    total_successes = sum(bandit.alpha[a] - 1.0 for a in bandit.arms)
+    total_failures = sum(bandit.beta[a] - 1.0 for a in bandit.arms)
+    # Channel-pooled posterior: one combined arm over every observation, used
+    # as the normalization baseline (naturally sample-size-weighted, unlike
+    # a flat average of each arm's own posterior mean).
+    channel_alpha = 1.0 + total_successes
+    channel_beta = 1.0 + total_failures
+    pooled_mean = channel_alpha / (channel_alpha + channel_beta)
+    if pooled_mean <= 0:
+        return None
+
+    weights: dict[str, float] = {}
+    for label, rows in buckets.items():
+        if len(rows) >= min_samples:
+            ratio = bandit.posterior_mean(label) / pooled_mean
+            weights[label] = max(0.5, min(2.0, ratio))
+    return weights
+
+
+def pillar_bandit_posteriors(pillars: list[str] | None = None, analytics: dict | None = None) -> dict:
+    """
+    {pillar: {alpha, beta, n, mean}} — the raw Beta-Bernoulli posterior
+    behind pillar_weights(), exposed separately for the webui Analytics
+    page's bandit-posterior panel (shows the actual alpha/beta/sample-count
+    a viewer can sanity-check, not just the derived weight multiplier).
+    Every requested pillar is included even with zero samples (starts at
+    the uninformative Beta(1,1) prior, mean 0.5).
+    """
+    pillars = list(pillars or _PILLARS)
+    if analytics is None:
+        analytics = load_analytics()
+
+    from collections import defaultdict as _dd
+    by_pillar: dict[str, list[float]] = _dd(list)
+    for entry in (analytics or {}).values():
+        p = entry.get("pillar")
+        if p not in pillars:
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        by_pillar[p].append(score)
+
+    buckets = {p: by_pillar.get(p, []) for p in pillars}
+    return _build_bucket_bandit(buckets).posterior_stats()
+
+
 def duration_weights(duration_map: dict[str, int], analytics: dict | None = None) -> dict[str, float]:
     """
-    Per-duration-label weight multipliers derived from analytics_log.json, same
-    shape as generate_seo.py's _pillar_weights(): 0.5x-2.0x based on
-    averageViewDuration (watch time per view -- the metric that actually
-    matters for the "maximize watch time" strategy behind run.py's
-    DURATION_WEIGHTS), uniform 1.0 for any bucket with fewer than 5 samples.
+    Per-duration-label weight multipliers derived from analytics_log.json,
+    same shape as generate_seo.py's _pillar_weights(): 0.5x-2.0x, uniform
+    1.0 for any bucket with fewer than 5 samples. Now backed by the shared
+    Beta-Bernoulli Thompson Sampling bandit (_bandit_weights()) instead of a
+    raw mean-ratio, using composite_engagement_score() (watch-ratio-weighted)
+    rather than raw averageViewDuration alone.
 
     Each video's measured duration_secs is bucketed to its *nearest* label in
     duration_map (upload_log only stores the real ffprobe length, not which
@@ -267,34 +554,33 @@ def duration_weights(duration_map: dict[str, int], analytics: dict | None = None
     by_label: dict[str, list[float]] = _dd(list)
     for entry in analytics.values():
         secs = entry.get("duration_secs")
-        avd = entry.get("averageViewDuration")
-        if not secs or avd is None:
+        if not secs:
+            continue
+        score = composite_engagement_score(entry, duration_secs=secs)
+        if score is None:
             continue
         nearest = min(labels, key=lambda label: abs(duration_map[label] - secs))
-        by_label[nearest].append(float(avd))
+        by_label[nearest].append(score)
 
-    if not any(len(v) >= 5 for v in by_label.values()):
-        return default
-
-    all_avd = [v for rows in by_label.values() for v in rows]
-    channel_avg = sum(all_avd) / len(all_avd) if all_avd else 0
-    if channel_avg == 0:
+    bandit_weights = _bandit_weights(by_label, min_samples=5)
+    if bandit_weights is None:
         return default
 
     weights = dict(default)
-    for label, rows in by_label.items():
-        if len(rows) >= 5:
-            weights[label] = max(0.5, min(2.0, (sum(rows) / len(rows)) / channel_avg))
+    weights.update(bandit_weights)
     return weights
 
 
 def title_variant_weights(analytics: dict | None = None) -> dict[str, list[float]]:
     """
-    Per-pillar list of CTR-based weights for title_variants[i], same 0.5x-2.0x/
-    ≥5-samples pattern. Returns {pillar: [w_0, w_1, w_2, ...]} sized to however
-    many variant slots that pillar has seen chosen at least once -- callers
-    should pad/fall back to 1.0 for any index beyond what's returned (a variant
-    slot with zero observed picks has no performance data yet).
+    Per-pillar list of weights for title_variants[i], same 0.5x-2.0x/
+    >=5-samples pattern, now bandit-backed (see _bandit_weights()) using
+    composite_engagement_score() (falls back to CTR-only when that's all a
+    logged entry has, which is the common case for older rows). Returns
+    {pillar: [w_0, w_1, w_2, ...]} sized to however many variant slots that
+    pillar has seen chosen at least once -- callers should pad/fall back to
+    1.0 for any index beyond what's returned (a variant slot with zero
+    observed picks has no performance data yet).
     """
     if analytics is None:
         analytics = load_analytics()
@@ -306,25 +592,71 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, list[float
     for entry in analytics.values():
         pillar = entry.get("pillar")
         idx = entry.get("title_chosen_idx")
-        ctr = entry.get("videoThumbnailImpressionsClickRate")
-        if pillar and idx is not None and ctr is not None:
-            by_pillar_idx[pillar][int(idx)].append(float(ctr))
+        if not pillar or idx is None:
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        by_pillar_idx[pillar][int(idx)].append(score)
 
     result: dict[str, list[float]] = {}
     for pillar, idx_rows in by_pillar_idx.items():
-        all_ctrs = [c for rows in idx_rows.values() for c in rows]
-        if len(all_ctrs) < 5:
+        all_scores = [c for rows in idx_rows.values() for c in rows]
+        if len(all_scores) < 5:
             continue
-        channel_avg = sum(all_ctrs) / len(all_ctrs)
-        if channel_avg == 0:
-            continue
+        buckets = {str(idx): rows for idx, rows in idx_rows.items()}
+        bandit_weights = _bandit_weights(buckets, min_samples=5)
         max_idx = max(idx_rows.keys())
         weights = [1.0] * (max_idx + 1)
-        for idx, rows in idx_rows.items():
-            if len(rows) >= 5:
-                weights[idx] = max(0.5, min(2.0, (sum(rows) / len(rows)) / channel_avg))
+        if bandit_weights:
+            for idx_str, w in bandit_weights.items():
+                weights[int(idx_str)] = w
         result[pillar] = weights
     return result
+
+
+def pillar_weights(pillars: list[str] | None = None, analytics: dict | None = None) -> dict[str, float]:
+    """
+    Per-pillar weight multipliers (0.5x-2.0x), bandit-backed (see
+    _bandit_weights()) using composite_engagement_score(). This is the
+    analytics.py-native implementation behind generate_seo.py's
+    _pillar_weights() thin wrapper -- kept here so all three weighting
+    functions (this one, duration_weights(), title_variant_weights()) share
+    one binarization + posterior-ratio implementation instead of three
+    hand-rolled copies.
+
+    Note vs. the old generate_seo.py implementation: a pillar with *zero*
+    observed samples now stays at the neutral default of 1.0 rather than
+    being pulled down to the 0.5 floor (which was an artifact of the old
+    code always computing avgs[p]/channel_avg = 0/channel_avg for
+    no-data pillars, not an intentional penalty) -- an arm the bandit has
+    never seen shouldn't be treated as a *proven* underperformer.
+    """
+    pillars = list(pillars or _PILLARS)
+    default = {p: 1.0 for p in pillars}
+    if analytics is None:
+        analytics = load_analytics()
+    if not analytics:
+        return default
+
+    from collections import defaultdict as _dd
+    by_pillar: dict[str, list[float]] = _dd(list)
+    for entry in analytics.values():
+        p = entry.get("pillar")
+        if p not in pillars:
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        by_pillar[p].append(score)
+
+    bandit_weights = _bandit_weights(by_pillar, min_samples=5)
+    if bandit_weights is None:
+        return default
+
+    weights = dict(default)
+    weights.update(bandit_weights)
+    return weights
 
 
 def report(analytics: dict | None = None) -> None:
@@ -352,16 +684,75 @@ def report(analytics: dict | None = None) -> None:
     print()
 
 
-def swap_low_ctr_thumbnails(analytics: dict | None = None) -> None:
+# ── Two-proportion z-test (thumbnail A/B significance) ──────────────────────
+def two_proportion_ztest(
+    successes_a: float, trials_a: float, successes_b: float, trials_b: float,
+) -> tuple[float, float]:
     """
-    For videos 7-30 days old with CTR < 70% of channel average,
-    swap in an alternate thumbnail if one exists (thumb_*_alt.jpg).
+    Standard pooled two-proportion z-test, two-sided. Textbook formula (any
+    intro-stats reference), not adapted from any library:
+
+        p1 = x1/n1, p2 = x2/n2
+        p_pool = (x1+x2) / (n1+n2)
+        se = sqrt(p_pool * (1-p_pool) * (1/n1 + 1/n2))
+        z  = (p1 - p2) / se
+        p_value = 2 * P(Z > |z|)   under the standard normal (scipy.stats.norm)
+
+    Returns (z, p_value). Degenerate inputs (zero trials, or a pooled
+    proportion of exactly 0 or 1, which makes the standard error zero) return
+    (0.0, 1.0) -- "not significant" -- rather than raising, since this feeds
+    an automated swap decision that must never crash the analytics sync.
     """
+    from scipy.stats import norm
+
+    if trials_a <= 0 or trials_b <= 0:
+        return 0.0, 1.0
+    p1 = successes_a / trials_a
+    p2 = successes_b / trials_b
+    p_pool = (successes_a + successes_b) / (trials_a + trials_b)
+    if p_pool <= 0 or p_pool >= 1:
+        return 0.0, 1.0
+    se = math.sqrt(p_pool * (1 - p_pool) * (1 / trials_a + 1 / trials_b))
+    if se == 0:
+        return 0.0, 1.0
+    z = (p1 - p2) / se
+    p_value = 2 * norm.sf(abs(z))
+    return z, p_value
+
+
+def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 0.05) -> None:
+    """
+    For videos 7-30 days old whose CTR is *significantly* below the rest of
+    the channel (two-proportion z-test, p < p_threshold — not just below an
+    arbitrary ratio like the old CTR < 70%-of-average heuristic), swap in an
+    alternate thumbnail if one exists (thumb_*_alt.jpg).
+
+    The test compares this video's estimated clicks/impressions against the
+    pooled clicks/impressions of every *other* currently-eligible, not-yet-
+    swapped video on the channel (its own two-sided z-test per video, since
+    there's no pre-existing "B" impression/click data for the alt thumbnail
+    to compare against -- it hasn't been shown yet). "Clicks" are estimated
+    as ctr * impressions (impressions is the correct denominator CTR is
+    itself defined over, so it's also the correct trial count for the
+    proportion test). A swap only fires when the video's CTR is both
+    significantly different (p < p_threshold) *and* below the pooled
+    average -- a significantly *higher*-than-average video is left alone.
+
+    On a swap, `ab_variant` (randomly assigned "A"/"B" the first time a video
+    is synced -- see sync_analytics()) is toggled, giving the channel a
+    lightweight randomized initial-variant record instead of every video
+    starting from the same fixed "primary" thumbnail baseline.
+    """
+    # Only persist z/p diagnostics + swap state to disk when we loaded the
+    # log ourselves (the normal sync-pipeline / webui "Sync now" path) --
+    # callers that pass an explicit in-memory `analytics` dict (e.g. tests)
+    # get their dict mutated in place but no disk write unless a swap
+    # actually happened, matching the pre-existing behavior for that case.
+    _own_load = analytics is None
     if analytics is None:
         if not os.path.exists(ANALYTICS_LOG):
             return
-        with open(ANALYTICS_LOG) as f:
-            analytics = json.load(f)
+        analytics = load_analytics()
 
     uploads: list[dict] = []
     if os.path.exists(UPLOAD_LOG):
@@ -369,27 +760,31 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None) -> None:
             uploads = json.load(f)
     vid_to_entry = {e["video_id"]: e for e in uploads if e.get("video_id")}
 
-    all_ctrs = [
-        float(d.get("videoThumbnailImpressionsClickRate"))
-        for d in analytics.values()
-        if d.get("videoThumbnailImpressionsClickRate") is not None
-        and not d.get("thumb_swapped")
-    ]
-    if not all_ctrs:
+    # Pool of (vid, ctr, impressions) for every not-yet-swapped video with
+    # both CTR and impressions data -- this feeds each video's z-test
+    # baseline (pool minus itself).
+    pool: list[tuple[str, float, float]] = []
+    for vid, d in analytics.items():
+        if d.get("thumb_swapped"):
+            continue
+        m = latest_metrics(d)
+        ctr = m.get("videoThumbnailImpressionsClickRate")
+        impressions = m.get("videoThumbnailImpressions")
+        if ctr is None or not impressions:
+            continue
+        pool.append((vid, float(ctr), float(impressions)))
+
+    if len(pool) < 2:
+        print("[analytics] thumbnail swaps: 0 (not enough videos with CTR+impressions data)")
         return
-    channel_avg = sum(all_ctrs) / len(all_ctrs)
 
     now     = datetime.datetime.now(datetime.timezone.utc)
     min_age = now - datetime.timedelta(days=7)
     max_age = now - datetime.timedelta(days=30)
 
     swapped = 0
-    for vid, data in analytics.items():
-        if data.get("thumb_swapped"):
-            continue
-        ctr = data.get("videoThumbnailImpressionsClickRate")
-        if ctr is None or float(ctr) >= channel_avg * 0.7:
-            continue
+    for vid, ctr, impressions in pool:
+        data = analytics[vid]
         upload_date = data.get("upload_date", "")
         try:
             udt = datetime.datetime.fromisoformat(upload_date).replace(tzinfo=datetime.timezone.utc)
@@ -397,6 +792,21 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None) -> None:
             continue
         if not (max_age <= udt <= min_age):
             continue
+
+        others = [(c, i) for v, c, i in pool if v != vid]
+        if not others:
+            continue
+        trials_b = sum(i for _, i in others)
+        successes_b = sum(c * i for c, i in others)
+        pooled_avg_ctr = successes_b / trials_b if trials_b else 0.0
+
+        successes_a = ctr * impressions
+        z, p_value = two_proportion_ztest(successes_a, impressions, successes_b, trials_b)
+        data["thumb_ab_z"] = z
+        data["thumb_ab_p"] = p_value
+
+        if p_value >= p_threshold or ctr >= pooled_avg_ctr:
+            continue  # not significantly worse than the rest of the channel
 
         # Find alternate thumbnail — validate path stays within assets/.
         # Derived from the exact thumbnail filename logged at upload time
@@ -433,15 +843,186 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None) -> None:
             ).execute()
             data["thumb_swapped"] = True
             data["thumb_swapped_at"] = now.isoformat()
+            data["ab_variant"] = "B" if data.get("ab_variant") == "A" else "A"
             swapped += 1
-            print(f"  [thumb-swap] {vid}: CTR={float(ctr):.2%} < {channel_avg:.2%} avg → swapped")
+            print(f"  [thumb-swap] {vid}: CTR={ctr:.2%} vs pool avg={pooled_avg_ctr:.2%} "
+                  f"(p={p_value:.4f}) → swapped")
         except Exception as ex:
             print(f"  [thumb-swap] {vid}: failed — {ex}")
 
-    if swapped:
+    if _own_load or swapped:
         with open(ANALYTICS_LOG, "w") as f:
             json.dump(analytics, f, indent=2, ensure_ascii=False)
     print(f"[analytics] thumbnail swaps: {swapped}")
+
+
+# ── CUSUM change-point detection (viral-moment flagging) ────────────────────
+def cusum_change_points(
+    values: list[float], threshold: float | None = None, drift: float | None = None,
+) -> list[int]:
+    """
+    Two-sided CUSUM (cumulative sum control chart, Page's test) change-point
+    detector over a numeric series. Textbook algorithm (E.S. Page, 1954 --
+    standard in statistical process control; this implementation is
+    from-scratch, not adapted from any repo):
+
+        s_pos[i] = max(0, s_pos[i-1] + (x_i - mean0) - drift)
+        s_neg[i] = min(0, s_neg[i-1] + (x_i - mean0) + drift)
+
+    A change point is flagged whenever s_pos exceeds +threshold or s_neg
+    drops below -threshold; both accumulators reset to 0 and the running
+    reference mean re-baselines to the flagged value, so the detector can
+    catch multiple shifts in one series instead of triggering once and going
+    silent.
+
+    If `threshold`/`drift` aren't given, they're derived from the series'
+    own standard deviation using the standard SPC rule of thumb (Montgomery,
+    "Introduction to Statistical Quality Control"): drift = 0.5*sigma,
+    threshold = 5*sigma -- tuned to detect roughly a 1-sigma sustained shift
+    while tolerating normal day-to-day noise.
+
+    Returns a list of indices (into `values`) where a change point was
+    flagged. Empty list for series shorter than 2 points or with ~zero
+    variance (nothing to detect).
+    """
+    n = len(values)
+    if n < 2:
+        return []
+
+    if threshold is None or drift is None:
+        try:
+            sigma = statistics.stdev(values)
+        except statistics.StatisticsError:
+            sigma = 0.0
+        if sigma == 0:
+            return []
+        if drift is None:
+            drift = 0.5 * sigma
+        if threshold is None:
+            threshold = 5.0 * sigma
+
+    mean0 = values[0]
+    s_pos = 0.0
+    s_neg = 0.0
+    change_points: list[int] = []
+    for i in range(1, n):
+        diff = values[i] - mean0
+        s_pos = max(0.0, s_pos + diff - drift)
+        s_neg = min(0.0, s_neg + diff + drift)
+        if s_pos > threshold or -s_neg > threshold:
+            change_points.append(i)
+            s_pos = 0.0
+            s_neg = 0.0
+            mean0 = values[i]
+    return change_points
+
+
+def _view_velocity(history: list[dict]) -> list[dict]:
+    """[{date, velocity}] daily views-gained-per-day between consecutive
+    snapshots of a video's (date, views)-sorted history. Guards against
+    same-day/duplicate-date snapshots (skipped, would divide by ~0 days)."""
+    snaps = sorted(
+        (h for h in history if h.get("views") is not None and h.get("date")),
+        key=lambda h: h["date"],
+    )
+    out = []
+    for prev, cur in zip(snaps, snaps[1:]):
+        try:
+            d0 = datetime.date.fromisoformat(prev["date"])
+            d1 = datetime.date.fromisoformat(cur["date"])
+        except ValueError:
+            continue
+        days = (d1 - d0).days
+        if days <= 0:
+            continue
+        velocity = (float(cur["views"]) - float(prev["views"])) / days
+        out.append({"date": cur["date"], "velocity": velocity})
+    return out
+
+
+def detect_viral_moment(history: list[dict]) -> dict | None:
+    """
+    Run CUSUM change-point detection over a video's view-velocity series
+    (derived from its longitudinal history — see _view_velocity()) to flag a
+    "viral moment": a sustained shift in how fast the video is gaining
+    views. Returns None if there's not enough history (< 4 snapshots, i.e.
+    < 3 velocity points) to say anything meaningful, or if no change point
+    is detected. Otherwise:
+        {"flagged": True, "change_point_date": str, "direction": "up"|"down",
+         "velocity_before": float, "velocity_after": float}
+    using the *last* detected change point (most recent shift).
+    """
+    velocities = _view_velocity(history)
+    if len(velocities) < 3:
+        return None
+
+    series = [v["velocity"] for v in velocities]
+    change_points = cusum_change_points(series)
+    if not change_points:
+        return None
+
+    idx = change_points[-1]
+    before = series[:idx]
+    after = series[idx:]
+    v_before = sum(before) / len(before) if before else series[idx]
+    v_after = sum(after) / len(after) if after else series[idx]
+    return {
+        "flagged": True,
+        "change_point_date": velocities[idx]["date"],
+        "direction": "up" if v_after >= v_before else "down",
+        "velocity_before": v_before,
+        "velocity_after": v_after,
+    }
+
+
+# ── Forecasting (simple exponential smoothing on view-velocity) ─────────────
+def forecast_views(
+    history: list[dict], horizon_days: tuple[int, ...] = (7, 30), min_points: int = 4,
+) -> dict | None:
+    """
+    Project a video's cumulative view count `horizon_days` ahead using
+    simple exponential smoothing (statsmodels
+    `statsmodels.tsa.holtwinters.SimpleExpSmoothing`) over its view-velocity
+    series (views gained per day between consecutive longitudinal
+    snapshots — see _view_velocity()). SES has no trend component, so it
+    forecasts a smoothed *constant* future daily velocity; that estimate is
+    then projected forward linearly (current_views + velocity * days) for
+    each requested horizon.
+
+    Guards: needs at least `min_points` snapshots (fewer than that gives too
+    few velocity observations for SES to fit anything meaningful) and
+    statsmodels/scipy must be importable and the fit must succeed — returns
+    None rather than raising on any failure, since forecasting is a
+    dashboard nice-to-have that must never break the analytics page or the
+    sync pipeline.
+    """
+    snaps = sorted(
+        (h for h in history if h.get("views") is not None and h.get("date")),
+        key=lambda h: h["date"],
+    )
+    if len(snaps) < min_points:
+        return None
+
+    velocities = _view_velocity(snaps)
+    if len(velocities) < max(2, min_points - 1):
+        return None
+
+    try:
+        from statsmodels.tsa.holtwinters import SimpleExpSmoothing
+
+        series = [v["velocity"] for v in velocities]
+        model = SimpleExpSmoothing(series, initialization_method="estimated").fit()
+        next_velocity = max(0.0, float(model.forecast(1)[0]))
+        current_views = float(snaps[-1]["views"])
+        return {
+            "current_views": current_views,
+            "daily_velocity_estimate": next_velocity,
+            "forecast": {
+                f"{h}d": current_views + next_velocity * h for h in horizon_days
+            },
+        }
+    except Exception:
+        return None
 
 
 def main() -> None:

@@ -21,6 +21,7 @@ import re
 ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_FILE = os.path.join(ROOT, "assets", "trend_cache.json")
 CACHE_TTL  = 6 * 3600   # seconds
+MAX_HISTORY = 500       # cap on stored snapshots -- oldest trimmed first
 
 try:
     from dotenv import load_dotenv
@@ -45,6 +46,97 @@ def _season() -> str:
     if month in (6, 7, 8):  return "summer"
     if month in (9, 10, 11): return "autumn"
     return "winter"
+
+def _load_history() -> list[dict]:
+    """
+    Load assets/trend_cache.json as an append-only list of dated snapshots,
+    oldest first. Back-compat: an older single-snapshot dict on disk (the
+    pre-history overwrite format) is wrapped into a one-element list rather
+    than discarded. Returns [] if missing/unreadable.
+    """
+    if not os.path.exists(CACHE_FILE):
+        return []
+    try:
+        with open(CACHE_FILE) as f:
+            raw = json.load(f)
+    except Exception:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return [raw]
+    return []
+
+
+def _save_history(history: list[dict]) -> None:
+    os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
+    with open(CACHE_FILE, "w") as f:
+        json.dump(history[-MAX_HISTORY:], f, indent=2, ensure_ascii=False)
+
+
+def compute_trend_deltas(history: list[dict] | None = None) -> dict | None:
+    """
+    Compare the two most recent trend snapshots and return competitor
+    view-count deltas, so competitor performance can be tracked over time
+    instead of only ever seeing the latest overwritten snapshot.
+
+    Matches competitor videos between snapshots by exact title (their video
+    IDs aren't tracked, since fetch_yt_trending() only keeps title/channel/
+    views/tags/duration — title is the best available join key across
+    independent search-result snapshots). Videos that only appear in one of
+    the two snapshots are skipped from per-video deltas (nothing to diff)
+    but still count toward each snapshot's total.
+
+    Returns None if fewer than 2 snapshots exist yet. Otherwise:
+        {"date_prev", "date_latest",
+         "total_views_prev", "total_views_latest",
+         "delta_total", "delta_pct",
+         "per_video": [{"title", "prev_views", "latest_views", "delta"}, ...]}
+        (per_video sorted by largest positive delta first)
+    """
+    if history is None:
+        history = _load_history()
+    if len(history) < 2:
+        return None
+
+    prev, latest = history[-2], history[-1]
+
+    def _video_map(snap: dict) -> dict[str, int]:
+        return {
+            v.get("title", ""): int(v.get("views", 0) or 0)
+            for v in snap.get("yt_videos", [])
+            if v.get("title")
+        }
+
+    prev_map = _video_map(prev)
+    latest_map = _video_map(latest)
+
+    per_video = []
+    for title, latest_views in latest_map.items():
+        if title in prev_map:
+            per_video.append({
+                "title": title,
+                "prev_views": prev_map[title],
+                "latest_views": latest_views,
+                "delta": latest_views - prev_map[title],
+            })
+    per_video.sort(key=lambda r: -r["delta"])
+
+    total_prev = sum(prev_map.values())
+    total_latest = sum(latest_map.values())
+    delta_total = total_latest - total_prev
+    delta_pct = (delta_total / total_prev) if total_prev else None
+
+    return {
+        "date_prev":          prev.get("fetched_at", "")[:10],
+        "date_latest":        latest.get("fetched_at", "")[:10],
+        "total_views_prev":   total_prev,
+        "total_views_latest": total_latest,
+        "delta_total":        delta_total,
+        "delta_pct":          delta_pct,
+        "per_video":          per_video,
+    }
+
 
 def _seasonal_keywords() -> list[str]:
     m = datetime.datetime.now(datetime.timezone.utc).month
@@ -378,22 +470,32 @@ def _extract_music_hints(snapshot: dict) -> dict:
 
 def get_trend_snapshot(force_refresh: bool = False) -> dict:
     """
-    Returns a TrendSnapshot dict, cached for CACHE_TTL seconds.
+    Returns a TrendSnapshot dict (the *latest* snapshot), backed by an
+    append-only history of dated snapshots in assets/trend_cache.json
+    (see _load_history()/_save_history()/compute_trend_deltas()) so
+    competitor video performance can be tracked over time instead of only
+    ever seeing whatever the most recent run overwrote. Still cached for
+    CACHE_TTL seconds -- a fresh-enough call just returns the latest
+    snapshot without appending a new one.
 
     Keys:
       trending_titles   list[str]   — top-performing lofi titles (past 14 days)
       trending_tags     list[str]   — aggregated popular tags
+      yt_videos         list[dict]  — full {title, channel, views, tags, duration}
+                                      rows behind trending_titles (kept for
+                                      compute_trend_deltas() view-count tracking)
       gemini_insight    str|None    — Gemini search grounding summary
       groq_analysis     str|None    — Groq strategic analysis
       season            str         — current season
       seasonal_keywords list[str]   — month-specific search spikes
       fetched_at        str         — ISO timestamp
     """
-    # Return cached snapshot if fresh enough
-    if not force_refresh and os.path.exists(CACHE_FILE):
+    history = _load_history()
+
+    # Return latest cached snapshot if fresh enough
+    if not force_refresh and history:
+        cached = history[-1]
         try:
-            with open(CACHE_FILE) as f:
-                cached = json.load(f)
             fetched_raw = cached.get("fetched_at", "2000-01-01T00:00:00+00:00")
             fetched_dt  = datetime.datetime.fromisoformat(fetched_raw)
             if fetched_dt.tzinfo is None:
@@ -461,6 +563,7 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
         "trending_titles":    trending_titles,
         "trending_tags":      trending_tags,
         "trending_duration":  dur_dist,
+        "yt_videos":          yt_videos,      # full rows incl. view counts -- see compute_trend_deltas()
         "yt_dlp_videos":      yt_dlp_videos,
         "gemini_insight":     gemini_insight,
         "groq_analysis":      groq_analysis,
@@ -472,11 +575,12 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
     snapshot["suggested_theme"] = suggest_thumbnail_theme(snapshot)
     snapshot["music_hints"]     = _extract_music_hints(snapshot)
 
-    # Cache to disk
-    os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-    with open(CACHE_FILE, "w") as f:
-        json.dump(snapshot, f, indent=2, ensure_ascii=False)
-    print(f"  [Trends] snapshot saved ({len(trending_titles)} videos, season={season})")
+    # Append to history on disk (not overwrite) so competitor performance
+    # can be tracked snapshot-over-snapshot -- see compute_trend_deltas().
+    history.append(snapshot)
+    _save_history(history)
+    print(f"  [Trends] snapshot saved ({len(trending_titles)} videos, season={season}, "
+          f"history={len(history)})")
     return snapshot
 
 

@@ -7,6 +7,7 @@ Design system in theme.py, spec in DESIGN.md. Run via:  python webui.py
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -685,6 +686,7 @@ def view_analytics(root) -> None:
 
         data_dict = analytics_mod.load_analytics()
         result = analytics_mod.compute_pillar_stats(data_dict)
+        history_by_vid = analytics_mod.load_analytics_history()
 
         def do_sync() -> None:
             try:
@@ -752,6 +754,116 @@ def view_analytics(root) -> None:
                                 .classes(theme.SUB)
                             ui.label(f"n={row['n']}").classes(theme.SUB)
 
+        # ── Bandit arm posteriors ───────────────────────────────────────────
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Pillar bandit posteriors").classes(theme.H)
+            ui.label("Beta-Bernoulli Thompson Sampling posterior behind the pillar weighting "
+                     "above (scripts/bandit.py) — alpha/beta accumulate composite-engagement "
+                     "successes/failures (median-split) per pillar; mean is the current "
+                     "posterior estimate of that pillar's win probability. This is what "
+                     "generate_seo.py's pick_concept_from_pool() samples from.")\
+                .classes(theme.SUB)
+            posteriors = analytics_mod.pillar_bandit_posteriors(analytics=data_dict)
+            with ui.column().classes("w-full gap-1 mt-2"):
+                for pillar, st in sorted(posteriors.items(), key=lambda kv: -kv[1]["mean"]):
+                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                            "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                        ui.label(pillar).classes("text-sm font-medium").style("min-width:120px")
+                        ui.linear_progress(value=st["mean"], show_value=False)\
+                            .classes("grow").props("rounded color=primary")
+                        ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm")\
+                            .style("min-width:56px")
+                        ui.label(f"α={st['alpha']:.0f} β={st['beta']:.0f}")\
+                            .classes(theme.SUB).style("min-width:90px")
+                        ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
+
+        # ── Cohort growth curves + forecast + viral-moment flags ────────────
+        _TOP_N = 6
+        _cohort_candidates = []
+        for vid, d in data_dict.items():
+            m = analytics_mod.latest_metrics(d)
+            hist = history_by_vid.get(vid, [])
+            if not hist:
+                continue
+            _cohort_candidates.append((vid, d, hist, float(m.get("views") or 0)))
+        _cohort_candidates.sort(key=lambda t: -t[3])
+        top_videos = _cohort_candidates[:_TOP_N]
+
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Growth curves & forecasts").classes(theme.H)
+            ui.label("Cumulative views by days-since-upload (cohort-aligned so videos "
+                     "uploaded on different dates compare fairly), for the top "
+                     f"{_TOP_N} tracked videos by current views. Forecast projects 7/30-day "
+                     "view counts with simple exponential smoothing over view-velocity "
+                     "(needs at least 4 synced snapshots).").classes(theme.SUB)
+
+            if not top_videos:
+                ui.label("No longitudinal history yet — needs at least one synced snapshot "
+                         "per video.").classes(theme.SUB + " mt-3")
+            else:
+                series = []
+                for vid, d, hist, _ in top_videos:
+                    upload_date = d.get("upload_date")
+                    title = d.get("title") or vid
+                    points = []
+                    try:
+                        d0 = datetime.date.fromisoformat(upload_date) if upload_date else None
+                    except ValueError:
+                        d0 = None
+                    for snap in hist:
+                        sdate, sviews = snap.get("date"), snap.get("views")
+                        if not sdate or sviews is None or d0 is None:
+                            continue
+                        try:
+                            day_offset = (datetime.date.fromisoformat(sdate) - d0).days
+                        except ValueError:
+                            continue
+                        points.append([day_offset, sviews])
+                    points.sort(key=lambda p: p[0])
+                    if points:
+                        series.append({"name": title[:40], "type": "line", "showSymbol": True,
+                                       "data": points})
+
+                ui.echart({
+                    "grid": {"left": 60, "right": 16, "top": 40, "bottom": 40},
+                    "legend": {"top": 0, "textStyle": {"color": "#a89db5", "fontSize": 10}},
+                    "tooltip": {"trigger": "axis"},
+                    "xAxis": {"type": "value", "name": "days since upload",
+                              "axisLabel": {"color": "#a89db5"}},
+                    "yAxis": {"type": "value", "name": "cumulative views",
+                              "axisLabel": {"color": "#a89db5"}},
+                    "series": series,
+                }).classes("w-full mt-1").style("height:280px")
+
+                with ui.column().classes("w-full gap-1 mt-3"):
+                    ui.label("Forecast (7d / 30d) & viral-moment flags").classes(
+                        "text-sm font-medium")
+                    for vid, d, hist, current_views in top_videos:
+                        title = d.get("title") or vid
+                        forecast = analytics_mod.forecast_views(hist)
+                        viral = analytics_mod.detect_viral_moment(hist)
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.label(title[:40]).classes("text-sm").style(
+                                "min-width:200px; flex:1; overflow:hidden; "
+                                "text-overflow:ellipsis; white-space:nowrap")
+                            ui.label(f"now {stats.fmt_count(int(current_views))}")\
+                                .classes(theme.SUB).style("min-width:90px")
+                            if forecast:
+                                ui.label(f"7d ~{stats.fmt_count(int(forecast['forecast']['7d']))}")\
+                                    .classes(theme.SUB).style("min-width:90px")
+                                ui.label(f"30d ~{stats.fmt_count(int(forecast['forecast']['30d']))}")\
+                                    .classes(theme.SUB).style("min-width:90px")
+                            else:
+                                ui.label("forecast: needs more history")\
+                                    .classes(theme.SUB).style("min-width:180px")
+                            if viral and viral.get("flagged"):
+                                color = "#6fcaa8" if viral["direction"] == "up" else "#e8849a"
+                                icon = "trending_up" if viral["direction"] == "up" else "trending_down"
+                                ui.icon(icon).style(f"color:{color}")
+                                ui.label(f"viral moment {viral['change_point_date']}")\
+                                    .classes("text-sm").style(f"color:{color}")
+
         if data_dict:
             with ui.element("div").classes("studio-card w-full"):
                 ui.label("Per-video performance").classes(theme.H)
@@ -767,13 +879,14 @@ def view_analytics(root) -> None:
                 rows = []
                 for vid, d in data_dict.items():
                     eng = engagement.get(vid, {})
+                    m = analytics_mod.latest_metrics(d)
                     rows.append({
                         "video_id": vid,
                         "title": d.get("title") or vid,
                         "pillar": d.get("pillar") or "—",
-                        "ctr": d.get("videoThumbnailImpressionsClickRate", 0) or 0,
-                        "views": int(d.get("views", 0) or 0),
-                        "watch_min": round(d.get("averageViewDuration", 0) or 0) // 60,
+                        "ctr": m.get("videoThumbnailImpressionsClickRate", 0) or 0,
+                        "views": int(m.get("views", 0) or 0),
+                        "watch_min": round(m.get("averageViewDuration", 0) or 0) // 60,
                         "likes": eng.get("likes"),
                         "comments": eng.get("comments"),
                     })
@@ -822,12 +935,19 @@ def view_analytics(root) -> None:
                                 .classes("text-sm").style("min-width:70px")
 
         swapped = [{"video_id": vid, **d} for vid, d in data_dict.items() if d.get("thumb_swapped")]
+        ab_tested = sorted(
+            ([{"video_id": vid, **d} for vid, d in data_dict.items()
+              if d.get("thumb_ab_p") is not None]),
+            key=lambda s: s["thumb_ab_p"],
+        )
         with ui.element("div").classes("studio-card w-full"):
             ui.label("Thumbnail A/B testing").classes(theme.H)
             ui.label("Runs automatically with the daily analytics sync (lofi-analytics.timer): "
-                     "any video 7-30 days old with CTR below 70% of the channel average gets "
-                     "its thumbnail swapped to the alt variant generated alongside it during "
-                     "render.").classes(theme.SUB)
+                     "a video 7-30 days old only gets its thumbnail swapped to the alt variant "
+                     "when a two-proportion z-test finds its CTR significantly below the rest "
+                     "of the channel (p < 0.05) — not just below a flat ratio threshold. Each "
+                     "video also carries a randomized ab_variant (\"A\"/\"B\") assigned at first "
+                     "sync, toggled on swap.").classes(theme.SUB)
             if not swapped:
                 ui.label("No swaps yet.").classes(theme.SUB + " mt-2")
             else:
@@ -840,6 +960,36 @@ def view_analytics(root) -> None:
                                 .style("min-width:200px")
                             ui.label(f"swapped {s.get('thumb_swapped_at', '')[:10]}")\
                                 .classes(theme.SUB)
+
+            if ab_tested:
+                ui.label("Significance panel (most recent z-test per video)").classes(
+                    "text-sm font-medium mt-4")
+                with ui.column().classes("w-full gap-1 mt-1"):
+                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                            "padding:4px; opacity:0.6"):
+                        ui.label("Title").classes(theme.SUB).style("min-width:200px; flex:1")
+                        ui.label("CTR").classes(theme.SUB).style("min-width:60px")
+                        ui.label("z").classes(theme.SUB).style("min-width:70px")
+                        ui.label("p-value").classes(theme.SUB).style("min-width:80px")
+                        ui.label("variant").classes(theme.SUB).style("min-width:60px")
+                    for s in ab_tested:
+                        m = analytics_mod.latest_metrics(s)
+                        p_value = s["thumb_ab_p"]
+                        significant = p_value < 0.05
+                        color = "#e8849a" if significant else "#a89db5"
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.label(s.get("title", s["video_id"])[:40]).classes("text-sm")\
+                                .style("min-width:200px; flex:1; overflow:hidden; "
+                                       "text-overflow:ellipsis; white-space:nowrap")
+                            ui.label(f"{(m.get('videoThumbnailImpressionsClickRate') or 0) * 100:.1f}%")\
+                                .classes("text-sm").style("min-width:60px")
+                            ui.label(f"{s.get('thumb_ab_z', 0):.2f}").classes("text-sm")\
+                                .style("min-width:70px")
+                            ui.label(f"{p_value:.4f}" + (" *" if significant else ""))\
+                                .classes("text-sm").style(f"color:{color}; min-width:80px")
+                            ui.label(s.get("ab_variant") or "—").classes(theme.SUB)\
+                                .style("min-width:60px")
 
 
 def view_automation(root) -> None:

@@ -20,3 +20,7 @@ yt-dlp>=2026.3
 
 # Web control panel (webui.py)
 nicegui>=3.0
+
+# Analytics forecasting (scripts/analytics.py: simple exponential smoothing
+# over view-velocity for the 7/30-day view-count forecast)
+statsmodels>=0.14

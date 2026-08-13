@@ -1053,34 +1053,23 @@ Output ONLY the title — no quotes, no explanation."""
 
 def _pillar_weights() -> dict[str, float]:
     """
-    Per-pillar CTR weights derived from analytics_log.json.
-    High-CTR pillars get up to 2× weight; low performers get 0.5×.
+    Per-pillar weight multipliers derived from analytics_log.json.
+    High-performing pillars get up to 2x weight; low performers get 0.5x.
     Falls back to uniform 1.0 if fewer than 5 samples per pillar exist.
+
+    Thin wrapper kept for pick_concept_from_pool()'s call site -- the real
+    implementation is scripts/analytics.py's pillar_weights(), which is now
+    backed by a Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py)
+    over a composite engagement score instead of a raw CTR-ratio multiplier,
+    and shares its binarization/posterior-ratio logic with
+    duration_weights()/title_variant_weights() instead of each having its
+    own hand-rolled copy.
     """
     _PILLARS = ["temporal", "activity", "emotional", "aesthetic", "cross_genre"]
     default: dict[str, float] = {p: 1.0 for p in _PILLARS}
     try:
-        log_path = os.path.join(ASSETS_DIR, "analytics_log.json")
-        if not os.path.exists(log_path):
-            return default
-        with open(log_path) as _f:
-            data: dict = json.load(_f)
-        from collections import defaultdict as _dd
-        by_pillar: dict[str, list[float]] = _dd(list)
-        for entry in data.values():
-            p   = entry.get("pillar")
-            ctr = entry.get("videoThumbnailImpressionsClickRate")
-            if p in _PILLARS and ctr is not None:
-                by_pillar[p].append(float(ctr))
-        if not any(len(v) >= 5 for v in by_pillar.values()):
-            return default
-        avgs = {p: (sum(v) / len(v)) if v else 0.0 for p in _PILLARS
-                for v in [by_pillar.get(p, [])]}
-        all_ctrs = [c for v in by_pillar.values() for c in v]
-        channel_avg = sum(all_ctrs) / max(1, len(all_ctrs))
-        if channel_avg == 0:
-            return default
-        return {p: max(0.5, min(2.0, avgs[p] / channel_avg)) for p in _PILLARS}
+        from scripts.analytics import pillar_weights as _pillar_weights_impl
+        return _pillar_weights_impl(_PILLARS)
     except Exception:
         return default
 

@@ -102,9 +102,15 @@ def test_swap_thumbnails_finds_alt_file_via_logged_thumb_file(tmp_path, monkeypa
 
     old_date = (datetime.datetime.now(datetime.timezone.utc)
                 - datetime.timedelta(days=10)).strftime("%Y-%m-%d")
+    # Large, well-separated impression counts so the two-proportion z-test
+    # (which replaced the old flat CTR<70%-of-average heuristic) reaches
+    # significance (p < 0.05) -- this is deliberately an extreme CTR gap at
+    # high volume, not a borderline case.
     fake_analytics = {
-        "dQw4w9WgXcQ": {"videoThumbnailImpressionsClickRate": 0.01, "upload_date": old_date},
-        "other_vid":   {"videoThumbnailImpressionsClickRate": 0.05, "upload_date": old_date},
+        "dQw4w9WgXcQ": {"videoThumbnailImpressionsClickRate": 0.01,
+                         "videoThumbnailImpressions": 5000, "upload_date": old_date},
+        "other_vid":   {"videoThumbnailImpressionsClickRate": 0.05,
+                         "videoThumbnailImpressions": 5000, "upload_date": old_date},
     }
 
     analytics_mod.swap_low_ctr_thumbnails(fake_analytics)
@@ -139,8 +145,10 @@ def test_swap_thumbnails_skips_video_with_no_alt_file(tmp_path, monkeypatch, cap
     old_date = (datetime.datetime.now(datetime.timezone.utc)
                 - datetime.timedelta(days=10)).strftime("%Y-%m-%d")
     fake_analytics = {
-        "noAltVideoId": {"videoThumbnailImpressionsClickRate": 0.01, "upload_date": old_date},
-        "other_vid":    {"videoThumbnailImpressionsClickRate": 0.05, "upload_date": old_date},
+        "noAltVideoId": {"videoThumbnailImpressionsClickRate": 0.01,
+                          "videoThumbnailImpressions": 5000, "upload_date": old_date},
+        "other_vid":    {"videoThumbnailImpressionsClickRate": 0.05,
+                          "videoThumbnailImpressions": 5000, "upload_date": old_date},
     }
 
     analytics_mod.swap_low_ctr_thumbnails(fake_analytics)
