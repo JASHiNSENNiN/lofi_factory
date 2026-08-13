@@ -356,6 +356,59 @@ def compute_pillar_stats(analytics: dict) -> dict:
     return {"by_pillar": rows_out, "channel_avg_ctr": channel_avg, "n_total": len(all_ctrs)}
 
 
+def playlist_stats(analytics: dict, env: dict | None = None) -> list[dict]:
+    """
+    Aggregate the same per-video CTR/views/watch-time data compute_pillar_stats()
+    uses, but grouped by the playlist each video would resolve to via
+    scripts/playlist_curation.py's pillar -> env-var -> playlist-ID mapping
+    (resolve_playlist_id) rather than by raw pillar name. Reuses that module's
+    mapping logic instead of re-deriving which env var backs which pillar --
+    see its docstring for the full priority order (pillar-specific env var,
+    then the legacy duration-based fallback, then unassigned).
+
+    Returns [{"playlist_id", "pillars", "avg_ctr", "avg_views",
+              "avg_watch_min", "n"}, ...] sorted by avg_views desc. Videos
+    that don't resolve to any configured playlist ID are grouped under
+    playlist_id=None ("Unassigned").
+
+    `env` defaults to os.environ; pass a plain dict in tests instead of
+    mutating process environment (same convention as resolve_playlist_id).
+    """
+    from collections import defaultdict
+
+    from scripts.playlist_curation import resolve_playlist_id
+
+    by_playlist: dict[str | None, list] = defaultdict(list)
+    pillars_seen: dict[str | None, set] = defaultdict(set)
+
+    for data in analytics.values():
+        m = latest_metrics(data)
+        ctr = m.get("videoThumbnailImpressionsClickRate")
+        if ctr is None:
+            continue
+        wt = m.get("estimatedMinutesWatched")
+        v = m.get("views")
+        pillar = data.get("pillar") or "unknown"
+        seo_like = {"pillar": pillar, "duration": data.get("duration") or ""}
+        playlist_id = resolve_playlist_id(seo_like, env)
+        by_playlist[playlist_id].append((float(ctr), float(wt or 0), float(v or 0)))
+        pillars_seen[playlist_id].add(pillar)
+
+    rows_out = []
+    for playlist_id, rows in by_playlist.items():
+        avg_ctr = sum(c for c, _, __ in rows) / len(rows)
+        avg_views = sum(v for _, __, v in rows) / len(rows)
+        avg_wt = sum(w for _, w, __ in rows) / len(rows)
+        rows_out.append({
+            "playlist_id": playlist_id,
+            "pillars": sorted(pillars_seen[playlist_id]),
+            "avg_ctr": avg_ctr, "avg_views": avg_views,
+            "avg_watch_min": avg_wt, "n": len(rows),
+        })
+    rows_out.sort(key=lambda r: -r["avg_views"])
+    return rows_out
+
+
 # ── Composite engagement score (feeds bandit binarization) ─────────────────
 def composite_engagement_score(entry: dict, duration_secs: float | None = None) -> float | None:
     """
