@@ -30,3 +30,8 @@ statsmodels>=0.14
 # track_quality.py, lofi_fx.py.
 music21>=9.1
 pyloudnorm>=0.1
+
+# Multi-platform failure alerting (webui/alerts.py) — Discord/Slack/Telegram/
+# email/etc. from one apprise-format URL list, instead of hand-rolling a
+# webhook formatter per platform.
+apprise>=1.9
