@@ -445,6 +445,43 @@ def cmd_cron(args):
             print("  Install with: python publish.py cron install")
 
 
+# ── SHORTS (repurpose a long-form video into a vertical Short) ──────────────
+
+def cmd_shorts(args):
+    """Delegates to scripts/generate_shorts.py's run_pipeline() -- same pattern
+    as cmd_lofi_inator delegating to scripts.lofi_inator.pipeline."""
+    from scripts.generate_shorts import run_pipeline
+
+    youtube = None
+    if not args.save_only:
+        youtube = get_youtube()
+
+    print(f"\n[shorts] video={args.video or 'latest'}  window={args.window_secs}s  "
+          f"save_only={args.save_only}")
+
+    result = run_pipeline(
+        video_path=args.video,
+        seo_path=args.seo,
+        out_path=args.out,
+        window_secs=args.window_secs,
+        upload=not args.save_only,
+        privacy=args.privacy,
+        title_override=args.title,
+        youtube=youtube,
+        crosspost_platforms=args.crosspost,
+    )
+
+    print(f"\n[shorts] Clip: {result['clip_path']}")
+    print(f"  Highlight window: {result['window']['start_sec']}s - {result['window']['end_sec']}s")
+    print(f"  Title: {result['metadata']['title']}")
+    if result["uploaded"]:
+        print(f"  ✓ Uploaded: {result['url']}")
+    else:
+        print("  Not uploaded (--save-only)")
+    if result["crosspost"]:
+        print(f"  Cross-post: {result['crosspost']}")
+
+
 # ── CHANNEL STATS (YPP progress) ────────────────────────────────────────────
 
 def cmd_stats(args):
@@ -1526,6 +1563,26 @@ def main():
                       help="Sleep between loop batches, e.g. '90m', '6h', '2d' (default: 12h). "
                            "Only used with --loop")
 
+    # ── shorts ───────────────────────────────────────────────────
+    p_shorts = sub.add_parser(
+        "shorts",
+        help="Repurpose a long-form video into a vertical YouTube Short "
+             "(auto-picks a peak-energy highlight window)",
+    )
+    p_shorts.add_argument("--video", default=None, help="Source video (default: latest in output/)")
+    p_shorts.add_argument("--seo", default=None, help="SEO JSON to derive title/description/tags from")
+    p_shorts.add_argument("--out", default=None, help="Output path for the vertical clip")
+    p_shorts.add_argument("--window-secs", dest="window_secs", type=float, default=58.0,
+                          help="Clip length in seconds (default: 58 -- keep <=60 for Shorts)")
+    p_shorts.add_argument("--title", default=None, help="Override the Short's title")
+    p_shorts.add_argument("--privacy", choices=["public", "unlisted", "private"], default=None)
+    p_shorts.add_argument("--save-only", action="store_true",
+                          help="Render the vertical clip locally without uploading")
+    p_shorts.add_argument("--crosspost", nargs="*", default=None, metavar="PLATFORM",
+                          help="Attempt cross-posting to these platforms after upload "
+                               "(requires CROSSPOST_ENABLED=1 -- off/not-implemented by default, "
+                               "see scripts/generate_shorts.py's crosspost() docstring)")
+
     # ── playlist ─────────────────────────────────────────────────
     p_pl = sub.add_parser("playlist", help="Create, list, or add-to playlists")
     pl_sub = p_pl.add_subparsers(dest="playlist_cmd", metavar="ACTION")
@@ -1599,6 +1656,7 @@ def main():
         "dashboard":     cmd_dashboard,
         "lofi-inator":   cmd_lofi_inator,
         "playlist":      cmd_playlist,
+        "shorts":        cmd_shorts,
     }
     dispatch[args.cmd](args)
 
