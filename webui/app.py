@@ -956,6 +956,44 @@ def view_automation(root) -> None:
             refresh_status()
             ui.timer(5.0, refresh_status)
 
+        # ── Posting-time recommendation (suggestion only, opt-in apply) ──────
+        # Joins upload_log.json timestamps with assets/analytics_log.json view
+        # performance (scripts/posting_time.py) to suggest a better hour/day.
+        # Deliberately never calls automation.set_schedule() itself -- this
+        # pipeline controls a real, public upload, so a schedule change stays
+        # a two-click action: "Use this hour" only pre-fills the form above,
+        # the human still has to press "Apply schedule".
+        with theme.card("Recommended posting time",
+                        "Based on past upload timestamps joined with view performance "
+                        "(assets/analytics_log.json). Never changes the schedule on its "
+                        "own — fills in the hour above; you still click Apply schedule."):
+            rec_label = ui.label("Checking…").classes(theme.SUB)
+            rec_actions = ui.row().classes("items-center gap-3 mt-1")
+
+            def refresh_recommendation() -> None:
+                from scripts import posting_time
+                rec = posting_time.recommend()
+                rec_actions.clear()
+                if not rec["available"]:
+                    rec_label.text = f"Not enough data yet — {rec['reason']}"
+                    return
+                rec_label.text = (
+                    f"Best hour (UTC): {rec['best_hour_utc']:02d}:00  ·  "
+                    f"Best day: {rec['best_day']}  ·  based on {rec['n_samples']} "
+                    f"upload(s) with analytics data")
+
+                def use_hour() -> None:
+                    hour_sel.value = rec["best_hour_utc"]
+                    hour_sel._edited = True
+                    ui.notify("Filled in the recommended hour below — click "
+                              "\"Apply schedule\" to actually change it.", type="info")
+
+                with rec_actions:
+                    ui.button("Use this hour", icon="auto_awesome", on_click=use_hour) \
+                        .props("flat dense color=secondary")
+
+            refresh_recommendation()
+
         with theme.card("Automation log", "Live tail of the run's journal."):
             log = ui.log(max_lines=4000).classes(f"{theme.LOG} w-full h-80")
             proc_holder: dict = {}
