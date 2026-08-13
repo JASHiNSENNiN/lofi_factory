@@ -66,37 +66,80 @@ def _lofi_late(tick: int, bpm: int, ppq: int = PPQN) -> int:
 
 # ── 2. Voice leading v2 — full displacement minimizer ───────────────────────────
 
+# Intervals (mod 12) treated as needing resolution — true "clash" dissonances
+# (minor/major 2nd, tritone). Sevenths (10, 11) are deliberately excluded:
+# this pipeline's VOICING_OPTIONS chords are jazz/lofi 7th- and 9th-chord
+# voicings where a 7th is an idiomatic chord tone, not a species-counterpoint
+# dissonance to be resolved away.
+_DISSONANT_INTERVAL_CLASSES = {1, 2, 6}
+
+
 def _voicing_transition_cost(prev_voicing: list[int], shifted_voicing: list[int]) -> float:
     """
-    Weighted multi-term cost of moving from prev_voicing to shifted_voicing
-    (shifted_voicing already has any octave shifts applied). Hand-rolled
-    classical voice-leading rules (no neural net, no LLM):
+    Species-counterpoint-inspired cost of moving from prev_voicing to
+    shifted_voicing (shifted_voicing already has any octave shifts applied).
+    Hand-rolled classical voice-leading rules (no neural net, no LLM), all
+    scored PER VOICE PAIR independently (every pair of voices is checked on
+    its own — not folded into one aggregate adjacent-pairs-only penalty):
       - total semitone displacement from prev_voicing
-      - a penalty for parallel fifths/octaves (adjacent voice pairs moving in
-        the same direction by the same interval, landing on a 5th or octave —
-        a classic part-writing error)
-      - a penalty for inner-voice spacing outside a natural close-position
-        range (~3-12 semitones)
-      - a small bonus for contrary motion between the outer (bass/top) voices
+      - a parallel-fifths/octaves penalty for EVERY pair of voices (not just
+        adjacent ones) moving in the same direction and landing on the same
+        perfect 5th/octave interval class both before and after — the
+        classic part-writing error, same rule Palestrina-style species
+        counterpoint forbids between any two voices, not only neighbors
+      - a small per-pair bonus for contrary motion between voices
+      - a per-pair dissonance/suspension-resolution check: a dissonant
+        interval (m2/M2/tritone) present between a voice pair in
+        prev_voicing is rewarded if it resolves to a consonant interval by
+        STEP (each voice moves <=2 semitones) in shifted_voicing — the
+        standard "suspension resolves down/up by step" rule — and penalized
+        if it is left hanging (still dissonant) or "resolved" by a leap
+      - a spacing penalty for inner-voice gaps outside a natural
+        close-position range (~3-12 semitones)
     Shared by _voice_lead_v2 (greedy, per-chord) and _voice_lead_progression_ga
-    (whole-progression optimizer) so both apply identical rules.
+    (whole-progression optimizer) so both apply identical rules — this
+    function is a drop-in replacement, no restructuring needed on either
+    caller's side.
     """
     n = min(len(shifted_voicing), len(prev_voicing))
     if n == 0:
         return 0.0
     displacement = sum(abs(shifted_voicing[i] - prev_voicing[i]) for i in range(n))
+    moves = [shifted_voicing[i] - prev_voicing[i] for i in range(n)]
 
     parallel_penalty = 0.0
-    for a in range(n - 1):
-        b = a + 1
-        move_a = shifted_voicing[a] - prev_voicing[a]
-        move_b = shifted_voicing[b] - prev_voicing[b]
-        if move_a == 0 and move_b == 0:
-            continue
-        interval_now = abs(shifted_voicing[b] - shifted_voicing[a]) % 12
-        same_direction = (move_a > 0) == (move_b > 0)
-        if same_direction and move_a == move_b and interval_now in (0, 7):
-            parallel_penalty += 8.0
+    contrary_bonus = 0.0
+    dissonance_cost = 0.0
+
+    for a in range(n):
+        for b in range(a + 1, n):
+            move_a, move_b = moves[a], moves[b]
+            interval_prev = abs(prev_voicing[b] - prev_voicing[a]) % 12
+            interval_now = abs(shifted_voicing[b] - shifted_voicing[a]) % 12
+
+            # Parallel perfect 5th/octave: both voices move, in the same
+            # direction, and the interval between them is a perfect 5th or
+            # octave/unison both before and after the move.
+            if move_a != 0 and move_b != 0:
+                same_direction = (move_a > 0) == (move_b > 0)
+                if same_direction and interval_prev in (0, 7) and interval_now in (0, 7):
+                    parallel_penalty += 8.0
+
+                # Contrary motion between this voice pair — mild bonus,
+                # scored per pair (was a single outer-voice-only bonus).
+                if not same_direction:
+                    contrary_bonus += 1.0
+
+            # Dissonance / suspension-resolution treatment: a dissonant
+            # interval established in prev_voicing should resolve to a
+            # consonance by stepwise motion; otherwise it's penalized
+            # whether it's held unresolved or "resolved" by a leap.
+            if interval_prev in _DISSONANT_INTERVAL_CLASSES:
+                resolved_by_step = (
+                    interval_now not in _DISSONANT_INTERVAL_CLASSES
+                    and abs(move_a) <= 2 and abs(move_b) <= 2
+                )
+                dissonance_cost += -1.5 if resolved_by_step else 3.0
 
     spacing_penalty = 0.0
     for a in range(len(shifted_voicing) - 1):
@@ -106,14 +149,7 @@ def _voicing_transition_cost(prev_voicing: list[int], shifted_voicing: list[int]
         elif gap > 12:
             spacing_penalty += (gap - 12) * 1.0
 
-    contrary_bonus = 0.0
-    if n >= 2:
-        outer_a = shifted_voicing[0] - prev_voicing[0]
-        outer_b = shifted_voicing[-1] - prev_voicing[-1]
-        if outer_a != 0 and outer_b != 0 and (outer_a > 0) != (outer_b > 0):
-            contrary_bonus = 2.0
-
-    return displacement + parallel_penalty + spacing_penalty - contrary_bonus
+    return displacement + parallel_penalty + spacing_penalty + dissonance_cost - contrary_bonus
 
 
 def _voice_lead_v2(voicing_options: list[list[int]], prev_voicing: list[int]) -> list[int]:
