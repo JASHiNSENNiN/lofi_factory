@@ -10,7 +10,7 @@ import json
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from . import config
 
@@ -32,6 +32,89 @@ def upload_history(limit: int = 30) -> list[dict]:
         return []
     entries = data if isinstance(data, list) else data.get("entries", [])
     return list(reversed(entries))[:limit]
+
+
+def _parse_iso(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def calendar_entries(upload_entries: list[dict] | None = None,
+                      queue_pending: list | None = None) -> dict:
+    """
+    Assemble the Content Calendar page's data: a chronological timeline of
+    past + future-scheduled uploads, plus the batch queue's still-pending
+    items (which don't have a fixed clock time -- they run next-in-line as
+    soon as a job slot frees up, see webui/jobs.py's JobQueue).
+
+    Pure by default only in the sense that both args are overridable: pass
+    explicit lists (as the tests do) to assemble from synthetic data with no
+    file/singleton access at all. Called with no args, it reads live state
+    (upload_log.json via upload_history(), and jobs.queue's pending list).
+
+    Returns {"timeline": [...], "queue_pending": [...]}.
+      timeline entries: {"kind", "when": datetime|None, "title", "status",
+        "url", "video_id"} sorted newest/soonest-first (entries with no
+        parseable timestamp sort last, not first -- a malformed log line
+        shouldn't jump to the top of the page).
+      queue_pending entries: {"id", "name", "slot", "note", "added_at", "args"}
+        in queue (FIFO execution) order.
+    """
+    if upload_entries is None:
+        upload_entries = upload_history(limit=200)
+    if queue_pending is None:
+        from . import jobs as _jobs
+        queue_pending = _jobs.queue.list_pending()
+
+    timeline: list[dict] = []
+    for e in upload_entries:
+        if not isinstance(e, dict):
+            continue
+        etype = e.get("type") or "upload"
+        scheduled_at = e.get("scheduled_at")
+        if etype == "upload" and scheduled_at:
+            when = _parse_iso(scheduled_at)
+            kind, status = "scheduled", "scheduled (private until publish)"
+        elif etype == "upload":
+            when = _parse_iso(e.get("timestamp"))
+            kind, status = "published", "public"
+        elif etype == "live":
+            when = _parse_iso(e.get("timestamp"))
+            kind, status = "live", "streamed"
+        elif etype == "scheduled":
+            when = _parse_iso(e.get("scheduled_at") or e.get("timestamp"))
+            kind, status = "scheduled_live", "scheduled (live broadcast)"
+        else:
+            when = _parse_iso(e.get("timestamp"))
+            kind, status = etype, etype
+        timeline.append({
+            "kind": kind,
+            "when": when,
+            "title": e.get("title") or "(untitled)",
+            "status": status,
+            "url": e.get("url"),
+            "video_id": e.get("video_id"),
+        })
+
+    # None sorts last: a malformed/missing timestamp shouldn't float to the
+    # top just because it compares as "smaller" than every real datetime.
+    _epoch = datetime.min.replace(tzinfo=timezone.utc)
+    timeline.sort(key=lambda x: x["when"] or _epoch, reverse=True)
+
+    pending = [{
+        "id": item.id, "name": item.name, "slot": item.slot,
+        "note": item.note, "added_at": item.added_at, "args": item.args,
+        "status": item.status,
+    } for item in queue_pending]
+
+    return {"timeline": timeline, "queue_pending": pending}
 
 
 def output_videos(limit: int = 20) -> list[dict]:

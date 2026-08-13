@@ -706,6 +706,11 @@ def cmd_upload(args):
         # be informed by watch-time performance the same way pillar choice is.
         "duration_secs":    get_video_duration(video_path),
         "timestamp":        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        # Present only for --schedule-at uploads (privacyStatus=private +
+        # publishAt) -- lets the webui Calendar page (webui/app.py's
+        # view_calendar) distinguish "already public" from "scheduled to go
+        # public later" without re-deriving it from privacy alone.
+        "scheduled_at":     schedule_at,
     })
 
     print(f"\n✓ Upload complete: {url}")
