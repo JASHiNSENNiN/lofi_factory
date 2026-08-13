@@ -1830,6 +1830,31 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         except Exception as e:
             print(f"  [params] Progression generation failed ({e}) — using curated table")
 
+    # ~20% chance to use the music21-backed functional-harmony engine
+    # (Roman-numeral T-S-D walk with secondary-dominant tonicization; see
+    # harmony_engine.py) instead of the curated table / bigram Markov walk
+    # above. Gated behind HARMONY_ENGINE_ENABLED (default on) so it can be
+    # switched off pipeline-wide without touching call sites, and behind a
+    # per-track probability roll so existing behavior is not silently
+    # changed for every track. params['harmony_progression'], when present,
+    # takes top priority in build_midi() (see the `prog = ...` fallback
+    # chain there) — mirrors how generated_progression already layers over
+    # the fixed table.
+    if os.getenv('HARMONY_ENGINE_ENABLED', '1') != '0' and random.random() < 0.20:
+        try:
+            from scripts.harmony_engine import generate_functional_progression, center_for_key
+            chord_count = len(PROGRESSIONS[prog]) if PROGRESSIONS[prog] else 4
+            center, hmode = center_for_key(key)
+            hp = generate_functional_progression(
+                tonal_center=center, mode=hmode,
+                length=max(2, min(6, chord_count)),
+                secondary_dominant_prob=round(random.uniform(0.2, 0.5), 2),
+            )
+            params['harmony_progression'] = hp.chords
+            params['harmony_roman_numerals'] = hp.roman_numerals
+        except Exception as e:
+            print(f"  [params] Harmony-engine progression failed ({e}) — using curated table")
+
     # Self-referential melodic voice: once enough history exists, bias new
     # melodies toward the pipeline's own past output (no external data, no
     # LLM) — see _build_self_markov / build_melody's markov_nodes blending.
@@ -2045,8 +2070,14 @@ def build_midi(params, output_path):
     markov_nodes = params.get('markov_melody_nodes')
 
     # A procedurally-generated progression (Markov walk, ~18% of the time —
-    # see generate_progression) takes priority over the curated table.
-    prog      = params.get('generated_progression') or PROGRESSIONS[prog_idx]
+    # see generate_progression) takes priority over the curated table. The
+    # music21-backed functional-harmony engine (see harmony_engine.py,
+    # ~20% of the time via pick_params) takes top priority of all three when
+    # present — it is the most theoretically-grounded source (real
+    # Roman-numeral tonicization/secondary-dominant resolution) but still an
+    # alternate source layered on top of, not replacing, the other two.
+    prog      = (params.get('harmony_progression') or params.get('generated_progression')
+                 or PROGRESSIONS[prog_idx])
     prog_bars = sum(d for _,d in prog)
     key_root  = KEY_ROOTS.get(key, 57)
 
@@ -2491,6 +2522,23 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
                 )
             except Exception as e:
                 print(f"  [params] Progression generation failed ({e}) — using curated table")
+
+        # Same ~20% chance for the music21 functional-harmony engine as
+        # pick_params() (see there for the full rationale).
+        if os.getenv('HARMONY_ENGINE_ENABLED', '1') != '0' and random.random() < 0.20:
+            try:
+                from scripts.harmony_engine import generate_functional_progression, center_for_key
+                chord_count = len(PROGRESSIONS[track_params['progression']])
+                center, hmode = center_for_key(key)
+                hp = generate_functional_progression(
+                    tonal_center=center, mode=hmode,
+                    length=max(2, min(6, chord_count)),
+                    secondary_dominant_prob=round(random.uniform(0.2, 0.5), 2),
+                )
+                track_params['harmony_progression'] = hp.chords
+                track_params['harmony_roman_numerals'] = hp.roman_numerals
+            except Exception as e:
+                print(f"  [params] Harmony-engine progression failed ({e}) — using curated table")
         if self_markov:
             track_params['markov_melody_nodes'] = self_markov
 

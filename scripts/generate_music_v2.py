@@ -777,8 +777,12 @@ def build_midi_v2(params: dict, output_path: str) -> str:
 
     # A procedurally-generated progression (Markov walk, ~18% of the time —
     # see generate_music_gemini.generate_progression) takes priority over the
-    # curated table.
-    prog      = params.get('generated_progression') or PROGRESSIONS[prog_idx]
+    # curated table. The music21-backed functional-harmony engine (see
+    # harmony_engine.py, wired into pick_params/_build_diverse_params, both
+    # shared with v1) takes top priority when present — see the matching
+    # comment in generate_music_gemini.build_midi().
+    prog      = (params.get('harmony_progression') or params.get('generated_progression')
+                 or PROGRESSIONS[prog_idx])
     prog_bars = sum(d for _, d in prog)
     key_root  = KEY_ROOTS.get(key, 57)
 

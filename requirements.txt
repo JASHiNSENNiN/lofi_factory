@@ -20,3 +20,9 @@ yt-dlp>=2026.3
 
 # Web control panel (webui.py)
 nicegui>=3.0
+
+# Stage 3 music-theory depth: functional harmony (Roman-numeral analysis) and
+# audio-domain loudness measurement/mastering — see harmony_engine.py,
+# track_quality.py, lofi_fx.py.
+music21>=9.1
+pyloudnorm>=0.1
