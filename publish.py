@@ -445,6 +445,43 @@ def cmd_cron(args):
             print("  Install with: python publish.py cron install")
 
 
+# ── SHORTS (repurpose a long-form video into a vertical Short) ──────────────
+
+def cmd_shorts(args):
+    """Delegates to scripts/generate_shorts.py's run_pipeline() -- same pattern
+    as cmd_lofi_inator delegating to scripts.lofi_inator.pipeline."""
+    from scripts.generate_shorts import run_pipeline
+
+    youtube = None
+    if not args.save_only:
+        youtube = get_youtube()
+
+    print(f"\n[shorts] video={args.video or 'latest'}  window={args.window_secs}s  "
+          f"save_only={args.save_only}")
+
+    result = run_pipeline(
+        video_path=args.video,
+        seo_path=args.seo,
+        out_path=args.out,
+        window_secs=args.window_secs,
+        upload=not args.save_only,
+        privacy=args.privacy,
+        title_override=args.title,
+        youtube=youtube,
+        crosspost_platforms=args.crosspost,
+    )
+
+    print(f"\n[shorts] Clip: {result['clip_path']}")
+    print(f"  Highlight window: {result['window']['start_sec']}s - {result['window']['end_sec']}s")
+    print(f"  Title: {result['metadata']['title']}")
+    if result["uploaded"]:
+        print(f"  ✓ Uploaded: {result['url']}")
+    else:
+        print("  Not uploaded (--save-only)")
+    if result["crosspost"]:
+        print(f"  Cross-post: {result['crosspost']}")
+
+
 # ── CHANNEL STATS (YPP progress) ────────────────────────────────────────────
 
 def cmd_stats(args):
@@ -561,24 +598,26 @@ def cmd_playlist(args):
             title = p["snippet"]["title"]
             count = p["contentDetails"]["itemCount"]
             print(f"  {pid}  ({count:>3} videos)  {title}")
-        print(f"\n  Add IDs to .env: YT_PLAYLIST_STUDY=PLxxx  YT_PLAYLIST_SLEEP=PLyyy")
+        print(f"\n  Add IDs to .env, e.g.: YT_PLAYLIST_ACTIVITY=PLxxx  (pillar-based -- see "
+              f"scripts/playlist_curation.py; legacy YT_PLAYLIST_STUDY/YT_PLAYLIST_SLEEP "
+              f"still work as a fallback)")
 
     elif args.playlist_cmd == "create":
-        resp = youtube.playlists().insert(
-            part="snippet,status",
-            body={
-                "snippet": {
-                    "title":       args.title,
-                    "description": args.description or "",
-                    "defaultLanguage": "en",
-                },
-                "status": {"privacyStatus": args.privacy or "public"},
-            },
-        ).execute()
-        pid   = resp["id"]
-        title = resp["snippet"]["title"]
-        print(f"[PLAYLIST] Created: {pid}  '{title}'")
-        print(f"  Add to .env:  YT_PLAYLIST_STUDY={pid}  (or YT_PLAYLIST_SLEEP)")
+        # Gated behind --confirm-create: playlist creation is channel-visible
+        # and irreversible-ish (deleting one loses its curation), so it never
+        # happens as a side effect -- see
+        # scripts.playlist_curation.create_playlist_if_confirmed.
+        from scripts.playlist_curation import create_playlist_if_confirmed
+        created = create_playlist_if_confirmed(
+            youtube, args.title, description=args.description or "",
+            privacy=args.privacy or "public", confirm=args.confirm_create,
+        )
+        if created is None:
+            print("[PLAYLIST] Not created -- pass --confirm-create to actually create a "
+                  "channel-visible playlist on YouTube.")
+            return
+        print(f"[PLAYLIST] Created: {created['id']}  '{created['title']}'")
+        print(f"  Add to .env, e.g.: YT_PLAYLIST_ACTIVITY={created['id']}")
 
     elif args.playlist_cmd == "add":
         youtube.playlistItems().insert(
@@ -706,6 +745,11 @@ def cmd_upload(args):
         # be informed by watch-time performance the same way pillar choice is.
         "duration_secs":    get_video_duration(video_path),
         "timestamp":        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        # Present only for --schedule-at uploads (privacyStatus=private +
+        # publishAt) -- lets the webui Calendar page (webui/app.py's
+        # view_calendar) distinguish "already public" from "scheduled to go
+        # public later" without re-deriving it from privacy alone.
+        "scheduled_at":     schedule_at,
     })
 
     print(f"\n✓ Upload complete: {url}")
@@ -1521,6 +1565,26 @@ def main():
                       help="Sleep between loop batches, e.g. '90m', '6h', '2d' (default: 12h). "
                            "Only used with --loop")
 
+    # ── shorts ───────────────────────────────────────────────────
+    p_shorts = sub.add_parser(
+        "shorts",
+        help="Repurpose a long-form video into a vertical YouTube Short "
+             "(auto-picks a peak-energy highlight window)",
+    )
+    p_shorts.add_argument("--video", default=None, help="Source video (default: latest in output/)")
+    p_shorts.add_argument("--seo", default=None, help="SEO JSON to derive title/description/tags from")
+    p_shorts.add_argument("--out", default=None, help="Output path for the vertical clip")
+    p_shorts.add_argument("--window-secs", dest="window_secs", type=float, default=58.0,
+                          help="Clip length in seconds (default: 58 -- keep <=60 for Shorts)")
+    p_shorts.add_argument("--title", default=None, help="Override the Short's title")
+    p_shorts.add_argument("--privacy", choices=["public", "unlisted", "private"], default=None)
+    p_shorts.add_argument("--save-only", action="store_true",
+                          help="Render the vertical clip locally without uploading")
+    p_shorts.add_argument("--crosspost", nargs="*", default=None, metavar="PLATFORM",
+                          help="Attempt cross-posting to these platforms after upload "
+                               "(requires CROSSPOST_ENABLED=1 -- off/not-implemented by default, "
+                               "see scripts/generate_shorts.py's crosspost() docstring)")
+
     # ── playlist ─────────────────────────────────────────────────
     p_pl = sub.add_parser("playlist", help="Create, list, or add-to playlists")
     pl_sub = p_pl.add_subparsers(dest="playlist_cmd", metavar="ACTION")
@@ -1529,6 +1593,9 @@ def main():
     p_pl_create.add_argument("title", help="Playlist title")
     p_pl_create.add_argument("--description", default=None)
     p_pl_create.add_argument("--privacy", choices=["public", "unlisted", "private"], default="public")
+    p_pl_create.add_argument("--confirm-create", dest="confirm_create", action="store_true",
+                             help="Required: actually create the playlist on YouTube (channel-"
+                                  "visible). Without this flag, nothing is created.")
     p_pl_add = pl_sub.add_parser("add", help="Add a video to a playlist manually")
     p_pl_add.add_argument("video_id", help="YouTube video ID")
     p_pl_add.add_argument("playlist_id", help="Playlist ID (PLxxx...)")
@@ -1594,6 +1661,7 @@ def main():
         "dashboard":     cmd_dashboard,
         "lofi-inator":   cmd_lofi_inator,
         "playlist":      cmd_playlist,
+        "shorts":        cmd_shorts,
     }
     dispatch[args.cmd](args)
 

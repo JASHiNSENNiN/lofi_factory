@@ -28,6 +28,7 @@ NAV = [
     ("trends", "Trends", "trending_up"),
     ("analytics", "Analytics", "insights"),
     ("automation", "Automation", "autorenew"),
+    ("calendar", "Calendar", "calendar_month"),
     ("settings", "Settings", "settings"),
 ]
 
@@ -1105,6 +1106,44 @@ def view_automation(root) -> None:
             refresh_status()
             ui.timer(5.0, refresh_status)
 
+        # ── Posting-time recommendation (suggestion only, opt-in apply) ──────
+        # Joins upload_log.json timestamps with assets/analytics_log.json view
+        # performance (scripts/posting_time.py) to suggest a better hour/day.
+        # Deliberately never calls automation.set_schedule() itself -- this
+        # pipeline controls a real, public upload, so a schedule change stays
+        # a two-click action: "Use this hour" only pre-fills the form above,
+        # the human still has to press "Apply schedule".
+        with theme.card("Recommended posting time",
+                        "Based on past upload timestamps joined with view performance "
+                        "(assets/analytics_log.json). Never changes the schedule on its "
+                        "own — fills in the hour above; you still click Apply schedule."):
+            rec_label = ui.label("Checking…").classes(theme.SUB)
+            rec_actions = ui.row().classes("items-center gap-3 mt-1")
+
+            def refresh_recommendation() -> None:
+                from scripts import posting_time
+                rec = posting_time.recommend()
+                rec_actions.clear()
+                if not rec["available"]:
+                    rec_label.text = f"Not enough data yet — {rec['reason']}"
+                    return
+                rec_label.text = (
+                    f"Best hour (UTC): {rec['best_hour_utc']:02d}:00  ·  "
+                    f"Best day: {rec['best_day']}  ·  based on {rec['n_samples']} "
+                    f"upload(s) with analytics data")
+
+                def use_hour() -> None:
+                    hour_sel.value = rec["best_hour_utc"]
+                    hour_sel._edited = True
+                    ui.notify("Filled in the recommended hour below — click "
+                              "\"Apply schedule\" to actually change it.", type="info")
+
+                with rec_actions:
+                    ui.button("Use this hour", icon="auto_awesome", on_click=use_hour) \
+                        .props("flat dense color=secondary")
+
+            refresh_recommendation()
+
         with theme.card("Automation log", "Live tail of the run's journal."):
             log = ui.log(max_lines=4000).classes(f"{theme.LOG} w-full h-80")
             proc_holder: dict = {}
@@ -1126,6 +1165,145 @@ def view_automation(root) -> None:
                     proc.terminate()
 
             ui.context.client.on_disconnect(stop_tail)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Content calendar (Stage 2 "automation depth" — additive block, new page)
+#
+# Shows a merged timeline of past uploads + future-scheduled uploads
+# (upload_log.json, via webui/data.py's calendar_entries()) alongside the
+# batch upload queue's still-pending items (webui/jobs.py's JobQueue) —
+# queued renders that will run next-in-line as soon as a slot frees up, with
+# add/reorder/cancel controls. Kept as its own function + its own NAV/VIEWS
+# entry so it doesn't touch view_analytics/view_automation.
+# ─────────────────────────────────────────────────────────────────────────────
+_CAL_KIND_STYLE = {
+    "published":      ("check_circle", "#6fcaa8"),
+    "scheduled":      ("schedule", "#e8a45c"),
+    "live":           ("sensors", "#e8849a"),
+    "scheduled_live": ("event", "#e8a45c"),
+}
+
+
+def queue_dialog() -> None:
+    """Add-to-queue dialog — same render options as the Studio tab's "New
+    render" dialog, but appends to the persisted batch queue instead of
+    launching immediately (see webui/jobs.py's JobQueue). Multiple can be
+    queued back-to-back; JobQueue.drain_forever() runs them one at a time as
+    the "main" slot frees up, exactly respecting the existing single-job
+    busy check."""
+    yt_connected = youtube_oauth.status()["connected"]
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card w-96 gap-3"):
+        ui.label("Add to queue").classes(theme.H)
+        tsel = ui.select(config.THEMES, value=config.DEFAULT_THEME, label="Theme").classes("w-full")
+        dsel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION, label="Duration").classes("w-full")
+        psel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY, label="Privacy").classes("w-full")
+        note = ui.input("Note (optional)", placeholder='e.g. "weekend batch"').classes("w-full")
+        if not yt_connected:
+            ui.label("YouTube isn't connected — \"Queue render only\" still works; "
+                     "connect YouTube in Settings before queuing an upload.") \
+                .classes(theme.SUB).style("color:#e8a45c")
+
+        def add(upload: bool) -> None:
+            if upload:
+                args = ["publish.py", "auto", "--privacy", psel.value, "--duration", dsel.value]
+                if tsel.value != "random":
+                    args += ["--theme", tsel.value]
+                name = "render+upload"
+            else:
+                args = ["run.py", "--skip-upload", "--duration", dsel.value]
+                if tsel.value != "random":
+                    args += ["--theme", tsel.value]
+                name = "render"
+            jobs.queue.add(name, args, slot="main", note=note.value or "")
+            dlg.close()
+            ui.notify("Added to queue", type="positive")
+            set_view("calendar")
+
+        with ui.row().classes("w-full justify-end gap-2 mt-1"):
+            ui.button("Cancel", on_click=dlg.close).props("flat color=primary")
+            ui.button("Render only", on_click=lambda: add(False)).props("color=secondary")
+            upload_btn = ui.button("Render + Upload", on_click=lambda: add(True)) \
+                .props("color=primary")
+            if not yt_connected:
+                upload_btn.disable()
+                upload_btn.tooltip("Connect YouTube in Settings first")
+    dlg.open()
+
+
+def view_calendar(root) -> None:
+    with root:
+        with ui.element("div").classes("studio-card w-full"):
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Content calendar").classes(theme.H)
+                with ui.row().classes("gap-2"):
+                    ui.button("Add to queue", icon="playlist_add", on_click=queue_dialog) \
+                        .props("color=primary dense")
+                    ui.button("Refresh", icon="refresh",
+                              on_click=lambda: set_view("calendar")).props("flat dense color=primary")
+            ui.label("Scheduled and past uploads in one timeline, plus what's queued to "
+                     "render next. Queued items don't have a fixed clock time — they run "
+                     "one at a time as soon as a render slot is free.").classes(theme.SUB)
+
+        cal = data.calendar_entries()
+
+        # ── Up next (batch queue) ────────────────────────────────────────────
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Up next (queued)").classes(theme.H)
+            pending = cal["queue_pending"]
+            if not pending:
+                ui.label('Nothing queued. Use "Add to queue" to batch up renders ahead of time.') \
+                    .classes(theme.SUB + " mt-2")
+            else:
+                with ui.column().classes("w-full gap-1 mt-2"):
+                    for idx, item in enumerate(pending):
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.label(f"#{idx + 1}").classes(theme.SUB).style("min-width:28px")
+                            ui.label(item["name"]).classes("text-sm font-medium") \
+                                .style("min-width:140px")
+                            ui.label(item["slot"]).classes(theme.SUB).style("min-width:60px")
+                            ui.label(item["note"] or "").classes(theme.SUB).style("flex:1")
+                            if idx > 0:
+                                ui.button(icon="arrow_upward",
+                                          on_click=lambda item=item, idx=idx: (
+                                              jobs.queue.reorder(item["id"], idx - 1),
+                                              set_view("calendar"))) \
+                                    .props("flat round dense").tooltip("Move up")
+                            ui.button(icon="close", color="negative",
+                                      on_click=lambda item=item: (
+                                          jobs.queue.cancel(item["id"]),
+                                          ui.notify("Removed from queue"),
+                                          set_view("calendar"))) \
+                                .props("flat round dense").tooltip("Remove")
+
+        # ── Timeline (past + scheduled uploads) ──────────────────────────────
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Timeline").classes(theme.H)
+            timeline = cal["timeline"]
+            if not timeline:
+                ui.label("No uploads yet.").classes(theme.SUB + " mt-2")
+            else:
+                with ui.column().classes("w-full gap-1 mt-2").style(
+                        "max-height:520px; overflow-y:auto"):
+                    last_day = None
+                    for row in timeline:
+                        day = row["when"].strftime("%A, %b %d, %Y") if row["when"] else "Unknown date"
+                        if day != last_day:
+                            ui.label(day).classes("text-sm font-semibold mt-3") \
+                                .style("color:#e8a45c")
+                            last_day = day
+                        icon, color = _CAL_KIND_STYLE.get(row["kind"], ("event_note", "#a89db5"))
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.icon(icon).style(f"color:{color}")
+                            time_str = row["when"].strftime("%H:%M UTC") if row["when"] else "—"
+                            ui.label(time_str).classes(theme.SUB).style("min-width:80px")
+                            ui.label(row["title"]).classes("text-sm font-medium").style(
+                                "flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap")
+                            ui.label(row["status"]).classes(theme.SUB).style("min-width:190px")
+                            if row.get("url"):
+                                ui.link("Open ↗", row["url"], new_tab=True).classes("text-sm")
 
 
 def _env_field(label: str, key: str, *, secret: bool = False) -> None:
@@ -1465,7 +1643,7 @@ def view_samples(root) -> None:
 VIEWS = {
     "studio": view_studio, "library": view_library, "live": view_live,
     "trends": view_trends, "analytics": view_analytics, "samples": view_samples,
-    "automation": view_automation, "settings": view_settings,
+    "automation": view_automation, "calendar": view_calendar, "settings": view_settings,
 }
 
 # Per-client mutable holder for the active view + nav element refs.
@@ -1581,6 +1759,10 @@ def yt_callback(request: Request):
 
 def run() -> None:
     auth.install(app)
+    # Batch upload queue: start draining assets/job_queue.json once the event
+    # loop is up (see webui/jobs.py's JobQueue — additive to the existing
+    # single-job model, so this is the only new startup wiring it needs).
+    app.on_startup(jobs.start_queue_drain)
     app.add_static_files("/media", config.ASSETS_DIR)
     app.add_static_files("/videos", config.OUTPUT_DIR)
     app.add_static_files("/music", config.MUSIC_DIR)

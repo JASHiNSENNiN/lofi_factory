@@ -193,11 +193,13 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None)
 
 
 def _add_to_playlist(youtube, video_id: str, seo: dict):
-    """Add video to appropriate playlist based on duration. Playlist IDs from .env."""
-    duration = seo.get("duration", "")
-    long_durations = {"3 hours", "4 hours", "5 hours", "8 hours", "10 hours", "all night"}
-    playlist_key = "YT_PLAYLIST_SLEEP" if duration in long_durations else "YT_PLAYLIST_STUDY"
-    playlist_id = os.environ.get(playlist_key, "")
+    """Add video to a pillar-curated playlist. Assignment is data-driven by
+    SEO pillar (temporal/activity/emotional/aesthetic/cross_genre), with the
+    old duration-based mapping kept only as a fallback during migration --
+    see scripts/playlist_curation.py for the full pillar->env-var table and
+    migration notes."""
+    from scripts.playlist_curation import resolve_playlist_id
+    playlist_id = resolve_playlist_id(seo)
     if not playlist_id:
         return
     try:
@@ -208,7 +210,7 @@ def _add_to_playlist(youtube, video_id: str, seo: dict):
                 "resourceId": {"kind": "youtube#video", "videoId": video_id},
             }},
         ).execute()
-        print(f"  Added to playlist ({playlist_key}): {playlist_id}")
+        print(f"  Added to playlist (pillar={seo.get('pillar', '?')}): {playlist_id}")
     except Exception as e:
         print(f"  [WARN] Playlist add failed: {e}")
 
