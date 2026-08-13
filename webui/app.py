@@ -7,7 +7,9 @@ Design system in theme.py, spec in DESIGN.md. Run via:  python webui.py
 """
 from __future__ import annotations
 
+import csv
 import datetime
+import io
 import json
 import os
 import re
@@ -551,6 +553,97 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
             else:
                 ui.label("No retention data yet — needs more views, or check that YouTube "
                          "is connected in Settings.").classes(theme.SUB)
+
+        # ── Comments (list + reply + moderate + delete) ───────────────────────
+        if c.get("video_id"):
+            ui.separator()
+            with ui.row().classes("w-full items-center justify-between"):
+                ui.label("Comments").classes(theme.H)
+                comments_refresh_btn = ui.button(icon="refresh").props("flat dense round")
+            comments_container = ui.column().classes("w-full gap-2")
+
+            def _render_one_comment(cm: dict) -> None:
+                with ui.column().classes("w-full gap-1").style(
+                        "padding:8px; border-radius:10px; "
+                        "background:rgba(255,255,255,0.03)"):
+                    with ui.row().classes("w-full items-center justify-between no-wrap"):
+                        ui.label(cm["author"]).classes("text-sm font-medium")
+                        ui.label(f"👍 {cm['like_count']}").classes(theme.SUB)
+                    ui.label(cm["text"]).classes("text-sm")
+                    with ui.row().classes("items-center gap-2 flex-wrap"):
+                        ui.label(f"status: {cm.get('moderation_status', 'published')}")\
+                            .classes(theme.SUB)
+                        ui.button(icon="visibility_off",
+                                  on_click=lambda cm=cm: _moderate(cm, "heldForReview"))\
+                            .props("flat dense round size=sm").tooltip("Hold for review")
+                        ui.button(icon="check_circle",
+                                  on_click=lambda cm=cm: _moderate(cm, "published"))\
+                            .props("flat dense round size=sm").tooltip("Publish")
+                        ui.button(icon="block", color="negative",
+                                  on_click=lambda cm=cm: _moderate(cm, "rejected"))\
+                            .props("flat dense round size=sm").tooltip("Reject")
+                        ui.button(icon="delete_outline", color="negative",
+                                  on_click=lambda cm=cm: _delete(cm))\
+                            .props("flat dense round size=sm").tooltip("Delete")
+                    reply_box = ui.input(placeholder="Reply...").props("dense")\
+                        .classes("w-full")
+                    ui.button("Reply", icon="reply",
+                              on_click=lambda cm=cm, box=reply_box: _reply(cm, box))\
+                        .props("flat dense color=primary")
+                    if cm.get("replies"):
+                        with ui.column().classes("w-full gap-1").style(
+                                "margin-left:20px; "
+                                "border-left:2px solid rgba(255,255,255,0.08); "
+                                "padding-left:10px"):
+                            for rep in cm["replies"]:
+                                with ui.row().classes(
+                                        "w-full items-center justify-between no-wrap"):
+                                    ui.label(rep["author"]).classes("text-xs font-medium")
+                                    ui.label(f"👍 {rep['like_count']}").classes(theme.SUB)
+                                ui.label(rep["text"]).classes("text-xs")
+
+            def _render_comments(force: bool = False) -> None:
+                comments_container.clear()
+                comment_list = stats.list_comments(c["video_id"], force=force)
+                with comments_container:
+                    if comment_list is None:
+                        ui.label("No comment data — check that YouTube is connected in "
+                                 "Settings (comments may also be disabled on this "
+                                 "video).").classes(theme.SUB)
+                    elif not comment_list:
+                        ui.label("No comments yet.").classes(theme.SUB)
+                    else:
+                        for cm in comment_list:
+                            _render_one_comment(cm)
+
+            def _moderate(cm: dict, status: str) -> None:
+                ok = stats.set_comment_moderation(cm["id"], status)
+                ui.notify("Moderation updated" if ok else "Failed — check YouTube connection",
+                          type="positive" if ok else "negative")
+                if ok:
+                    _render_comments(force=True)
+
+            def _delete(cm: dict) -> None:
+                ok = stats.delete_comment(cm["id"])
+                ui.notify("Comment deleted" if ok else "Failed — check YouTube connection",
+                          type="positive" if ok else "negative")
+                if ok:
+                    _render_comments(force=True)
+
+            def _reply(cm: dict, box) -> None:
+                text = (box.value or "").strip()
+                if not text:
+                    return
+                result = stats.reply_to_comment(cm["id"], text)
+                if result:
+                    box.value = ""
+                    ui.notify("Reply posted", type="positive")
+                    _render_comments(force=True)
+                else:
+                    ui.notify("Reply failed — check YouTube connection", type="negative")
+
+            comments_refresh_btn.on_click(lambda: _render_comments(force=True))
+            _render_comments()
     dlg.open()
 
 
@@ -679,6 +772,40 @@ def view_trends(root) -> None:
 
 
 _PILLAR_MARKER_COLOR = {"▲": "#6fcaa8", "▼": "#e8849a", " ": "#e8a45c"}
+
+# ── Analytics view helpers (pure -- CSV export & multi-video comparison) ──────
+# Kept as standalone functions (not inlined in view_analytics) so they're unit
+# testable without spinning up NiceGUI -- same convention as
+# _card_from_artifacts / _parse_ffmpeg_progress etc. above.
+_CSV_COLUMNS = ["video_id", "title", "pillar", "ctr_pct", "views", "watch_min", "likes", "comments"]
+
+
+def _rows_to_csv(rows: list[dict]) -> str:
+    """CSV text from the per-video performance table's row dicts (see
+    view_analytics()'s `rows` list) -- one row per tracked video."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_CSV_COLUMNS)
+    for r in rows:
+        writer.writerow([
+            r.get("video_id", ""),
+            r.get("title", ""),
+            r.get("pillar", ""),
+            round((r.get("ctr") or 0) * 100, 2),
+            r.get("views", 0),
+            r.get("watch_min", 0),
+            r.get("likes") if r.get("likes") is not None else "",
+            r.get("comments") if r.get("comments") is not None else "",
+        ])
+    return buf.getvalue()
+
+
+def _comparison_rows(rows: list[dict], selected_ids: list[str]) -> list[dict]:
+    """Subset of per-video performance `rows` matching `selected_ids`, in
+    selection order -- feeds the multi-video comparison panel. Reuses the
+    data already fetched for the main table; no refetch."""
+    by_id = {r["video_id"]: r for r in rows}
+    return [by_id[vid] for vid in selected_ids if vid in by_id]
 
 
 def view_analytics(root) -> None:
@@ -865,11 +992,16 @@ def view_analytics(root) -> None:
                                 ui.label(f"viral moment {viral['change_point_date']}")\
                                     .classes("text-sm").style(f"color:{color}")
 
+        rows: list[dict] = []
         if data_dict:
             with ui.element("div").classes("studio-card w-full"):
-                ui.label("Per-video performance").classes(theme.H)
+                with ui.row().classes("w-full items-center justify-between"):
+                    ui.label("Per-video performance").classes(theme.H)
+                    export_btn = ui.button("Export CSV", icon="download").props(
+                        "flat dense color=primary")
                 ui.label("Every tracked upload, most-clicked first. Click a row to open it "
-                         "(retention chart, player) the same way as from Library.")\
+                         "(retention chart, player) the same way as from Library. Check up to "
+                         "4 rows to compare them side-by-side below.")\
                     .classes(theme.SUB)
 
                 vids = list(data_dict.keys())
@@ -877,7 +1009,6 @@ def view_analytics(root) -> None:
                 card_by_vid = {c["video_id"]: c for c in stats.library(limit=200)
                                if c.get("video_id")}
 
-                rows = []
                 for vid, d in data_dict.items():
                     eng = engagement.get(vid, {})
                     m = analytics_mod.latest_metrics(d)
@@ -893,10 +1024,93 @@ def view_analytics(root) -> None:
                     })
                 rows.sort(key=lambda r: r["ctr"], reverse=True)
 
+                export_btn.on_click(lambda: ui.download(
+                    _rows_to_csv(rows).encode("utf-8"),
+                    "analytics_per_video.csv", media_type="text/csv"))
+
+                # ── Multi-video comparison (pins 2-4 rows, reuses `rows` -- no
+                # refetch) ─────────────────────────────────────────────────
+                _selected_ids: list[str] = []
+                comparison_container = ui.column().classes("w-full")
+
+                def _render_comparison() -> None:
+                    comparison_container.clear()
+                    with comparison_container:
+                        if len(_selected_ids) < 2:
+                            return
+                        compare = _comparison_rows(rows, _selected_ids)
+                        ui.separator().classes("mt-3")
+                        ui.label(f"Comparing {len(compare)} videos").classes(
+                            "text-sm font-medium mt-2")
+                        ui.echart({
+                            "grid": {"left": 60, "right": 16, "top": 40, "bottom": 60},
+                            "legend": {"top": 0, "textStyle": {"color": "#a89db5",
+                                                                "fontSize": 10}},
+                            "tooltip": {"trigger": "axis"},
+                            "xAxis": {"type": "category",
+                                      "data": ["CTR %", "Views (100s)", "Watch (min)",
+                                               "Likes", "Comments"],
+                                      "axisLabel": {"color": "#a89db5", "rotate": 15}},
+                            "yAxis": {"type": "value", "axisLabel": {"color": "#a89db5"}},
+                            "series": [{
+                                "name": c["title"][:30], "type": "bar",
+                                "data": [
+                                    round(c["ctr"] * 100, 2),
+                                    round(c["views"] / 100, 1),
+                                    c["watch_min"],
+                                    c["likes"] or 0,
+                                    c["comments"] or 0,
+                                ],
+                            } for c in compare],
+                        }).classes("w-full mt-1").style("height:260px")
+                        with ui.column().classes("w-full gap-1 mt-2"):
+                            with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                    "padding:4px; opacity:0.6"):
+                                ui.label("Title").classes(theme.SUB).style(
+                                    "min-width:200px; flex:1")
+                                ui.label("CTR").classes(theme.SUB).style("min-width:60px")
+                                ui.label("Views").classes(theme.SUB).style("min-width:70px")
+                                ui.label("Watch").classes(theme.SUB).style("min-width:60px")
+                                ui.label("Likes").classes(theme.SUB).style("min-width:60px")
+                                ui.label("Comments").classes(theme.SUB).style("min-width:70px")
+                            for c in compare:
+                                with ui.row().classes(
+                                        "w-full items-center gap-3 no-wrap").style(
+                                        "padding:6px 4px; "
+                                        "border-bottom:1px solid rgba(255,255,255,0.06)"):
+                                    ui.label(c["title"][:40]).classes("text-sm").style(
+                                        "min-width:200px; flex:1; overflow:hidden; "
+                                        "text-overflow:ellipsis; white-space:nowrap")
+                                    ui.label(f"{c['ctr'] * 100:.1f}%").classes("text-sm")\
+                                        .style("min-width:60px")
+                                    ui.label(stats.fmt_count(c["views"])).classes("text-sm")\
+                                        .style("min-width:70px")
+                                    ui.label(f"{c['watch_min']}m").classes("text-sm")\
+                                        .style("min-width:60px")
+                                    ui.label(stats.fmt_count(c["likes"])
+                                             if c["likes"] is not None else "—")\
+                                        .classes("text-sm").style("min-width:60px")
+                                    ui.label(stats.fmt_count(c["comments"])
+                                             if c["comments"] is not None else "—")\
+                                        .classes("text-sm").style("min-width:70px")
+
+                def _toggle_selected(vid: str, checked: bool) -> None:
+                    if checked:
+                        if len(_selected_ids) >= 4:
+                            ui.notify("Comparison is limited to 4 videos — "
+                                      "uncheck one first.", type="warning")
+                            return
+                        if vid not in _selected_ids:
+                            _selected_ids.append(vid)
+                    elif vid in _selected_ids:
+                        _selected_ids.remove(vid)
+                    _render_comparison()
+
                 with ui.column().classes("w-full gap-1 mt-2").style(
                         "max-height:420px; overflow-y:auto"):
                     with ui.row().classes("w-full items-center gap-3 no-wrap").style(
                             "padding:4px; opacity:0.6"):
+                        ui.label("").style("min-width:28px")  # checkbox column spacer
                         ui.label("Title").classes(theme.SUB).style("min-width:220px; flex:2")
                         ui.label("Pillar").classes(theme.SUB).style("min-width:100px")
                         ui.label("CTR").classes(theme.SUB).style("min-width:60px")
@@ -915,25 +1129,32 @@ def view_analytics(root) -> None:
                                     f"https://youtube.com/watch?v={r['video_id']}",
                                     new_tab=True)
 
-                        with ui.row().classes("w-full items-center gap-3 no-wrap cursor-pointer")\
-                                .style("padding:6px 4px; "
-                                       "border-bottom:1px solid rgba(255,255,255,0.06)")\
-                                .on("click", _open):
-                            ui.label(r["title"]).classes("text-sm").style(
-                                "min-width:220px; flex:2; overflow:hidden; "
-                                "text-overflow:ellipsis; white-space:nowrap")
-                            ui.label(r["pillar"]).classes("text-sm").style("min-width:100px")
-                            ui.label(f"{r['ctr'] * 100:.1f}%").classes("text-sm")\
-                                .style("min-width:60px")
-                            ui.label(stats.fmt_count(r["views"])).classes("text-sm")\
-                                .style("min-width:70px")
-                            ui.label(f"{r['watch_min']}m").classes("text-sm")\
-                                .style("min-width:60px")
-                            ui.label(stats.fmt_count(r["likes"]) if r["likes"] is not None else "—")\
-                                .classes("text-sm").style("min-width:60px")
-                            ui.label(stats.fmt_count(r["comments"])
-                                     if r["comments"] is not None else "—")\
-                                .classes("text-sm").style("min-width:70px")
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; "
+                                "border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.checkbox(value=False, on_change=(
+                                lambda e, vid=r["video_id"]: _toggle_selected(vid, e.value)
+                            )).props("dense").style("min-width:28px")
+                            with ui.row().classes(
+                                    "items-center gap-3 no-wrap cursor-pointer grow")\
+                                    .on("click", _open):
+                                ui.label(r["title"]).classes("text-sm").style(
+                                    "min-width:220px; flex:2; overflow:hidden; "
+                                    "text-overflow:ellipsis; white-space:nowrap")
+                                ui.label(r["pillar"]).classes("text-sm").style(
+                                    "min-width:100px")
+                                ui.label(f"{r['ctr'] * 100:.1f}%").classes("text-sm")\
+                                    .style("min-width:60px")
+                                ui.label(stats.fmt_count(r["views"])).classes("text-sm")\
+                                    .style("min-width:70px")
+                                ui.label(f"{r['watch_min']}m").classes("text-sm")\
+                                    .style("min-width:60px")
+                                ui.label(stats.fmt_count(r["likes"])
+                                         if r["likes"] is not None else "—")\
+                                    .classes("text-sm").style("min-width:60px")
+                                ui.label(stats.fmt_count(r["comments"])
+                                         if r["comments"] is not None else "—")\
+                                    .classes("text-sm").style("min-width:70px")
 
         swapped = [{"video_id": vid, **d} for vid, d in data_dict.items() if d.get("thumb_swapped")]
         ab_tested = sorted(
@@ -991,6 +1212,131 @@ def view_analytics(root) -> None:
                                 .classes("text-sm").style(f"color:{color}; min-width:80px")
                             ui.label(s.get("ab_variant") or "—").classes(theme.SUB)\
                                 .style("min-width:60px")
+
+        # ── Traffic-source breakdown + subscriber growth (YT Analytics API) ──
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Traffic sources & subscriber growth").classes(theme.H)
+            ui.label("Where views come from (insightTrafficSourceType, last 28 days) and "
+                     "net subscriber change over the last 90 days, from the YouTube Analytics "
+                     "API. Uses the same yt-analytics.readonly scope as the rest of this "
+                     "page.").classes(theme.SUB)
+
+            traffic = stats.traffic_sources()
+            if not traffic:
+                ui.label("No traffic-source data yet — needs YouTube connected in Settings "
+                         "and some recent view volume.").classes(theme.SUB + " mt-3")
+            else:
+                ui.echart({
+                    "tooltip": {"trigger": "item"},
+                    "legend": {"orient": "vertical", "left": "left",
+                               "textStyle": {"color": "#a89db5", "fontSize": 10}},
+                    "series": [{
+                        "type": "pie", "radius": ["35%", "65%"],
+                        "data": [{"name": t["source"], "value": t["views"]} for t in traffic],
+                        "label": {"color": "#a89db5"},
+                    }],
+                }).classes("w-full mt-2").style("height:260px")
+
+            growth = stats.subscriber_growth()
+            if growth:
+                ui.label("Subscriber growth (net gained/lost per day)").classes(
+                    "text-sm font-medium mt-4")
+                ui.echart({
+                    "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
+                    "tooltip": {"trigger": "axis"},
+                    "xAxis": {"type": "category", "data": [g["date"] for g in growth],
+                              "axisLabel": {"color": "#a89db5", "rotate": 30, "fontSize": 9}},
+                    "yAxis": {"type": "value", "name": "net subs",
+                              "axisLabel": {"color": "#a89db5"}},
+                    "series": [{
+                        "type": "bar",
+                        "data": [{"value": g["net"],
+                                  "itemStyle": {"color": "#6fcaa8" if g["net"] >= 0
+                                                else "#e8849a"}}
+                                 for g in growth],
+                    }],
+                }).classes("w-full mt-2").style("height:220px")
+            elif traffic:
+                # Only show a second "no data" note if the traffic panel above didn't
+                # already explain the not-connected case.
+                ui.label("No subscriber growth data yet.").classes(theme.SUB + " mt-3")
+
+        # ── Revenue / RPM / CPM (opt-in — see Settings: Connect monetary analytics) ──
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Revenue & RPM").classes(theme.H)
+            if not stats.revenue_available():
+                ui.label(
+                    "Not connected. Revenue/RPM/CPM figures need the "
+                    "yt-analytics-monetary.readonly scope, which is intentionally NOT "
+                    "requested by the normal YouTube login (so ordinary uploads/analytics "
+                    "never trigger a surprise consent screen). Opt in from Settings -> "
+                    "'Revenue & RPM' to grant just this extra scope via a separate consent "
+                    "flow.").classes(theme.SUB + " mt-2")
+                ui.button("Go to Settings", icon="settings",
+                          on_click=lambda: set_view("settings"))\
+                    .props("flat dense color=primary").classes("mt-2")
+            else:
+                revenue = stats.revenue_stats()
+                if not revenue:
+                    ui.label("Connected, but no revenue data returned yet (channel may not "
+                             "be monetized, or too new for estimates).").classes(
+                        theme.SUB + " mt-2")
+                else:
+                    total_rev = sum(r["revenue"] for r in revenue)
+                    avg_cpm = (sum(r["cpm"] for r in revenue) / len(revenue)) if revenue else 0
+                    with ui.row().classes("w-full gap-4 no-wrap mt-2"):
+                        with ui.element("div").classes("stat grow"):
+                            ui.label(f"${total_rev:.2f}").classes("stat-num")
+                            ui.label("Est. revenue (28d)").classes("stat-lbl")
+                        with ui.element("div").classes("stat grow"):
+                            ui.label(f"${avg_cpm:.2f}").classes("stat-num")
+                            ui.label("Avg CPM").classes("stat-lbl")
+                    ui.echart({
+                        "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
+                        "tooltip": {"trigger": "axis"},
+                        "xAxis": {"type": "category", "data": [r["date"] for r in revenue],
+                                  "axisLabel": {"color": "#a89db5", "rotate": 30,
+                                                "fontSize": 9}},
+                        "yAxis": {"type": "value", "name": "$ est. revenue",
+                                  "axisLabel": {"color": "#a89db5"}},
+                        "series": [{"type": "line", "data": [r["revenue"] for r in revenue],
+                                    "smooth": True, "areaStyle": {"opacity": 0.15},
+                                    "color": "#e8a45c"}],
+                    }).classes("w-full mt-3").style("height:220px")
+
+        # ── Playlist-level aggregation (pillar -> playlist mapping from
+        # scripts/playlist_curation.py) ───────────────────────────────────────
+        if data_dict:
+            plist = analytics_mod.playlist_stats(data_dict)
+            with ui.element("div").classes("studio-card w-full"):
+                ui.label("Playlist performance").classes(theme.H)
+                ui.label("Tracked videos aggregated by the playlist they'd be filed under "
+                         "(scripts/playlist_curation.py's pillar -> YT_PLAYLIST_<PILLAR> env "
+                         "mapping, with the legacy duration-based vars as fallback). "
+                         "'Unassigned' means no matching env var is set for that "
+                         "video's pillar/duration.").classes(theme.SUB)
+                with ui.column().classes("w-full gap-1 mt-2"):
+                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                            "padding:4px; opacity:0.6"):
+                        ui.label("Playlist").classes(theme.SUB).style("min-width:220px; flex:1")
+                        ui.label("Pillars").classes(theme.SUB).style("min-width:160px")
+                        ui.label("Avg CTR").classes(theme.SUB).style("min-width:70px")
+                        ui.label("Avg views").classes(theme.SUB).style("min-width:80px")
+                        ui.label("n").classes(theme.SUB).style("min-width:40px")
+                    for p in plist:
+                        label = p["playlist_id"] or "Unassigned"
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.label(label).classes("text-sm font-medium").style(
+                                "min-width:220px; flex:1; overflow:hidden; "
+                                "text-overflow:ellipsis; white-space:nowrap")
+                            ui.label(", ".join(p["pillars"])).classes(theme.SUB)\
+                                .style("min-width:160px")
+                            ui.label(f"{p['avg_ctr'] * 100:.1f}%").classes("text-sm")\
+                                .style("min-width:70px")
+                            ui.label(stats.fmt_count(int(p["avg_views"]))).classes("text-sm")\
+                                .style("min-width:80px")
+                            ui.label(str(p["n"])).classes(theme.SUB).style("min-width:40px")
 
 
 def view_automation(root) -> None:
@@ -1481,6 +1827,49 @@ def view_settings(root) -> None:
                     ui.button("Connect via device code", icon="qr_code_2",
                               on_click=start_device_flow).props("color=primary")
 
+        # ── Revenue & RPM (opt-in monetary scope) ──────────────────────────
+        with theme.card(
+                "Revenue & RPM",
+                "OPT-IN, separate from YouTube login above. Revenue/RPM/CPM figures need "
+                "the yt-analytics-monetary.readonly scope, which the normal 'Connect "
+                "YouTube' flow does NOT request -- so ordinary uploads/analytics never "
+                "trigger a surprise extra consent screen. Connecting here starts a "
+                "second, explicit Google consent round-trip for just this scope, and "
+                "stores its own token (token_monetary.json) completely separate from the "
+                "regular token.json."):
+            monetary_info = ui.column().classes("gap-2 w-full")
+
+            def refresh_monetary() -> None:
+                monetary_info.clear()
+                mst = youtube_oauth.monetary_status()
+                with monetary_info:
+                    if mst["connected"]:
+                        ui.label("✅ Monetary analytics connected")\
+                            .classes("text-positive font-semibold")
+                        ui.button("Disconnect", icon="link_off",
+                                  on_click=lambda: (youtube_oauth.monetary_disconnect(),
+                                                    refresh_monetary(),
+                                                    ui.notify("Disconnected"))
+                                  ).props("flat color=negative")
+                    else:
+                        ui.label("❌ Not connected — Revenue & RPM panel in Analytics "
+                                 "stays hidden until this is connected.")\
+                            .classes("text-negative font-semibold")
+                        ui.button("Connect monetary analytics", icon="attach_money",
+                                  on_click=lambda: ui.navigate.to("/youtube/monetary/login"))\
+                            .props("color=primary")
+                    if not mst["client_present"]:
+                        ui.label("⚠ client_secret.json missing — upload it in the "
+                                 "'YouTube account' card above first (same OAuth client "
+                                 "is reused, just with an extra scope requested).")\
+                            .classes("text-sm").style("color:#e8a45c")
+                    ui.label("Redirect URI for Google Cloud Console (register alongside "
+                             "the main one):").classes(theme.SUB + " mt-1")
+                    ui.label(mst["redirect_uri"]).classes("font-mono text-sm")\
+                        .style("background:rgba(0,0,0,.35);padding:3px 8px;border-radius:8px")
+
+            refresh_monetary()
+
         with theme.card("yt-dlp cookies",
                         "Server IPs are bot-gated by YouTube. Upload a Netscape cookies.txt "
                         "(browser logged into YouTube) to enable audio covers."):
@@ -1753,6 +2142,30 @@ def yt_callback(request: Request):
     try:
         youtube_oauth.handle_callback(code, state)
         return RedirectResponse("/?yt=connected")
+    except Exception as ex:  # noqa: BLE001
+        return RedirectResponse(f"/?yt_error={type(ex).__name__}")
+
+
+# Separate opt-in consent round-trip for the monetary scope (Settings ->
+# "Connect monetary analytics") -- deliberately its own pair of routes/state,
+# never touched by the main /youtube/login /youtube/callback flow above.
+@app.get("/youtube/monetary/login")
+def yt_monetary_login():
+    try:
+        return RedirectResponse(youtube_oauth.monetary_authorization_url())
+    except Exception as ex:  # noqa: BLE001
+        return RedirectResponse(f"/?yt_error={type(ex).__name__}")
+
+
+@app.get("/youtube/monetary/callback")
+def yt_monetary_callback(request: Request):
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code:
+        return RedirectResponse("/?yt_error=no_code")
+    try:
+        youtube_oauth.monetary_handle_callback(code, state)
+        return RedirectResponse("/?yt_monetary=connected")
     except Exception as ex:  # noqa: BLE001
         return RedirectResponse(f"/?yt_error={type(ex).__name__}")
 
