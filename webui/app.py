@@ -12,6 +12,7 @@ import json
 import os
 import re
 import time
+from urllib.parse import quote
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
@@ -1041,7 +1042,7 @@ def view_automation(root) -> None:
 
             async def do_start() -> None:
                 try:
-                    automation.start()
+                    await automation.start()
                     ui.notify("Schedule armed", type="positive")
                 except RuntimeError as e:
                     ui.notify(str(e), type="negative")
@@ -1049,7 +1050,7 @@ def view_automation(root) -> None:
 
             async def do_stop() -> None:
                 try:
-                    automation.stop()
+                    await automation.stop()
                     ui.notify("Schedule stopped", type="warning")
                 except RuntimeError as e:
                     ui.notify(str(e), type="negative")
@@ -1057,14 +1058,18 @@ def view_automation(root) -> None:
 
             async def do_toggle_boot() -> None:
                 try:
-                    automation.set_enabled(not automation.status()["enabled"])
+                    await automation.set_enabled(not automation.status()["enabled"])
                 except RuntimeError as e:
                     ui.notify(str(e), type="negative")
                 refresh_status()
 
             async def do_run_now() -> None:
                 try:
-                    automation.run_now()
+                    # This kicks off a systemctl call that returns once the run
+                    # itself completes (Type=oneshot) -- await here just yields
+                    # the event loop back while the worker thread waits, it does
+                    # NOT block other clients. See webui/automation.py.
+                    await automation.run_now()
                     ui.notify("Triggered an immediate run — see the log below", type="positive")
                 except RuntimeError as e:
                     ui.notify(str(e), type="negative")
@@ -1072,7 +1077,7 @@ def view_automation(root) -> None:
 
             async def do_apply_schedule() -> None:
                 try:
-                    automation.set_schedule(int(hour_sel.value), int(every_sel.value))
+                    await automation.set_schedule(int(hour_sel.value), int(every_sel.value))
                     hour_sel._edited = every_sel._edited = False
                     ui.notify("Schedule updated", type="positive")
                 except (RuntimeError, ValueError) as e:
@@ -1654,8 +1659,13 @@ set_view = lambda name: None  # noqa: E731 — reassigned inside the page
 # Page
 # ─────────────────────────────────────────────────────────────────────────────
 @ui.page("/")
-def index() -> None:
+def index(request: Request) -> None:
     theme.apply()
+    if request.query_params.get("yt") == "connected":
+        ui.notify("YouTube connected", type="positive")
+    elif "yt_error" in request.query_params:
+        detail = request.query_params["yt_error"][:300]
+        ui.notify(f"YouTube connect failed: {detail}", type="negative")
     state = {"current": "studio"}
     nav_refs: dict[str, object] = {}
 
@@ -1741,7 +1751,8 @@ def yt_login():
     try:
         return RedirectResponse(youtube_oauth.authorization_url())
     except Exception as ex:  # noqa: BLE001
-        return RedirectResponse(f"/?yt_error={type(ex).__name__}")
+        print(f"[webui] YouTube login failed: {ex}")
+        return RedirectResponse(f"/?yt_error={quote(f'{type(ex).__name__}: {ex}'[:300])}")
 
 
 @app.get("/youtube/callback")
@@ -1754,7 +1765,8 @@ def yt_callback(request: Request):
         youtube_oauth.handle_callback(code, state)
         return RedirectResponse("/?yt=connected")
     except Exception as ex:  # noqa: BLE001
-        return RedirectResponse(f"/?yt_error={type(ex).__name__}")
+        print(f"[webui] YouTube callback failed: {ex}")
+        return RedirectResponse(f"/?yt_error={quote(f'{type(ex).__name__}: {ex}'[:300])}")
 
 
 def run() -> None:

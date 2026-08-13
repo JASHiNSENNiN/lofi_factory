@@ -18,11 +18,37 @@ MIN_INTERVAL_HOURS = _svc.MIN_INTERVAL_HOURS
 VALID_INTERVALS = _svc.VALID_INTERVALS
 
 status = _svc.status
-start = _svc.start
-stop = _svc.stop
-set_enabled = _svc.set_enabled
-run_now = _svc.run_now
-set_schedule = _svc.set_schedule
+
+# NiceGUI runs on a single-threaded asyncio event loop. _svc.start/run_now/etc.
+# shell out via subprocess.run(), which is fully synchronous -- and since
+# lofi-auto.service is Type=oneshot, `systemctl --user start lofi-auto.service`
+# blocks until the whole render+upload pipeline finishes (can be minutes).
+# Calling that directly from a button handler used to freeze the *entire*
+# webui for every client for the full run duration (TLS handshakes included --
+# the event loop never got back to accept()). Push each call to a worker
+# thread so the event loop stays free; publish.py's CLI and dashboard.py's
+# TUI still call auto_service's sync functions directly, which is fine there
+# since neither has other concurrent clients to starve.
+
+
+async def start() -> None:
+    await asyncio.to_thread(_svc.start)
+
+
+async def stop() -> None:
+    await asyncio.to_thread(_svc.stop)
+
+
+async def set_enabled(enabled: bool) -> None:
+    await asyncio.to_thread(_svc.set_enabled, enabled)
+
+
+async def run_now() -> None:
+    await asyncio.to_thread(_svc.run_now)
+
+
+async def set_schedule(hour: int, every_hours: int) -> None:
+    await asyncio.to_thread(_svc.set_schedule, hour, every_hours)
 
 
 async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:
