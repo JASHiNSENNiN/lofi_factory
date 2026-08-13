@@ -23,6 +23,10 @@ stop = _svc.stop
 set_enabled = _svc.set_enabled
 run_now = _svc.run_now
 set_schedule = _svc.set_schedule
+# Sync passthrough, same as the rest of this module -- callers on the async
+# side (app.py's Automation view) run it via asyncio.to_thread since it
+# shells out to `systemctl show` under the hood.
+resource_status = _svc.resource_status
 
 
 async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:

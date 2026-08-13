@@ -7,6 +7,7 @@ Design system in theme.py, spec in DESIGN.md. Run via:  python webui.py
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import os
@@ -1158,6 +1159,56 @@ def view_automation(root) -> None:
                         .props("flat dense color=secondary")
 
             refresh_recommendation()
+
+        # ── Resource usage / last exit status (systemd unit introspection) ──
+        # Additive block, separate from the schedule card above -- reads
+        # MemoryHigh/MemoryMax/MemoryCurrent + ExecMainStatus/ExecMainCode
+        # off lofi-auto.service via auto_service.resource_status() (built on
+        # the same _systemctl()/`systemctl show` helper the rest of that
+        # module already uses). The subprocess call is real I/O, so it's
+        # offloaded to a thread rather than blocking the event loop directly.
+        with theme.card("Resource usage & last exit status",
+                        "Live memory usage vs. the systemd resource limits on "
+                        "lofi-auto.service, plus how the most recent run actually exited."):
+            res_cols = ui.row().classes("w-full gap-4 no-wrap flex-wrap")
+            res_note = ui.label("").classes(theme.SUB)
+
+            def _fmt_bytes(n: int | None) -> str:
+                if n is None:
+                    return "—"
+                for unit in ("B", "KB", "MB", "GB"):
+                    if n < 1024:
+                        return f"{n:.0f} {unit}"
+                    n /= 1024
+                return f"{n:.1f} TB"
+
+            async def refresh_resources() -> None:
+                if not automation.status()["installed"]:
+                    res_note.text = "Install lofi-auto.timer to see resource usage."
+                    return
+                try:
+                    rs = await asyncio.to_thread(automation.resource_status)
+                except Exception as e:
+                    res_note.text = f"Couldn't read systemd status: {e}"
+                    return
+                res_cols.clear()
+                with res_cols:
+                    for key, label in [("memory_current", "Current"),
+                                        ("memory_high", "High watermark"),
+                                        ("memory_max", "Hard limit")]:
+                        with ui.element("div").classes("stat grow"):
+                            ui.label(_fmt_bytes(rs[key])).classes("stat-num")
+                            ui.label(label).classes("stat-lbl")
+                code = rs.get("exec_main_code") or "—"
+                status_num = rs.get("exec_main_status")
+                ok = code == "exited" and status_num in ("0", 0)
+                color = "#6fcaa8" if ok else ("#e8849a" if code != "—" else "#a89db5")
+                res_note.style(f"color:{color}")
+                res_note.text = (f"Last run: {code}"
+                                  + (f", exit code {status_num}" if status_num is not None else ""))
+
+            ui.timer(0.1, refresh_resources, once=True)
+            ui.timer(10.0, refresh_resources)
 
         with theme.card("Automation log", "Live tail of the run's journal."):
             log = ui.log(max_lines=4000).classes(f"{theme.LOG} w-full h-80")

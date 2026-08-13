@@ -164,6 +164,38 @@ def run_now() -> None:
         raise RuntimeError(out or "systemctl start (service) failed")
 
 
+def resource_status() -> dict:
+    """Current memory usage vs. configured limits, plus the last invocation's
+    exit status, for lofi-auto.service (the oneshot the timer fires — the
+    resource/exit-code properties live on the service unit, not the timer).
+    Reuses _show(), the same systemctl-show helper status() is built on.
+
+    MemoryHigh/MemoryMax are systemd's resource-control throttle/hard-kill
+    limits (systemd.resource-control(5)); MemoryCurrent is live RSS+cache
+    usage. ExecMainStatus/ExecMainCode describe how the last run ended
+    (ExecMainCode "exited" + ExecMainStatus 0 = clean success; "killed" means
+    a signal, e.g. OOM, terminated it instead).
+    """
+    d = _show(SERVICE, "MemoryHigh", "MemoryMax", "MemoryCurrent",
+              "ExecMainStatus", "ExecMainCode")
+
+    def _mem(v: str | None) -> int | None:
+        if not v or v in ("infinity", "[not set]", "n/a"):
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    return {
+        "memory_high": _mem(d.get("MemoryHigh")),
+        "memory_max": _mem(d.get("MemoryMax")),
+        "memory_current": _mem(d.get("MemoryCurrent")),
+        "exec_main_status": d.get("ExecMainStatus"),
+        "exec_main_code": d.get("ExecMainCode") or None,
+    }
+
+
 def logs_cmd(n: int = 200, follow: bool = True) -> list[str]:
     """journalctl argv to show/follow the service's logs (caller decides how to run it)."""
     cmd = ["journalctl", "--user", "-u", SERVICE, "-n", str(n), "--no-pager"]
