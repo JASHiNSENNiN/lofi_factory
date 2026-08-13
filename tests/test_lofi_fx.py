@@ -1,6 +1,17 @@
 import numpy as np
+import pytest
 
-from scripts.lofi_fx import _apply_stereo_width, _apply_sub_bass_saturation
+from scripts.lofi_fx import (
+    _apply_kick_sidechain_duck,
+    _apply_lufs_mastering,
+    _apply_stereo_width,
+    _apply_sub_bass_saturation,
+    _kick_envelope,
+    _SIDECHAIN_DUCK_GENRES,
+    _TRACK_LUFS_TARGET,
+)
+
+pyln = pytest.importorskip("pyloudnorm")
 
 
 def _independent_stereo(n=44100 * 2, sr=44100, seed=0):
@@ -73,3 +84,131 @@ def test_sub_bass_saturation_does_not_blow_up_peak_level():
     # level relative to the input, which stayed well under 1.0 (0.1 amplitude
     # random noise).
     assert np.max(np.abs(result)) < 1.0
+
+
+# ── per-track LUFS mastering (Stage 3 item 7) ────────────────────────────────
+
+def _pink_stereo(seconds=6, sr=44100, seed=0, amplitude=0.05):
+    """RMS-normalized pink-ish noise, (channels, samples) -- this module's
+    Pedalboard-style array convention (channel-first), unlike
+    track_quality.py's (samples, channels) soundfile convention."""
+    rng = np.random.default_rng(seed)
+    n = int(sr * seconds)
+    white = rng.standard_normal(n)
+    spectrum = np.fft.rfft(white)
+    freqs = np.fft.rfftfreq(n, d=1.0 / sr)
+    freqs = freqs.copy()
+    freqs[0] = freqs[1] if len(freqs) > 1 else 1.0
+    pink = np.fft.irfft(spectrum / np.sqrt(freqs), n)
+    rms = np.sqrt(np.mean(pink ** 2))
+    pink = (pink / (rms + 1e-9) * amplitude).astype(np.float32)
+    return np.stack([pink, pink]), sr
+
+
+def test_lufs_mastering_hits_target_within_small_tolerance():
+    stereo, sr = _pink_stereo(amplitude=0.03)   # start quiet, well under target
+    mastered = _apply_lufs_mastering(stereo, sr)
+
+    meter = pyln.Meter(sr)
+    measured = meter.integrated_loudness(mastered.T.astype(np.float64))
+    assert abs(measured - _TRACK_LUFS_TARGET) < 0.5
+
+
+def test_lufs_mastering_raises_a_quiet_track():
+    stereo, sr = _pink_stereo(amplitude=0.01)
+    mastered = _apply_lufs_mastering(stereo, sr)
+    assert np.sqrt(np.mean(mastered ** 2)) > np.sqrt(np.mean(stereo ** 2))
+
+
+def test_lufs_mastering_lowers_a_loud_track():
+    stereo, sr = _pink_stereo(amplitude=0.6)
+    mastered = _apply_lufs_mastering(stereo, sr)
+    assert np.sqrt(np.mean(mastered ** 2)) < np.sqrt(np.mean(stereo ** 2))
+
+
+def test_lufs_mastering_silent_audio_is_a_safe_noop():
+    silent = np.zeros((2, 44100 * 3), dtype=np.float32)
+    result = _apply_lufs_mastering(silent, 44100)
+    assert np.max(np.abs(result)) == 0.0
+    assert not np.isnan(result).any()
+
+
+def test_lufs_mastering_preserves_shape_and_dtype():
+    stereo, sr = _pink_stereo()
+    result = _apply_lufs_mastering(stereo, sr)
+    assert result.shape == stereo.shape
+    assert result.dtype == np.float32
+
+
+def test_track_lufs_target_leaves_headroom_under_video_level_target():
+    # Coordination check: the per-track target must sit BELOW (quieter than)
+    # assemble_video.py's -14 LUFS video-level pass, per the documented
+    # headroom rationale -- not fighting it by already being as loud or louder.
+    assert _TRACK_LUFS_TARGET < -14.0
+
+
+# ── kick-triggered sidechain ducking (Stage 3 item 7) ────────────────────────
+
+def _kick_and_sustain_mix(seconds=4, sr=44100, kick_every=0.5):
+    t = np.linspace(0, seconds, int(sr * seconds), endpoint=False)
+    kick_gate = np.zeros_like(t)
+    for onset in np.arange(0, seconds, kick_every):
+        idx = int(onset * sr)
+        kick_gate[idx:idx + int(0.01 * sr)] = 1.0
+    kick = kick_gate * np.sin(2 * np.pi * 60 * t) * 0.6
+    sustain = 0.15 * np.sin(2 * np.pi * 300 * t)
+    mix = (kick + sustain).astype(np.float32)
+    return np.stack([mix, mix]), sr
+
+
+def test_sidechain_duck_reduces_level_shortly_after_a_kick_hit():
+    stereo, sr = _kick_and_sustain_mix()
+    ducked = _apply_kick_sidechain_duck(stereo, sr)
+
+    onset_idx = int(1.0 * sr)
+    window = slice(onset_idx + 300, onset_idx + 4000)   # just after the kick, still in the duck's release
+    before_rms = np.sqrt(np.mean(stereo[0, window] ** 2))
+    after_rms = np.sqrt(np.mean(ducked[0, window] ** 2))
+    assert after_rms < before_rms
+
+
+def test_sidechain_duck_preserves_shape_dtype_and_has_no_nan():
+    stereo, sr = _kick_and_sustain_mix()
+    result = _apply_kick_sidechain_duck(stereo, sr)
+    assert result.shape == stereo.shape
+    assert result.dtype == np.float32
+    assert not np.isnan(result).any()
+
+
+def test_sidechain_duck_on_silence_is_a_safe_noop():
+    silent = np.zeros((2, 44100 * 2), dtype=np.float32)
+    result = _apply_kick_sidechain_duck(silent, 44100)
+    assert np.max(np.abs(result)) == 0.0
+
+
+def test_sidechain_duck_never_increases_peak_level():
+    stereo, sr = _kick_and_sustain_mix()
+    ducked = _apply_kick_sidechain_duck(stereo, sr)
+    assert np.max(np.abs(ducked)) <= np.max(np.abs(stereo)) + 1e-6
+
+
+def test_kick_envelope_peaks_near_kick_onsets():
+    _, sr = _kick_and_sustain_mix()
+    stereo, sr = _kick_and_sustain_mix()
+    mono = stereo.mean(axis=0)
+    envelope = _kick_envelope(mono, sr)
+
+    onset_idx = int(1.0 * sr)
+    near_kick = envelope[onset_idx:onset_idx + 500].max()
+    far_from_kick = envelope[onset_idx + 15000:onset_idx + 18000].max()
+    assert near_kick > far_from_kick
+
+
+def test_sidechain_duck_gate_genre_membership_is_a_small_opt_in_set():
+    # Documents/locks the "most genres do NOT want pumping" design intent
+    # (see _SIDECHAIN_DUCK_GENRES's comment) -- most of the ~22 genre
+    # presets must remain outside this set.
+    assert 0 < len(_SIDECHAIN_DUCK_GENRES) < 10
+    assert "lofi_house" in _SIDECHAIN_DUCK_GENRES
+    assert "lofi_classical" not in _SIDECHAIN_DUCK_GENRES
+    assert "ambient" not in _SIDECHAIN_DUCK_GENRES

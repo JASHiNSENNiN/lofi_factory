@@ -71,6 +71,34 @@ _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "chorus_
 _IR_GENRES = {"lofi_jazz", "jazz_cafe", "piano_lofi", "lofi_classical", "bossa_lofi", "neo_soul"}
 _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 
+# Genres that want a kick-triggered sidechain "pump" (see
+# _apply_kick_sidechain_duck) — a standard house/hip-hop mix technique, but
+# wrong for anything meant to sound spacious/acoustic/unpumped. Most genres
+# do NOT want this, matching the existing _GSM_GENRES/_IR_GENRES pattern of
+# a small opt-in membership set rather than a per-preset flag on all 22
+# entries in _GENRE_PRESETS.
+_SIDECHAIN_DUCK_GENRES = {"lofi_house", "lo_fi_funk", "hip_hop_lofi", "chillhop"}
+
+# Per-track mastering LUFS target (see _apply_lufs_mastering). Deliberately
+# set BELOW assemble_video.py's final video-level loudnorm target of -14
+# LUFS (assemble_video.py's `loudnorm=I=-14:LRA=11:TP=-1` pass) so the two
+# normalization stages cooperate instead of fighting: that pass runs once,
+# on the assembled video's mixed-down audio (which can layer this track
+# with others / narration / SFX), and ffmpeg's loudnorm filter is a genuine
+# two-pass dynamics processor with a true-peak limiter, not just a gain
+# trim. If a per-track pass already pushed hard to -14 LUFS, summing
+# several such tracks could push true peaks over the limiter's ceiling
+# before it can react cleanly, or leave loudnorm nothing to work with.
+# Targeting a conservative few LU under (-17) keeps each track's own
+# dynamics/peaks sane and leaves headroom for the video-level pass to do
+# its job without needing to pull level down hard (audible pumping).
+# Matches track_quality.py's AUDIO_LUFS_TARGET_DEFAULT — kept as two
+# independently-set constants (mastering here targets it; the quality gate
+# there only sanity-checks it, generously) rather than a cross-module
+# import, to keep track_quality.py's MIDI/audio-gate logic decoupled from
+# this FX-chain module's dependencies.
+_TRACK_LUFS_TARGET = -17.0
+
 
 def apply_lofi_fx(wav_in: str, wav_out: str, sub_genre: str | None = None,
                   bpm: int = 80, energy: str = "medium") -> None:
@@ -204,12 +232,30 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     # Sub-bass warmth/saturation, parallel-mixed under the low end.
     processed = _apply_sub_bass_saturation(processed, sr)
 
+    # Kick-triggered sidechain "pump" -- gated per-genre (see
+    # _SIDECHAIN_DUCK_GENRES): only genres that actually want the
+    # house/hip-hop pumping character get it. Applied before the vinyl
+    # crackle layer (crackle shouldn't itself get ducked) and before
+    # LUFS mastering (so loudness is measured/targeted on the final
+    # dynamics, not pre-duck).
+    if sub_genre in _SIDECHAIN_DUCK_GENRES:
+        processed = _apply_kick_sidechain_duck(processed, sr)
+
     # Add vinyl crackle (white noise shaped like old record surface)
     if vinyl_vol > 0.01:
         crackle = _make_crackle(processed.shape[1], vinyl_vol)
         processed = processed + crackle
 
-    # Normalize to -1dB peak
+    # Per-track mastering: target a conservative LUFS level (see
+    # _TRACK_LUFS_TARGET for why -17 and not -14) rather than only
+    # peak-normalizing. Supplements, not replaces, the peak-safety ceiling
+    # immediately below -- LUFS targeting controls overall perceived
+    # loudness, the peak ceiling is a hard clip-safety net for any track
+    # whose transients are peaky enough to exceed 0dBFS even at a
+    # conservative integrated loudness.
+    processed = _apply_lufs_mastering(processed, sr)
+
+    # Final peak-safety ceiling to -1dB.
     peak = np.max(np.abs(processed)) + 1e-9
     if peak > 0.89:
         processed = processed * (0.89 / peak)
@@ -253,6 +299,118 @@ def _apply_sub_bass_saturation(audio: "np.ndarray", sr: int) -> "np.ndarray":
     saturated = (np.tanh(lowpassed * drive) / np.tanh(drive)).astype(np.float32)
 
     return (audio + (saturated - lowpassed) * _SUB_BASS_MIX).astype(np.float32)
+
+
+# ── Per-track LUFS mastering ─────────────────────────────────────────────────
+
+_LUFS_MAX_GAIN_DB = 12.0   # cap so a bad/edge-case measurement can't apply a wild correction
+
+
+def _apply_lufs_mastering(audio: "np.ndarray", sr: int,
+                          target_lufs: float = _TRACK_LUFS_TARGET) -> "np.ndarray":
+    """
+    Measure integrated loudness (pyloudnorm, MIT license) and apply a single
+    broadband gain to bring the track to `target_lufs` -- this REPLACES the
+    old peak-only normalization as the primary loudness decision; the
+    peak-safety ceiling still applied right after this in _apply_pedalboard
+    is now just a clip-safety net, not the loudness target itself.
+
+    `audio` is (channels, samples) (this module's convention throughout,
+    matching Pedalboard); pyloudnorm expects (samples,) or
+    (samples, channels), so the array is transposed for measurement only.
+
+    Falls back to a no-op (returning `audio` unchanged) if pyloudnorm is
+    unavailable, or the measurement isn't usable (e.g. -inf integrated
+    loudness for near-silent audio) -- the caller's peak-normalize step
+    still runs afterward either way, so a track is never left un-normalized.
+    """
+    import numpy as np
+    try:
+        import pyloudnorm as pyln
+    except ImportError:
+        return audio
+
+    audio_for_meter = audio.T.astype(np.float64)
+    try:
+        meter = pyln.Meter(sr)
+        loudness = meter.integrated_loudness(audio_for_meter)
+    except Exception:
+        return audio
+    if loudness is None or not np.isfinite(loudness):
+        return audio
+
+    gain_db = max(-_LUFS_MAX_GAIN_DB, min(_LUFS_MAX_GAIN_DB, target_lufs - loudness))
+    gain_linear = 10 ** (gain_db / 20.0)
+    return (audio * gain_linear).astype(np.float32)
+
+
+# ── Kick-triggered sidechain ducking ─────────────────────────────────────────
+
+_DUCK_KICK_BAND_HZ   = (45.0, 120.0)  # kick fundamental range
+_DUCK_ATTACK_MS      = 6.0            # fast: catches the kick transient promptly
+_DUCK_RELEASE_MS     = 180.0          # slow: the classic audible "pump" decay
+_DUCK_AMOUNT_DB      = 4.0            # how far the ducked gain dips
+_DUCK_TRIGGER_FRAC   = 0.22           # fraction of the kick envelope's own peak needed to trigger
+
+
+def _kick_envelope(mono: "np.ndarray", sr: int) -> "np.ndarray":
+    """
+    Fast-attack/slow-release envelope of the kick-band content in `mono`:
+    bandpass to the kick fundamental range, rectify, then take the
+    per-sample MAX of two one-pole lowpass filters with different time
+    constants (a fully-vectorized, well-known trick for an asymmetric
+    attack/release envelope follower without a per-sample Python loop --
+    the fast filter tracks the rising transient quickly, the slow filter
+    holds the level up during the transient's decay).
+    """
+    import numpy as np
+    from scipy.signal import butter, sosfilt
+
+    low_hz, high_hz = _DUCK_KICK_BAND_HZ
+    sos = butter(2, [low_hz, high_hz], btype='bandpass', fs=sr, output='sos')
+    band = sosfilt(sos, mono)
+    rectified = np.abs(band)
+
+    alpha_attack  = np.exp(-1.0 / (_DUCK_ATTACK_MS  / 1000.0 * sr))
+    alpha_release = np.exp(-1.0 / (_DUCK_RELEASE_MS / 1000.0 * sr))
+    fast = _lfilter([1.0 - alpha_attack],  [1.0, -alpha_attack],  rectified)
+    slow = _lfilter([1.0 - alpha_release], [1.0, -alpha_release], rectified)
+    return np.maximum(fast, slow).astype(np.float32)
+
+
+def _apply_kick_sidechain_duck(audio: "np.ndarray", sr: int,
+                               duck_db: float = _DUCK_AMOUNT_DB) -> "np.ndarray":
+    """
+    Self-sidechain "pump": detect kick-band transients from the mix itself
+    and duck the FULL mix gain briefly after each one -- the classic
+    kick-triggered ducking house/hip-hop producers apply to bass/pads,
+    adapted to this pipeline's single mixed-down stereo file (this FX-chain
+    stage only ever sees the final render, not isolated stems, so the kick
+    "sidechain send" is derived from the mix's own low end rather than a
+    real separate kick track). Gated behind a per-genre flag by the caller
+    (_SIDECHAIN_DUCK_GENRES) since the pumping character is wrong for
+    anything meant to sound spacious/unpumped.
+
+    `audio` is (channels, samples). Returns the same shape.
+    """
+    import numpy as np
+
+    mono = audio.mean(axis=0)
+    envelope = _kick_envelope(mono, sr)
+    env_peak = float(np.max(envelope)) + 1e-9
+    env_norm = envelope / env_peak
+
+    # Below the trigger fraction, no ducking at all -- avoids constant low-level
+    # gain wobble from bass/pad energy that happens to sit in the kick band.
+    triggered = np.where(env_norm > _DUCK_TRIGGER_FRAC, env_norm, 0.0)
+    if not np.any(triggered):
+        return audio
+
+    duck_depth = triggered / (float(np.max(triggered)) + 1e-9)   # renormalize 0..1 on trigger content
+    gain_floor = 10 ** (-duck_db / 20.0)
+    gain_curve = (1.0 - duck_depth * (1.0 - gain_floor)).astype(np.float32)
+
+    return (audio * gain_curve[np.newaxis, :]).astype(np.float32)
 
 
 def _apply_ir_reverb(audio: "np.ndarray", sr: int) -> "np.ndarray | None":
