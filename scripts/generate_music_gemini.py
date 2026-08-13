@@ -1783,6 +1783,33 @@ def _append_recipe_log(params: dict, quality_score: float | None = None,
         pass
 
 
+_AUDIO_QUALITY_LOG_FILE = os.path.join(MUSIC_DIR, '.audio_quality_log.jsonl')
+
+
+def _append_audio_quality_log(wav_path: str, score: float, failures: list[str]) -> None:
+    """
+    Append-only JSONL diagnostic log for the AUDIO-domain quality gates (see
+    scripts/track_quality.score_audio_quality) — separate file from
+    _RECIPE_LOG_FILE since this runs at a different pipeline stage (after
+    the final WAV exists, not at param-pick time) and a caller debugging
+    "was this specific published file clipped/silent/off-loudness" wants to
+    grep by filename, not merge into the per-param recipe log. Same
+    append-only, best-effort (never raises) design as _append_recipe_log.
+    """
+    entry = {
+        'ts':       round(time.time()),
+        'file':     os.path.basename(wav_path),
+        'score':    score,
+        'failures': failures,
+    }
+    try:
+        os.makedirs(os.path.dirname(_AUDIO_QUALITY_LOG_FILE), exist_ok=True)
+        with open(_AUDIO_QUALITY_LOG_FILE, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except OSError:
+        pass
+
+
 # ─── ALGORITHMIC PARAM HELPERS ────────────────────────────────────────────────
 
 def _pick_subgenre_weighted(history: list[dict]) -> str:
@@ -2552,6 +2579,26 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
                          swing=float(params.get('swing', 0.62)))
         except Exception as _de:
             print(f"  [DRUMS] Skipped ({_de})")
+
+        # Audio-domain quality gates (clipping/silence/LUFS/spectral-balance
+        # — see track_quality.score_audio_quality) on the FINAL rendered
+        # WAV, i.e. after FluidSynth render + the full lofi_fx chain + drum
+        # layering above — this is the audio the pipeline is actually about
+        # to publish. Deliberately diagnostic only, same as the pre-render
+        # MIDI-structural gates in build_midi(): logs to the recipe log and
+        # stdout, never blocks or retries (the MIDI-level retry loop already
+        # ran; re-rendering audio here would be expensive and there's
+        # nothing cheaper left to swap in). See track_quality.py's module
+        # docstring for the full rationale.
+        try:
+            import soundfile as _sf
+            from scripts.track_quality import score_audio_quality
+            _audio, _sr = _sf.read(out, dtype='float32')
+            _audio_score, _audio_failures = score_audio_quality(_audio, _sr)
+            print(f"  [audio-quality] score={_audio_score:.2f} failures={_audio_failures}")
+            _append_audio_quality_log(out, _audio_score, _audio_failures)
+        except Exception as _aqe:
+            print(f"  [audio-quality] Scoring skipped ({_aqe})")
 
     # Save sidecar metadata for stream now-playing display
     with open(out + ".meta.json", "w", encoding="utf-8") as _mf:

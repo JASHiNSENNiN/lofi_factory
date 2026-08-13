@@ -40,7 +40,7 @@ from scripts.generate_music_gemini import (  # noqa: E402
     _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT,
     maybe_sub_chord, _tension, _apply_tension_to_drums, _chord_pcs_at_bar,
     pick_params, _build_diverse_params,
-    _save_melody_pitch_classes, _append_recipe_log,
+    _save_melody_pitch_classes, _append_recipe_log, _append_audio_quality_log,
     midi_to_wav, _pick_soundfont, MUSIC_DIR,
     GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_BASS, GM_STRINGS, GM_WARM_PAD,
 )
@@ -1301,6 +1301,19 @@ def generate_track(
                          swing=float(params.get('swing', 0.62)))
         except Exception as _de:
             print(f"  [DRUMS] Skipped ({_de})")
+
+        # Audio-domain quality gates on the final rendered WAV — see the
+        # matching block in generate_music_gemini.generate_track() for the
+        # full rationale (diagnostic only, never blocks/retries).
+        try:
+            import soundfile as _sf
+            from scripts.track_quality import score_audio_quality
+            _audio, _sr = _sf.read(out, dtype='float32')
+            _audio_score, _audio_failures = score_audio_quality(_audio, _sr)
+            print(f"  [audio-quality] score={_audio_score:.2f} failures={_audio_failures}")
+            _append_audio_quality_log(out, _audio_score, _audio_failures)
+        except Exception as _aqe:
+            print(f"  [audio-quality] Scoring skipped ({_aqe})")
 
     with open(out + '.meta.json', 'w', encoding='utf-8') as _mf:
         json.dump({'title': params.get('mood', 'lofi dreams'),
