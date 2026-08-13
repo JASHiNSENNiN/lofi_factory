@@ -24,3 +24,9 @@ nicegui>=3.0
 # Analytics forecasting (scripts/analytics.py: simple exponential smoothing
 # over view-velocity for the 7/30-day view-count forecast)
 statsmodels>=0.14
+
+# Stage 3 music-theory depth: functional harmony (Roman-numeral analysis) and
+# audio-domain loudness measurement/mastering — see harmony_engine.py,
+# track_quality.py, lofi_fx.py.
+music21>=9.1
+pyloudnorm>=0.1

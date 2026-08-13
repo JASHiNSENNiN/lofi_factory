@@ -623,6 +623,126 @@ def generate_euclidean_drum_pattern(energy: float, complexity: float = 0.5,
     }
 
 
+# ─── CELLULAR-AUTOMATON RHYTHM (Wolfram elementary CA) ────────────────────────
+# An ADDITIONAL procedural rhythm-pattern source, alongside (not replacing)
+# the Bjorklund/Euclidean generator above — wired into pick_params() with a
+# similar per-track probability, sharing the same
+# params['drum_pattern_a_generated']/['drum_pattern_b_generated'] override
+# slot so build_midi() consumes it identically either way.
+
+# Classic elementary-CA rules (Wolfram's 1983 paper / "A New Kind of
+# Science"), chosen for musically useful onset density:
+#   30  — chaotic, aperiodic (good for busier/energetic kick patterns)
+#   90  — Sierpinski-triangle fractal via XOR(left, right); self-similar,
+#         good for hi-hat texture
+#   110 — proven Turing-complete; complex but structured, mid-density
+#   184 — traffic/particle-hopping rule; produces steady, roughly-even flow
+_CA_RULE_POOL = (30, 90, 110, 184)
+
+
+def _ca_step(rule: int, row: list[int]) -> list[int]:
+    """
+    One generation of a 1D elementary cellular automaton: each cell's next
+    state is f(left, self, right) read off the 8-bit rule table (bit index =
+    3-bit neighborhood pattern 0-7, per Wolfram's rule-number convention).
+    Circular (wraparound) boundary so the result tiles cleanly onto the
+    16-step drum grid, which is itself a repeating loop.
+    """
+    n = len(row)
+    rule_bits = [(rule >> b) & 1 for b in range(8)]
+    nxt = [0] * n
+    for i in range(n):
+        left  = row[(i - 1) % n]
+        mid   = row[i]
+        right = row[(i + 1) % n]
+        pattern = (left << 2) | (mid << 1) | right
+        nxt[i] = rule_bits[pattern]
+    return nxt
+
+
+def _ca_evolve(rule: int, width: int, generations: int, seed_row: list[int] | None = None) -> list[int]:
+    """Evolve an elementary CA for `generations` steps from a single-cell
+    seed (the classic elementary-CA starting condition) and return the final
+    generation's binary row."""
+    row = seed_row[:] if seed_row is not None else [0] * width
+    if seed_row is None:
+        row[width // 2] = 1
+    for _ in range(max(0, generations)):
+        row = _ca_step(rule, row)
+    return row
+
+
+def _ioi_velocities(onsets: list[int], base_vel: int, accent_vel: int, n: int = 16) -> list[int]:
+    """Inter-onset-interval velocity weighting (see generate_euclidean_drum_pattern's
+    identical technique) — a longer gap before an onset reads as perceptually
+    stronger, so it gets proportionally more velocity than a densely-packed one."""
+    vels = [0] * n
+    onset_steps = [i for i, on in enumerate(onsets) if on]
+    if not onset_steps:
+        return vels
+    for idx, step in enumerate(onset_steps):
+        prev_step = onset_steps[idx - 1] if idx > 0 else onset_steps[-1] - n
+        gap = step - prev_step
+        gap_frac = max(0.0, min(1.0, gap / (n / 2)))
+        vels[step] = int(base_vel + gap_frac * (accent_vel - base_vel))
+    return vels
+
+
+def generate_ca_drum_pattern(energy: float, complexity: float = 0.5,
+                              rule: int | None = None, seed: int | None = None) -> dict:
+    """
+    Generate a full 16-step drum pattern from a Wolfram elementary cellular
+    automaton (1D binary array, next-generation cell = f(left, self, right)
+    read off an 8-bit rule table — rule-30/rule-90 style). A second,
+    independent procedural rhythm-pattern source alongside
+    generate_euclidean_drum_pattern — same {DRUM_NOTE: [16 velocities]}
+    output shape, so it's an equally valid drop-in for
+    params['drum_pattern_a_generated']/['drum_pattern_b_generated'].
+
+    Kick comes from evolving the chosen rule for a `complexity`-scaled number
+    of generations from the classic single-cell seed. Snare continues
+    evolving the SAME automaton run a few more generations (so it's
+    correlated with, but distinct from, the kick — like a later "slice" of
+    the same unfolding pattern). Hats use rule 90 specifically (the
+    Sierpinski-triangle fractal via XOR(left, right)) run for more
+    generations, scaled by complexity, for denser texture. Any degenerate
+    (all-zero) row — common for some rule/generation-count combinations,
+    since several elementary CA rules die out to a fixed point — falls back
+    to a minimal onset so the pattern is never completely silent.
+    """
+    rng = random.Random(seed) if seed is not None else random
+    energy = max(0.0, min(1.0, energy))
+    complexity = max(0.0, min(1.0, complexity))
+    n = 16
+    rule = rule if rule is not None else rng.choice(_CA_RULE_POOL)
+
+    kick_generations = max(2, min(10, round(3 + complexity * 6)))
+    kick_row = _ca_evolve(rule, n, kick_generations)
+    if not any(kick_row):
+        kick_row = [0] * n
+        kick_row[0] = 1
+
+    snare_row = _ca_step(rule, _ca_step(rule, kick_row))
+    if not any(snare_row):
+        snare_row = [0] * n
+        snare_row[n // 2] = 1
+
+    hat_generations = max(3, min(12, round(4 + complexity * 8)))
+    hat_row = _ca_evolve(90, n, hat_generations)
+    if not any(hat_row):
+        hat_row = [1 if i % 2 == 0 else 0 for i in range(n)]
+
+    rim_row = _ca_step(rule, snare_row)
+
+    return {
+        KICK:  _ioi_velocities(kick_row,  int(58 + energy * 32), int(80 + energy * 15), n),
+        SNARE: _ioi_velocities(snare_row, 62, 90, n),
+        CHH:   _ioi_velocities(hat_row,   38, 68, n),
+        OHH:   [0] * n,
+        RIM:   _ioi_velocities(rim_row,   24, 40, n),
+    }
+
+
 # ─── DRUM PATTERNS (16-step) ──────────────────────────────────────────────────
 
 DRUM_PATTERNS = [
@@ -1622,7 +1742,8 @@ _RECIPE_LOG_FILE = os.path.join(MUSIC_DIR, '.recipe_log.jsonl')
 
 def _append_recipe_log(params: dict, quality_score: float | None = None,
                         quality_retries: int | None = None,
-                        ga_voicing: bool | None = None) -> None:
+                        ga_voicing: bool | None = None,
+                        voicing_optimizer_wins: dict | None = None) -> None:
     """
     Append-only JSONL diagnostic log: one line per generated track, recording
     which generative techniques fired and (once the quality gate runs) how it
@@ -1638,17 +1759,52 @@ def _append_recipe_log(params: dict, quality_score: float | None = None,
         'sub_genre':       params.get('sub_genre', ''),
         'key':             params.get('key', ''),
         'bpm':             params.get('bpm', ''),
-        'euclid_a':        'drum_pattern_a_generated' in params,
-        'euclid_b':        'drum_pattern_b_generated' in params,
+        'euclid_a':        params.get('drum_pattern_a_source') == 'euclidean',
+        'euclid_b':        params.get('drum_pattern_b_source') == 'euclidean',
+        'ca_rhythm_a':     params.get('drum_pattern_a_source') == 'ca',
+        'ca_rhythm_b':     params.get('drum_pattern_b_source') == 'ca',
         'markov_prog':     'generated_progression' in params,
+        'harmony_engine':  'harmony_progression' in params,
         'self_markov':     'markov_melody_nodes' in params,
         'ga_voicing':      bool(ga_voicing),
+        # Which whole-progression voicing optimizer (GA vs. simulated
+        # annealing — see _voice_lead_progression_best in generate_music_v2.py)
+        # won the lower-cost comparison each time it fired this track, e.g.
+        # {"ga": 2, "annealing": 1}. None when the optimizer never fired.
+        'voicing_optimizer_wins': voicing_optimizer_wins,
         'quality_score':   quality_score,
         'quality_retries': quality_retries,
     }
     try:
         os.makedirs(os.path.dirname(_RECIPE_LOG_FILE), exist_ok=True)
         with open(_RECIPE_LOG_FILE, 'a') as f:
+            f.write(json.dumps(entry) + '\n')
+    except OSError:
+        pass
+
+
+_AUDIO_QUALITY_LOG_FILE = os.path.join(MUSIC_DIR, '.audio_quality_log.jsonl')
+
+
+def _append_audio_quality_log(wav_path: str, score: float, failures: list[str]) -> None:
+    """
+    Append-only JSONL diagnostic log for the AUDIO-domain quality gates (see
+    scripts/track_quality.score_audio_quality) — separate file from
+    _RECIPE_LOG_FILE since this runs at a different pipeline stage (after
+    the final WAV exists, not at param-pick time) and a caller debugging
+    "was this specific published file clipped/silent/off-loudness" wants to
+    grep by filename, not merge into the per-param recipe log. Same
+    append-only, best-effort (never raises) design as _append_recipe_log.
+    """
+    entry = {
+        'ts':       round(time.time()),
+        'file':     os.path.basename(wav_path),
+        'score':    score,
+        'failures': failures,
+    }
+    try:
+        os.makedirs(os.path.dirname(_AUDIO_QUALITY_LOG_FILE), exist_ok=True)
+        with open(_AUDIO_QUALITY_LOG_FILE, 'a') as f:
             f.write(json.dumps(entry) + '\n')
     except OSError:
         pass
@@ -1807,13 +1963,32 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
     if random.random() < 0.35:
         try:
             params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+            params['drum_pattern_a_source'] = 'euclidean'
         except Exception as e:
             print(f"  [params] Euclidean drum A generation failed ({e}) — using curated table")
+    elif random.random() < 0.20:
+        # Cellular-automaton pattern (see generate_ca_drum_pattern) — a
+        # second procedural rhythm source, mutually exclusive with the
+        # Euclidean roll above (both write the same override slot) but
+        # picked with a comparable ~20% probability, within the same
+        # 15-35% range the Euclidean generator itself uses.
+        try:
+            params['drum_pattern_a_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
+            params['drum_pattern_a_source'] = 'ca'
+        except Exception as e:
+            print(f"  [params] CA drum A generation failed ({e}) — using curated table")
     if random.random() < 0.35:
         try:
             params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+            params['drum_pattern_b_source'] = 'euclidean'
         except Exception as e:
             print(f"  [params] Euclidean drum B generation failed ({e}) — using curated table")
+    elif random.random() < 0.20:
+        try:
+            params['drum_pattern_b_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
+            params['drum_pattern_b_source'] = 'ca'
+        except Exception as e:
+            print(f"  [params] CA drum B generation failed ({e}) — using curated table")
 
     # ~30% chance to procedurally generate a fresh progression (Markov walk
     # over the curated table's chord transitions) instead of indexing into the
@@ -1829,6 +2004,31 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
             )
         except Exception as e:
             print(f"  [params] Progression generation failed ({e}) — using curated table")
+
+    # ~20% chance to use the music21-backed functional-harmony engine
+    # (Roman-numeral T-S-D walk with secondary-dominant tonicization; see
+    # harmony_engine.py) instead of the curated table / bigram Markov walk
+    # above. Gated behind HARMONY_ENGINE_ENABLED (default on) so it can be
+    # switched off pipeline-wide without touching call sites, and behind a
+    # per-track probability roll so existing behavior is not silently
+    # changed for every track. params['harmony_progression'], when present,
+    # takes top priority in build_midi() (see the `prog = ...` fallback
+    # chain there) — mirrors how generated_progression already layers over
+    # the fixed table.
+    if os.getenv('HARMONY_ENGINE_ENABLED', '1') != '0' and random.random() < 0.20:
+        try:
+            from scripts.harmony_engine import generate_functional_progression, center_for_key
+            chord_count = len(PROGRESSIONS[prog]) if PROGRESSIONS[prog] else 4
+            center, hmode = center_for_key(key)
+            hp = generate_functional_progression(
+                tonal_center=center, mode=hmode,
+                length=max(2, min(6, chord_count)),
+                secondary_dominant_prob=round(random.uniform(0.2, 0.5), 2),
+            )
+            params['harmony_progression'] = hp.chords
+            params['harmony_roman_numerals'] = hp.roman_numerals
+        except Exception as e:
+            print(f"  [params] Harmony-engine progression failed ({e}) — using curated table")
 
     # Self-referential melodic voice: once enough history exists, bias new
     # melodies toward the pipeline's own past output (no external data, no
@@ -1901,6 +2101,86 @@ _FORM_BY_SUBGENRE = {
     'nujabes':        'extended',
     'lofi_jazz':      'extended',
 }
+
+# ─── GENERATIVE SONG-FORM GRAMMAR ──────────────────────────────────────────
+# An ADDITIONAL, more varied alternative to the 5 hand-authored _SONG_FORMS
+# above, not a replacement — wired into build_midi()/build_midi_v2() with a
+# per-track probability roll (see there), same style as the other Stage-3
+# optional-generative-layer toggles (harmony engine, CA rhythm, etc.).
+#
+# Grammar (informal EBNF, matching the existing (label, num_prog_loops) form
+# shape build_midi already consumes):
+#     form   := 'I' ('A' break? 'B')+ 'O'
+#     break  := 'BR' | ε                      (optional, ~45% of the time)
+# i.e. intro, then one or more (A section, then one-or-more optional-break+B
+# groups), then outro — a direct generative expansion of the same section
+# vocabulary the curated forms already use ('I'/'A'/'BR'/'B'/'O'), so it
+# drops into the exact same consumption code with zero changes there.
+#
+# Bounded by construction (not by discard-and-retry) so it always
+# terminates and never produces a "wildly long or degenerate" structure:
+# loop counts are drawn from small per-label ranges, and the running total
+# is hard-capped at _FORM_GRAMMAR_MAX_TOTAL_LOOPS (comparable in scale to
+# the existing hand-authored forms' 5-16 loop range) by refusing/clamping
+# any addition that would exceed it.
+_FORM_GRAMMAR_LOOP_RANGES = {
+    'I': (1, 2), 'A': (2, 5), 'BR': (1, 2), 'B': (2, 5), 'O': (1, 2),
+}
+_FORM_GRAMMAR_MAX_TOTAL_LOOPS = 20
+_FORM_GRAMMAR_MAX_TOP_GROUPS = 2
+_FORM_GRAMMAR_MAX_B_REPEATS = 2
+_FORM_GRAMMAR_BREAK_PROB = 0.45
+
+
+def generate_song_form(seed: int | None = None) -> list[tuple[str, int]]:
+    """
+    Generate a song form by seeded random expansion of the
+    'I (A (BR? B)+)+ O' grammar above. Returns a list of
+    (section_label, num_prog_loops) tuples — the exact same shape as
+    _SONG_FORMS entries, so it's a drop-in alternative wherever a form is
+    consumed. Deterministic given `seed` (uses a local Random instance so
+    it never disturbs the pipeline's global random stream when called with
+    an explicit seed); uses the shared global stream when seed is None,
+    consistent with how the rest of this module's optional generative
+    layers behave when wired into the real per-track pipeline (determinism
+    then comes from whatever top-level seed the caller set, not a
+    per-feature seed threaded through params).
+    """
+    rng = random.Random(seed) if seed is not None else random
+
+    def _loops(label: str) -> int:
+        lo, hi = _FORM_GRAMMAR_LOOP_RANGES[label]
+        return rng.randint(lo, hi)
+
+    intro_loops = _loops('I')
+    form: list[tuple[str, int]] = [('I', intro_loops)]
+    total = intro_loops
+
+    n_top_groups = rng.randint(1, _FORM_GRAMMAR_MAX_TOP_GROUPS)
+    for _ in range(n_top_groups):
+        if total >= _FORM_GRAMMAR_MAX_TOTAL_LOOPS:
+            break
+        a_loops = min(_loops('A'), max(1, _FORM_GRAMMAR_MAX_TOTAL_LOOPS - total))
+        form.append(('A', a_loops))
+        total += a_loops
+
+        n_b_repeats = rng.randint(1, _FORM_GRAMMAR_MAX_B_REPEATS)
+        for _ in range(n_b_repeats):
+            if total >= _FORM_GRAMMAR_MAX_TOTAL_LOOPS:
+                break
+            if rng.random() < _FORM_GRAMMAR_BREAK_PROB:
+                br_loops = _loops('BR')
+                if total + br_loops <= _FORM_GRAMMAR_MAX_TOTAL_LOOPS:
+                    form.append(('BR', br_loops))
+                    total += br_loops
+            b_loops = min(_loops('B'), max(1, _FORM_GRAMMAR_MAX_TOTAL_LOOPS - total))
+            form.append(('B', b_loops))
+            total += b_loops
+
+    outro_loops = _loops('O')
+    form.append(('O', outro_loops))
+    return form
+
 
 # Secondary genre-specific instrument texture layer
 # (program, style) — style controls rhythm pattern for that instrument character
@@ -2045,8 +2325,14 @@ def build_midi(params, output_path):
     markov_nodes = params.get('markov_melody_nodes')
 
     # A procedurally-generated progression (Markov walk, ~18% of the time —
-    # see generate_progression) takes priority over the curated table.
-    prog      = params.get('generated_progression') or PROGRESSIONS[prog_idx]
+    # see generate_progression) takes priority over the curated table. The
+    # music21-backed functional-harmony engine (see harmony_engine.py,
+    # ~20% of the time via pick_params) takes top priority of all three when
+    # present — it is the most theoretically-grounded source (real
+    # Roman-numeral tonicization/secondary-dominant resolution) but still an
+    # alternate source layered on top of, not replacing, the other two.
+    prog      = (params.get('harmony_progression') or params.get('generated_progression')
+                 or PROGRESSIONS[prog_idx])
     prog_bars = sum(d for _,d in prog)
     key_root  = KEY_ROOTS.get(key, 57)
 
@@ -2072,6 +2358,17 @@ def build_midi(params, output_path):
     # ── Song form ───────────────────────────────────────────────
     form_name = _FORM_BY_SUBGENRE.get(sub_genre, 'standard')
     form = _SONG_FORMS[form_name]
+    # ~25% of the time, use the generative form-grammar (see
+    # generate_song_form) instead of the hand-authored form above — an
+    # additional source of structural variety, not a replacement; same
+    # try/except-guarded, per-track-probability-gated pattern as this
+    # module's other optional generative layers.
+    if random.random() < 0.25:
+        try:
+            form = generate_song_form()
+            form_name = 'generative'
+        except Exception as e:
+            print(f"  [form] Generative form grammar failed ({e}) — using '{form_name}'")
 
     # Total bars and fill bars (last bar before each section transition)
     TOTAL = sum(prog_bars * n for _, n in form)
@@ -2374,6 +2671,26 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
         except Exception as _de:
             print(f"  [DRUMS] Skipped ({_de})")
 
+        # Audio-domain quality gates (clipping/silence/LUFS/spectral-balance
+        # — see track_quality.score_audio_quality) on the FINAL rendered
+        # WAV, i.e. after FluidSynth render + the full lofi_fx chain + drum
+        # layering above — this is the audio the pipeline is actually about
+        # to publish. Deliberately diagnostic only, same as the pre-render
+        # MIDI-structural gates in build_midi(): logs to the recipe log and
+        # stdout, never blocks or retries (the MIDI-level retry loop already
+        # ran; re-rendering audio here would be expensive and there's
+        # nothing cheaper left to swap in). See track_quality.py's module
+        # docstring for the full rationale.
+        try:
+            import soundfile as _sf
+            from scripts.track_quality import score_audio_quality
+            _audio, _sr = _sf.read(out, dtype='float32')
+            _audio_score, _audio_failures = score_audio_quality(_audio, _sr)
+            print(f"  [audio-quality] score={_audio_score:.2f} failures={_audio_failures}")
+            _append_audio_quality_log(out, _audio_score, _audio_failures)
+        except Exception as _aqe:
+            print(f"  [audio-quality] Scoring skipped ({_aqe})")
+
     # Save sidecar metadata for stream now-playing display
     with open(out + ".meta.json", "w", encoding="utf-8") as _mf:
         json.dump({
@@ -2473,13 +2790,27 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
         if random.random() < 0.35:
             try:
                 track_params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+                track_params['drum_pattern_a_source'] = 'euclidean'
             except Exception as e:
                 print(f"  [params] Euclidean drum A generation failed ({e}) — using curated table")
+        elif random.random() < 0.20:
+            try:
+                track_params['drum_pattern_a_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
+                track_params['drum_pattern_a_source'] = 'ca'
+            except Exception as e:
+                print(f"  [params] CA drum A generation failed ({e}) — using curated table")
         if random.random() < 0.35:
             try:
                 track_params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
+                track_params['drum_pattern_b_source'] = 'euclidean'
             except Exception as e:
                 print(f"  [params] Euclidean drum B generation failed ({e}) — using curated table")
+        elif random.random() < 0.20:
+            try:
+                track_params['drum_pattern_b_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
+                track_params['drum_pattern_b_source'] = 'ca'
+            except Exception as e:
+                print(f"  [params] CA drum B generation failed ({e}) — using curated table")
 
         # Same ~30% chance for a Markov-generated progression as pick_params().
         if random.random() < 0.30:
@@ -2491,6 +2822,23 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
                 )
             except Exception as e:
                 print(f"  [params] Progression generation failed ({e}) — using curated table")
+
+        # Same ~20% chance for the music21 functional-harmony engine as
+        # pick_params() (see there for the full rationale).
+        if os.getenv('HARMONY_ENGINE_ENABLED', '1') != '0' and random.random() < 0.20:
+            try:
+                from scripts.harmony_engine import generate_functional_progression, center_for_key
+                chord_count = len(PROGRESSIONS[track_params['progression']])
+                center, hmode = center_for_key(key)
+                hp = generate_functional_progression(
+                    tonal_center=center, mode=hmode,
+                    length=max(2, min(6, chord_count)),
+                    secondary_dominant_prob=round(random.uniform(0.2, 0.5), 2),
+                )
+                track_params['harmony_progression'] = hp.chords
+                track_params['harmony_roman_numerals'] = hp.roman_numerals
+            except Exception as e:
+                print(f"  [params] Harmony-engine progression failed ({e}) — using curated table")
         if self_markov:
             track_params['markov_melody_nodes'] = self_markov
 

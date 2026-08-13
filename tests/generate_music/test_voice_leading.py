@@ -25,7 +25,11 @@ def test_parallel_fifths_penalty_fires():
 
 def test_tight_spacing_penalty_fires_even_at_zero_displacement():
     cost = _voicing_transition_cost([60, 61], [60, 61])
-    assert cost == 3.0  # (3 - 1) * 1.5, no displacement/parallel/contrary terms
+    # (3 - 1) * 1.5 spacing penalty, plus the pair's m2 (interval class 1) is
+    # a dissonance held unchanged (not resolved by step) across the
+    # transition, so the per-voice-pair dissonance-resolution check also
+    # fires: +3.0. No displacement/parallel/contrary terms.
+    assert cost == 6.0
 
 
 def test_enumerate_shift_options_only_yields_ascending_variants():
