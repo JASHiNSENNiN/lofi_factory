@@ -18,7 +18,7 @@ from fastapi.responses import RedirectResponse
 
 from nicegui import app, ui
 
-from . import auth, automation, config, data, jobs, stats, theme, youtube_oauth
+from . import alerts, auth, automation, config, data, jobs, stats, theme, youtube_oauth
 
 NAV = [
     ("studio", "Studio", "graphic_eq"),
@@ -315,6 +315,17 @@ def _card_from_artifacts(j) -> dict | None:
     }
 
 
+async def _retry_job(job_id: str) -> None:
+    """Re-run a failed JobManager history entry with its exact original
+    cmd/args (see jobs.JobManager.retry) -- shared by the Studio "Recent
+    runs" table and any other place that lists JobManager history."""
+    try:
+        await jobs.manager.retry(job_id)
+        ui.notify("Retrying job…", type="positive")
+    except (ValueError, RuntimeError) as e:
+        ui.notify(str(e), type="negative")
+
+
 def _runs_table(history: list) -> None:
     if not history:
         ui.label("No runs yet this session.").classes(theme.SUB + " mt-1")
@@ -335,6 +346,10 @@ def _runs_table(history: list) -> None:
                     ui.button("View", icon="visibility",
                               on_click=lambda card=card: _open_detail([card], 0))\
                         .props("flat dense color=primary")
+                if j.status == "failed":
+                    ui.button("Retry", icon="replay",
+                              on_click=lambda j=j: _retry_job(j.id))\
+                        .props("flat dense color=secondary")
 
 
 def _library_grid(cards: list[dict], on_change=lambda: None) -> None:
@@ -1183,51 +1198,101 @@ _CAL_KIND_STYLE = {
     "live":           ("sensors", "#e8849a"),
     "scheduled_live": ("event", "#e8a45c"),
 }
+# Queue-slot chip styling -- "stream" queue items are new (see queue_dialog's
+# slot selector) and need to read as clearly distinct from "main" ones in
+# the shared "Up next" list rather than blending into a plain text label.
+_SLOT_STYLE = {
+    "main":   ("movie", "#a89db5", "render"),
+    "stream": ("sensors", "#e8849a", "live"),
+}
+
+
+def _slot_chip(slot: str) -> None:
+    icon, color, label = _SLOT_STYLE.get(slot, ("event_note", "#a89db5", slot))
+    with ui.row().classes("items-center gap-1 no-wrap").style("min-width:70px"):
+        ui.icon(icon).style(f"color:{color}; font-size:16px")
+        ui.label(label).classes(theme.SUB).style(f"color:{color}")
 
 
 def queue_dialog() -> None:
     """Add-to-queue dialog — same render options as the Studio tab's "New
     render" dialog, but appends to the persisted batch queue instead of
     launching immediately (see webui/jobs.py's JobQueue). Multiple can be
-    queued back-to-back; JobQueue.drain_forever() runs them one at a time as
-    the "main" slot frees up, exactly respecting the existing single-job
-    busy check."""
+    queued back-to-back; JobQueue.drain_forever() runs them one at a time per
+    slot as it frees up, exactly respecting the existing single-job busy
+    check.
+
+    A "Queue slot" selector picks which JobQueue slot the item drains into --
+    "main" (render/render+upload, drains alongside "New render" clicks) or
+    "stream" (go-live, drains alongside "Go live" clicks on the Live page).
+    JobQueue.add() has always accepted slot= structurally; this dialog is
+    just the first UI that exposes the stream slot."""
     yt_connected = youtube_oauth.status()["connected"]
     with ui.dialog() as dlg, ui.element("div").classes("studio-card w-96 gap-3"):
         ui.label("Add to queue").classes(theme.H)
-        tsel = ui.select(config.THEMES, value=config.DEFAULT_THEME, label="Theme").classes("w-full")
-        dsel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION, label="Duration").classes("w-full")
-        psel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY, label="Privacy").classes("w-full")
+        slot_sel = ui.select({"main": "Render / Upload", "stream": "Live stream"},
+                              value="main", label="Queue slot").classes("w-full")
         note = ui.input("Note (optional)", placeholder='e.g. "weekend batch"').classes("w-full")
-        if not yt_connected:
-            ui.label("YouTube isn't connected — \"Queue render only\" still works; "
-                     "connect YouTube in Settings before queuing an upload.") \
-                .classes(theme.SUB).style("color:#e8a45c")
+
+        with ui.column().classes("w-full gap-2") as main_fields:
+            tsel = ui.select(config.THEMES, value=config.DEFAULT_THEME, label="Theme").classes("w-full")
+            dsel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION, label="Duration").classes("w-full")
+            psel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY, label="Privacy").classes("w-full")
+            if not yt_connected:
+                ui.label("YouTube isn't connected — \"Render only\" still works; "
+                         "connect YouTube in Settings before queuing an upload.") \
+                    .classes(theme.SUB).style("color:#e8a45c")
+
+        with ui.column().classes("w-full gap-2") as stream_fields:
+            qsel = ui.select(config.STREAM_QUALITY, value="720p15", label="Quality").classes("w-full")
+            psel_stream = ui.select(config.PRIVACY, value="public", label="Privacy").classes("w-full")
+            if not yt_connected:
+                ui.label("YouTube isn't connected — connect it in Settings before "
+                         "queuing a live stream.").classes(theme.SUB).style("color:#e8a45c")
 
         def add(upload: bool) -> None:
-            if upload:
+            if slot_sel.value == "stream":
+                args = ["publish.py", "live", "--quality", qsel.value,
+                        "--privacy", psel_stream.value]
+                jobs.queue.add("live", args, slot="stream", note=note.value or "")
+            elif upload:
                 args = ["publish.py", "auto", "--privacy", psel.value, "--duration", dsel.value]
                 if tsel.value != "random":
                     args += ["--theme", tsel.value]
-                name = "render+upload"
+                jobs.queue.add("render+upload", args, slot="main", note=note.value or "")
             else:
                 args = ["run.py", "--skip-upload", "--duration", dsel.value]
                 if tsel.value != "random":
                     args += ["--theme", tsel.value]
-                name = "render"
-            jobs.queue.add(name, args, slot="main", note=note.value or "")
+                jobs.queue.add("render", args, slot="main", note=note.value or "")
             dlg.close()
             ui.notify("Added to queue", type="positive")
             set_view("calendar")
 
         with ui.row().classes("w-full justify-end gap-2 mt-1"):
             ui.button("Cancel", on_click=dlg.close).props("flat color=primary")
-            ui.button("Render only", on_click=lambda: add(False)).props("color=secondary")
+            render_only_btn = ui.button("Render only", on_click=lambda: add(False)) \
+                .props("color=secondary")
             upload_btn = ui.button("Render + Upload", on_click=lambda: add(True)) \
+                .props("color=primary")
+            stream_btn = ui.button("Queue live stream", on_click=lambda: add(True)) \
                 .props("color=primary")
             if not yt_connected:
                 upload_btn.disable()
                 upload_btn.tooltip("Connect YouTube in Settings first")
+                stream_btn.disable()
+                stream_btn.tooltip("Connect YouTube in Settings first")
+
+        def on_slot_change() -> None:
+            is_stream = slot_sel.value == "stream"
+            main_fields.visible = not is_stream
+            stream_fields.visible = is_stream
+            render_only_btn.visible = not is_stream
+            upload_btn.visible = not is_stream
+            stream_btn.visible = is_stream
+
+        slot_sel.on_value_change(on_slot_change)
+        on_slot_change()
     dlg.open()
 
 
@@ -1262,7 +1327,7 @@ def view_calendar(root) -> None:
                             ui.label(f"#{idx + 1}").classes(theme.SUB).style("min-width:28px")
                             ui.label(item["name"]).classes("text-sm font-medium") \
                                 .style("min-width:140px")
-                            ui.label(item["slot"]).classes(theme.SUB).style("min-width:60px")
+                            _slot_chip(item["slot"])
                             ui.label(item["note"] or "").classes(theme.SUB).style("flex:1")
                             if idx > 0:
                                 ui.button(icon="arrow_upward",
@@ -1276,6 +1341,36 @@ def view_calendar(root) -> None:
                                           ui.notify("Removed from queue"),
                                           set_view("calendar"))) \
                                 .props("flat round dense").tooltip("Remove")
+
+        # ── Recent queue runs (finished batch-queue items, both slots) ───────
+        # Additive block, separate from "Up next" above -- shows what already
+        # ran (success/failed/cancelled) with a Retry action on failed items
+        # (re-queues the exact original args/slot/note via JobQueue.retry()).
+        with ui.element("div").classes("studio-card w-full"):
+            ui.label("Recent queue runs").classes(theme.H)
+            history = jobs.queue.list_history(limit=10)
+            if not history:
+                ui.label("No queued runs finished yet.").classes(theme.SUB + " mt-2")
+            else:
+                with ui.column().classes("w-full gap-1 mt-2"):
+                    for item in history:
+                        color = _STATUS_COLOR.get(item.status, "#a89db5")
+                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
+                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                            ui.icon(_STATUS_ICON.get(item.status, "help")).style(f"color:{color}")
+                            ui.label(item.name).classes("text-sm font-medium") \
+                                .style("min-width:140px")
+                            _slot_chip(item.slot)
+                            ui.label(item.status).classes("text-sm") \
+                                .style(f"color:{color}; min-width:80px")
+                            ui.label(item.note or "").classes(theme.SUB).style("flex:1")
+                            if item.status == "failed":
+                                ui.button("Retry", icon="replay",
+                                          on_click=lambda item=item: (
+                                              jobs.queue.retry(item.id),
+                                              ui.notify("Re-queued", type="positive"),
+                                              set_view("calendar"))) \
+                                    .props("flat dense color=secondary")
 
         # ── Timeline (past + scheduled uploads) ──────────────────────────────
         with ui.element("div").classes("studio-card w-full"):
@@ -1531,7 +1626,25 @@ def view_settings(root) -> None:
             _env_field("Spotify client ID", "SPOTIFY_CLIENT_ID")
             _env_field("Spotify client secret", "SPOTIFY_CLIENT_SECRET", secret=True)
             ui.separator()
-            _env_field("Stream alert webhook (Slack/Discord)", "LOFI_STREAM_ALERT_WEBHOOK")
+            _env_field("Alert URL(s) — stream reconnect, render/queue failures",
+                       "LOFI_STREAM_ALERT_WEBHOOK")
+            ui.label("A Slack/Discord incoming-webhook URL works as-is (unchanged from "
+                     "before). To notify other platforms too — Telegram, email, Pushover, "
+                     "ntfy, etc. — paste a comma-separated list of apprise:// URLs; see the "
+                     "apprise URL catalog for the full list of supported services.") \
+                .classes(theme.SUB)
+
+            async def send_test_alert() -> None:
+                if not alerts.configured():
+                    ui.notify("No alert URL configured above — save one first.", type="warning")
+                    return
+                ok = await alerts.send_test_alert()
+                ui.notify("Test alert sent." if ok else
+                          "Failed to send — check the URL(s) and webui logs.",
+                          type="positive" if ok else "negative")
+
+            ui.button("Send test alert", icon="notifications_active", on_click=send_test_alert) \
+                .props("flat dense color=secondary")
 
         with theme.card("Render defaults",
                         "Pre-selected values when opening \"New render\" — saves re-picking "
