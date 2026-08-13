@@ -135,6 +135,93 @@ def disconnect() -> None:
         pass
 
 
+# ── Monetary analytics (OPT-IN, separate scope + separate token file) ─────────
+# YouTube Analytics revenue/RPM/CPM metrics require the
+# yt-analytics-monetary.readonly scope, which config.SCOPES / the main login
+# above deliberately do NOT request (see scripts/upload_youtube.py's
+# MONETARY_SCOPES docstring). Everything below is a second, clearly-labeled
+# consent flow the user must explicitly start from Settings -- it never runs
+# as a side effect of the normal "Connect YouTube" button, and its token is
+# written to a completely separate file (config.TOKEN_FILE_MONETARY) so it
+# can be disconnected independently and never silently upgrades token.json's
+# scopes.
+#
+# This reuses the exact same web-redirect Flow mechanics as the main login
+# above (google-auth-oauthlib's Flow.from_client_secrets_file), just pointed
+# at MONETARY_SCOPES and a second callback path -- incremental-auth style
+# (Google's server treats a fresh consent request for a superset of scopes as
+# a normal new grant; there's no special "incremental" API call needed, only
+# a second explicit authorization_url()/consent round-trip, which is exactly
+# what a truly opt-in second flow should look like anyway).
+_pending_state_monetary: str | None = None
+
+
+def monetary_status() -> dict:
+    """Light, no-network connection status for the Settings 'Revenue & RPM' card."""
+    info: dict = {
+        "connected": False,
+        "client_present": os.path.exists(config.CLIENT_SECRET),
+        "redirect_uri": config.redirect_uri_monetary(),
+        "scopes_ok": False,
+    }
+    if os.path.exists(config.TOKEN_FILE_MONETARY):
+        try:
+            tok = json.load(open(config.TOKEN_FILE_MONETARY))
+            info["connected"] = bool(tok.get("refresh_token") or tok.get("token"))
+            info["scopes_ok"] = set(config.MONETARY_SCOPES).issubset(set(tok.get("scopes", [])))
+        except Exception:
+            pass
+    return info
+
+
+def _monetary_flow():
+    from google_auth_oauthlib.flow import Flow
+
+    flow = Flow.from_client_secrets_file(
+        config.CLIENT_SECRET, scopes=config.MONETARY_SCOPES,
+    )
+    flow.redirect_uri = config.redirect_uri_monetary()
+    return flow
+
+
+def monetary_authorization_url() -> str:
+    """Build the Google consent URL for the monetary-scope opt-in and stash CSRF state."""
+    global _pending_state_monetary
+    flow = _monetary_flow()
+    url, state = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+    )
+    _pending_state_monetary = state
+    return url
+
+
+def monetary_handle_callback(code: str, state: str | None) -> None:
+    """Exchange the auth code for tokens and persist token_monetary.json (never token.json)."""
+    global _pending_state_monetary
+    if _pending_state_monetary and state and state != _pending_state_monetary:
+        raise ValueError("OAuth state mismatch — please retry the login.")
+    flow = _monetary_flow()
+    flow.fetch_token(code=code)
+    _write_token_monetary(flow.credentials)
+    _pending_state_monetary = None
+
+
+def _write_token_monetary(creds) -> None:
+    fd = os.open(config.TOKEN_FILE_MONETARY, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(creds.to_json())
+
+
+def monetary_disconnect() -> None:
+    """Remove the stored monetary-scope token (sign out of revenue tracking only)."""
+    try:
+        os.remove(config.TOKEN_FILE_MONETARY)
+    except FileNotFoundError:
+        pass
+
+
 # ── Device-code flow (no redirect_uri at all) ─────────────────────────────────
 # For deployments where the redirect-based flow above can't work reliably --
 # e.g. Tailscale-only with client-side MagicDNS problems, or any network where
