@@ -598,24 +598,26 @@ def cmd_playlist(args):
             title = p["snippet"]["title"]
             count = p["contentDetails"]["itemCount"]
             print(f"  {pid}  ({count:>3} videos)  {title}")
-        print(f"\n  Add IDs to .env: YT_PLAYLIST_STUDY=PLxxx  YT_PLAYLIST_SLEEP=PLyyy")
+        print(f"\n  Add IDs to .env, e.g.: YT_PLAYLIST_ACTIVITY=PLxxx  (pillar-based -- see "
+              f"scripts/playlist_curation.py; legacy YT_PLAYLIST_STUDY/YT_PLAYLIST_SLEEP "
+              f"still work as a fallback)")
 
     elif args.playlist_cmd == "create":
-        resp = youtube.playlists().insert(
-            part="snippet,status",
-            body={
-                "snippet": {
-                    "title":       args.title,
-                    "description": args.description or "",
-                    "defaultLanguage": "en",
-                },
-                "status": {"privacyStatus": args.privacy or "public"},
-            },
-        ).execute()
-        pid   = resp["id"]
-        title = resp["snippet"]["title"]
-        print(f"[PLAYLIST] Created: {pid}  '{title}'")
-        print(f"  Add to .env:  YT_PLAYLIST_STUDY={pid}  (or YT_PLAYLIST_SLEEP)")
+        # Gated behind --confirm-create: playlist creation is channel-visible
+        # and irreversible-ish (deleting one loses its curation), so it never
+        # happens as a side effect -- see
+        # scripts.playlist_curation.create_playlist_if_confirmed.
+        from scripts.playlist_curation import create_playlist_if_confirmed
+        created = create_playlist_if_confirmed(
+            youtube, args.title, description=args.description or "",
+            privacy=args.privacy or "public", confirm=args.confirm_create,
+        )
+        if created is None:
+            print("[PLAYLIST] Not created -- pass --confirm-create to actually create a "
+                  "channel-visible playlist on YouTube.")
+            return
+        print(f"[PLAYLIST] Created: {created['id']}  '{created['title']}'")
+        print(f"  Add to .env, e.g.: YT_PLAYLIST_ACTIVITY={created['id']}")
 
     elif args.playlist_cmd == "add":
         youtube.playlistItems().insert(
@@ -1591,6 +1593,9 @@ def main():
     p_pl_create.add_argument("title", help="Playlist title")
     p_pl_create.add_argument("--description", default=None)
     p_pl_create.add_argument("--privacy", choices=["public", "unlisted", "private"], default="public")
+    p_pl_create.add_argument("--confirm-create", dest="confirm_create", action="store_true",
+                             help="Required: actually create the playlist on YouTube (channel-"
+                                  "visible). Without this flag, nothing is created.")
     p_pl_add = pl_sub.add_parser("add", help="Add a video to a playlist manually")
     p_pl_add.add_argument("video_id", help="YouTube video ID")
     p_pl_add.add_argument("playlist_id", help="Playlist ID (PLxxx...)")
