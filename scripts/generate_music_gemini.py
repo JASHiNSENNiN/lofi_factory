@@ -1622,7 +1622,8 @@ _RECIPE_LOG_FILE = os.path.join(MUSIC_DIR, '.recipe_log.jsonl')
 
 def _append_recipe_log(params: dict, quality_score: float | None = None,
                         quality_retries: int | None = None,
-                        ga_voicing: bool | None = None) -> None:
+                        ga_voicing: bool | None = None,
+                        voicing_optimizer_wins: dict | None = None) -> None:
     """
     Append-only JSONL diagnostic log: one line per generated track, recording
     which generative techniques fired and (once the quality gate runs) how it
@@ -1641,8 +1642,14 @@ def _append_recipe_log(params: dict, quality_score: float | None = None,
         'euclid_a':        'drum_pattern_a_generated' in params,
         'euclid_b':        'drum_pattern_b_generated' in params,
         'markov_prog':     'generated_progression' in params,
+        'harmony_engine':  'harmony_progression' in params,
         'self_markov':     'markov_melody_nodes' in params,
         'ga_voicing':      bool(ga_voicing),
+        # Which whole-progression voicing optimizer (GA vs. simulated
+        # annealing — see _voice_lead_progression_best in generate_music_v2.py)
+        # won the lower-cost comparison each time it fired this track, e.g.
+        # {"ga": 2, "annealing": 1}. None when the optimizer never fired.
+        'voicing_optimizer_wins': voicing_optimizer_wins,
         'quality_score':   quality_score,
         'quality_retries': quality_retries,
     }

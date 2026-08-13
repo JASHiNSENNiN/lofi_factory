@@ -15,7 +15,8 @@ Improvements over v1:
   · Hi-hat drag: per-instrument values (hats 20ms; kick stays tight at 3ms)
 """
 
-import os, sys, json, time, random, tempfile
+import math, os, sys, json, time, random, tempfile
+from collections import Counter
 from dataclasses import dataclass, field
 from itertools import product as _iproduct
 
@@ -187,6 +188,36 @@ def _enumerate_shift_options(voicing: list[int]) -> list[list[int]]:
     return out or [voicing]
 
 
+def _build_voicing_gene_pools(chord_names: list[str]) -> list[list[list[int]]]:
+    """
+    Per-chord list of candidate voicings (every octave-shift variant of every
+    curated VOICING_OPTIONS entry for that chord). Shared "search space"
+    builder for both whole-progression optimizers (_voice_lead_progression_ga
+    and _voice_lead_progression_annealing) so they explore identical gene
+    pools and their resulting costs are directly comparable.
+    """
+    gene_pools: list[list[list[int]]] = []
+    for chord_name in chord_names:
+        options = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])
+        variants: list[list[int]] = []
+        for base in options:
+            variants.extend(_enumerate_shift_options(base))
+        gene_pools.append(variants or [options[0]])
+    return gene_pools
+
+
+def _chromosome_cost(gene_pools: list[list[list[int]]], chromosome: list[int]) -> float:
+    """Total _voicing_transition_cost across an entire chromosome's chord sequence."""
+    total = 0.0
+    prev = None
+    for i, gene_idx in enumerate(chromosome):
+        voicing = gene_pools[i][gene_idx]
+        if prev is not None:
+            total += _voicing_transition_cost(prev, voicing)
+        prev = voicing
+    return total
+
+
 def _voice_lead_progression_ga(progression: list[tuple[str, int]],
                                 pop_size: int = 24, generations: int = 40) -> list[list[int]]:
     """
@@ -202,27 +233,13 @@ def _voice_lead_progression_ga(progression: list[tuple[str, int]],
     Returns one shifted voicing (list[int]) per chord in `progression`, in order.
     """
     chord_names = [c for c, _ in progression]
-
-    gene_pools: list[list[list[int]]] = []
-    for chord_name in chord_names:
-        options = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])
-        variants: list[list[int]] = []
-        for base in options:
-            variants.extend(_enumerate_shift_options(base))
-        gene_pools.append(variants or [options[0]])
+    gene_pools = _build_voicing_gene_pools(chord_names)
 
     def _random_chromosome() -> list[int]:
         return [random.randrange(len(pool)) for pool in gene_pools]
 
     def _fitness(chromosome: list[int]) -> float:
-        total = 0.0
-        prev = None
-        for i, gene_idx in enumerate(chromosome):
-            voicing = gene_pools[i][gene_idx]
-            if prev is not None:
-                total += _voicing_transition_cost(prev, voicing)
-            prev = voicing
-        return total
+        return _chromosome_cost(gene_pools, chromosome)
 
     population = [_random_chromosome() for _ in range(pop_size)]
     best = min(population, key=_fitness)
@@ -251,22 +268,119 @@ def _voice_lead_progression_ga(progression: list[tuple[str, int]],
     return [gene_pools[i][gene_idx] for i, gene_idx in enumerate(best)]
 
 
+def _voice_lead_progression_annealing(
+    progression: list[tuple[str, int]],
+    iterations: int = 600, start_temp: float = 12.0, cooling: float = 0.99,
+    seed: int | None = None,
+) -> list[list[int]]:
+    """
+    Simulated-annealing ALTERNATIVE to _voice_lead_progression_ga: same goal
+    (minimize total _voicing_transition_cost across the whole chord
+    sequence, same gene pools) and same cost function, but a different
+    search strategy — a single temperature-scheduled random-restart local
+    search instead of a population-based evolutionary search. Standard
+    published algorithm (Kirkpatrick et al. 1983): start from a random
+    voicing choice per chord, repeatedly propose a random neighbor move
+    (re-pick one chord's voicing), accept it unconditionally if it improves
+    total cost, or with probability exp(-delta/T) if it doesn't (escapes
+    local minima), and geometrically cool T over the run so late iterations
+    behave like plain hill-climbing.
+
+    Returns one shifted voicing (list[int]) per chord in `progression`, in
+    order — same return shape as _voice_lead_progression_ga, so callers can
+    use either interchangeably (see _voice_lead_progression_best).
+    """
+    chord_names = [c for c, _ in progression]
+    gene_pools = _build_voicing_gene_pools(chord_names)
+    rng = random.Random(seed) if seed is not None else random
+
+    current = [rng.randrange(len(pool)) for pool in gene_pools]
+    current_cost = _chromosome_cost(gene_pools, current)
+    best, best_cost = current[:], current_cost
+
+    temp = start_temp
+    for _ in range(iterations):
+        movable = [i for i, pool in enumerate(gene_pools) if len(pool) > 1]
+        if not movable:
+            break
+        idx = rng.choice(movable)
+        neighbor = current[:]
+        # Propose a different gene at this position (a real "move", not a
+        # no-op self-transition).
+        choices = [g for g in range(len(gene_pools[idx])) if g != current[idx]]
+        neighbor[idx] = rng.choice(choices)
+        neighbor_cost = _chromosome_cost(gene_pools, neighbor)
+
+        delta = neighbor_cost - current_cost
+        accept = delta <= 0 or rng.random() < math.exp(-delta / max(temp, 1e-6))
+        if accept:
+            current, current_cost = neighbor, neighbor_cost
+            if current_cost < best_cost:
+                best, best_cost = current[:], current_cost
+
+        temp *= cooling
+
+    return [gene_pools[i][gene_idx] for i, gene_idx in enumerate(best)]
+
+
+def _voice_lead_progression_best(
+    progression: list[tuple[str, int]],
+    pop_size: int = 24, generations: int = 40, annealing_iterations: int = 600,
+) -> tuple[list[list[int]], str]:
+    """
+    Run BOTH the genetic-algorithm optimizer and the simulated-annealing
+    optimizer on the same progression and keep whichever finds the
+    lower (better) total transition cost. Returns (voicings, winner) where
+    winner is 'ga' or 'annealing', so callers can log which search strategy
+    actually won for later analysis (see build_chords_v2's optimizer_log).
+    Cheap either way — both are once-per-progression-pick searches, not
+    per-frame or per-render-loop costs.
+    """
+    ga_voicings = _voice_lead_progression_ga(progression, pop_size=pop_size, generations=generations)
+    sa_voicings = _voice_lead_progression_annealing(progression, iterations=annealing_iterations)
+
+    def _total_cost(voicings: list[list[int]]) -> float:
+        total = 0.0
+        prev = None
+        for v in voicings:
+            if prev is not None:
+                total += _voicing_transition_cost(prev, v)
+            prev = v
+        return total
+
+    ga_cost = _total_cost(ga_voicings)
+    sa_cost = _total_cost(sa_voicings)
+    if sa_cost < ga_cost:
+        return sa_voicings, 'annealing'
+    return ga_voicings, 'ga'
+
+
 def build_chords_v2(progression: list, start_bar: int, num_loops: int,
-                    swing: float, bpm: int, ga_flag: list | None = None) -> list:
+                    swing: float, bpm: int, ga_flag: list | None = None,
+                    optimizer_log: list | None = None) -> list:
     """
     v1 build_chords with full-displacement voice leading and Gaussian humanization.
-    ~15% of the time, uses a genetic-algorithm-optimized voicing sequence for
-    the whole progression (_voice_lead_progression_ga) instead of the greedy
-    per-chord _voice_lead_v2 — see there for why this can out-perform greedy
-    selection. When active, secondary-dominant substitution (maybe_sub_chord)
-    is skipped for that pass, since the GA already committed to voicings for
-    the literal (unsubstituted) progression and substituting afterward would
-    leave the chosen voicing not matching the actual chord being played.
+    ~15% of the time, uses a whole-progression-optimized voicing sequence
+    (_voice_lead_progression_best — runs BOTH the genetic algorithm and the
+    simulated-annealing optimizer and keeps whichever scores lower, see
+    there) instead of the greedy per-chord _voice_lead_v2 — see there for why
+    this can out-perform greedy selection. When active, secondary-dominant
+    substitution (maybe_sub_chord) is skipped for that pass, since the
+    optimizer already committed to voicings for the literal (unsubstituted)
+    progression and substituting afterward would leave the chosen voicing
+    not matching the actual chord being played.
 
-    ga_flag: optional list — if GA voicing fires, True is appended to it, so
-    a caller building multiple sections (I/A/B) can cheaply check
-    `bool(ga_flag)` afterward to know whether GA was used anywhere in the
-    track, for the recipe log.
+    ga_flag: optional list — if the whole-progression optimizer fires, True
+    is appended to it, so a caller building multiple sections (I/A/B) can
+    cheaply check `bool(ga_flag)` afterward to know whether it was used
+    anywhere in the track, for the recipe log. Name kept for backward
+    compatibility with existing callers/tests; it now covers both search
+    strategies, not just the GA.
+
+    optimizer_log: optional list — the winning strategy ('ga' or
+    'annealing') is appended to it each time the optimizer fires, so a
+    caller can log which one actually won across the track for later
+    analysis (see build_midi_v2's _append_recipe_log call).
     """
     events = []
     cursor = start_bar
@@ -275,9 +389,11 @@ def build_chords_v2(progression: list, start_bar: int, num_loops: int,
     ga_voicings: list[list[int]] | None = None
     if len(progression) >= 2 and random.random() < 0.15:
         try:
-            ga_voicings = _voice_lead_progression_ga(progression)
+            ga_voicings, winner = _voice_lead_progression_best(progression)
             if ga_flag is not None:
                 ga_flag.append(True)
+            if optimizer_log is not None:
+                optimizer_log.append(winner)
         except Exception:
             ga_voicings = None
 
@@ -863,6 +979,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
     best_failures: list = []
     attempts_used = 0
     ga_flag: list = []
+    optimizer_log: list = []
 
     for attempt in range(1 + MAX_RETRIES):
         attempts_used = attempt + 1
@@ -890,7 +1007,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
             sec_bars  = prog_bars * n_loops
 
             if sec_label == 'I':
-                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag, optimizer_log)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 bass_s = sec_start + min(2, prog_bars - 1)
@@ -902,7 +1019,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
                 cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
 
             elif sec_label == 'A':
-                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag, optimizer_log)
                 bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
                 drum_ev    += build_drums_v2(pat_a, sec_start, sec_bars, swing, bpm,
                                               fill_bars, energy_float)
@@ -918,7 +1035,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
                     texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
 
             elif sec_label == 'BR':
-                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag, optimizer_log)
                 bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
@@ -926,7 +1043,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
 
             elif sec_label == 'B':
-                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag, optimizer_log)
                 bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, walking)
                 drum_ev    += build_drums_v2(pat_b, sec_start, sec_bars, swing, bpm,
                                               fill_bars, energy_float)
@@ -945,7 +1062,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
                     texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
 
             elif sec_label == 'O':
-                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag)
+                piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag, optimizer_log)
                 bass_ev    += build_bass_v2(prog, sec_start, n_loops, swing, bpm, False)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
@@ -1021,7 +1138,8 @@ def build_midi_v2(params: dict, output_path: str) -> str:
     _save_melody_pitch_classes([note % 12 for (_t, note, _v, _d) in mel_ev])
     try:
         _append_recipe_log(params, quality_score=best_score,
-                            quality_retries=attempts_used - 1, ga_voicing=bool(ga_flag))
+                            quality_retries=attempts_used - 1, ga_voicing=bool(ga_flag),
+                            voicing_optimizer_wins=dict(Counter(optimizer_log)) if optimizer_log else None)
     except Exception:
         pass
 
