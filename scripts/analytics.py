@@ -434,25 +434,45 @@ def binarize_above_median(values: list[float]) -> list[bool]:
     return [v >= med for v in values]
 
 
+def _build_bucket_bandit(buckets: dict[str, list[float]]) -> ThompsonSamplingBandit:
+    """
+    Build a Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py) with
+    one arm per bucket label, updated from `buckets` ({label: [scores]})
+    binarized against the *pooled* median across all buckets
+    (binarize_above_median's median-split — see that function's docstring
+    for why). Shared by _bandit_weights() (derives the weight multiplier)
+    and pillar_bandit_posteriors() (exposes the raw posterior for the
+    dashboard). Every label in `buckets` becomes an arm even if its value
+    list is empty (starts at the uninformative Beta(1,1) prior).
+    """
+    bandit = ThompsonSamplingBandit(list(buckets.keys()))
+    all_vals = [x for rows in buckets.values() for x in rows]
+    if not all_vals:
+        return bandit
+    median = statistics.median(all_vals)
+    for label, rows in buckets.items():
+        successes = sum(1 for x in rows if x >= median)
+        failures = len(rows) - successes
+        bandit.update_counts(label, successes, failures)
+    return bandit
+
+
 def _bandit_weights(buckets: dict[str, list[float]], min_samples: int = 5) -> dict[str, float] | None:
     """
     Shared bandit-backed weight computation used by pillar_weights(),
     duration_weights(), and title_variant_weights().
 
     `buckets` is {arm_label: [composite_score_or_ctr, ...]} built by the
-    caller (one value per observed video/variant). Each bucket's values are
-    binarized against the *pooled* median across all buckets
-    (binarize_above_median) into successes/failures, which update a
-    Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py) — one arm
-    per bucket label. The returned weight for each arm with >= min_samples
-    observations is its posterior mean normalized against the channel-pooled
-    posterior mean (a combined arm over every observation, so it's weighted
-    by sample size rather than a naive average-of-arm-means), clamped to
-    [0.5, 2.0] — the same output contract and clamp range the old
-    raw-mean-ratio multiplier had, so callers (duration_weights() /
-    title_variant_weights() / pillar_weights()) don't need to change, but
-    it's now backed by a real Bayesian posterior instead of a noisy
-    small-sample mean ratio.
+    caller (one value per observed video/variant) and fed to
+    _build_bucket_bandit(). The returned weight for each arm with
+    >= min_samples observations is its posterior mean normalized against
+    the channel-pooled posterior mean (one combined arm over every
+    observation, so it's weighted by sample size rather than a naive
+    average-of-arm-means), clamped to [0.5, 2.0] — the same output contract
+    and clamp range the old raw-mean-ratio multiplier had, so callers
+    (duration_weights() / title_variant_weights() / pillar_weights()) don't
+    need to change, but it's now backed by a real Bayesian posterior instead
+    of a noisy small-sample mean ratio.
 
     Arms with fewer than min_samples observations are omitted from the
     returned dict (caller keeps its own neutral 1.0 default for those).
@@ -461,21 +481,10 @@ def _bandit_weights(buckets: dict[str, list[float]], min_samples: int = 5) -> di
     if not any(len(v) >= min_samples for v in buckets.values()):
         return None
 
-    all_vals = [x for rows in buckets.values() for x in rows]
-    if not all_vals:
-        return None
-    median = statistics.median(all_vals)
+    bandit = _build_bucket_bandit(buckets)
 
-    bandit = ThompsonSamplingBandit(list(buckets.keys()))
-    total_successes = 0.0
-    total_failures = 0.0
-    for label, rows in buckets.items():
-        successes = sum(1 for x in rows if x >= median)
-        failures = len(rows) - successes
-        bandit.update_counts(label, successes, failures)
-        total_successes += successes
-        total_failures += failures
-
+    total_successes = sum(bandit.alpha[a] - 1.0 for a in bandit.arms)
+    total_failures = sum(bandit.beta[a] - 1.0 for a in bandit.arms)
     # Channel-pooled posterior: one combined arm over every observation, used
     # as the normalization baseline (naturally sample-size-weighted, unlike
     # a flat average of each arm's own posterior mean).
@@ -491,6 +500,34 @@ def _bandit_weights(buckets: dict[str, list[float]], min_samples: int = 5) -> di
             ratio = bandit.posterior_mean(label) / pooled_mean
             weights[label] = max(0.5, min(2.0, ratio))
     return weights
+
+
+def pillar_bandit_posteriors(pillars: list[str] | None = None, analytics: dict | None = None) -> dict:
+    """
+    {pillar: {alpha, beta, n, mean}} — the raw Beta-Bernoulli posterior
+    behind pillar_weights(), exposed separately for the webui Analytics
+    page's bandit-posterior panel (shows the actual alpha/beta/sample-count
+    a viewer can sanity-check, not just the derived weight multiplier).
+    Every requested pillar is included even with zero samples (starts at
+    the uninformative Beta(1,1) prior, mean 0.5).
+    """
+    pillars = list(pillars or _PILLARS)
+    if analytics is None:
+        analytics = load_analytics()
+
+    from collections import defaultdict as _dd
+    by_pillar: dict[str, list[float]] = _dd(list)
+    for entry in (analytics or {}).values():
+        p = entry.get("pillar")
+        if p not in pillars:
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        by_pillar[p].append(score)
+
+    buckets = {p: by_pillar.get(p, []) for p in pillars}
+    return _build_bucket_bandit(buckets).posterior_stats()
 
 
 def duration_weights(duration_map: dict[str, int], analytics: dict | None = None) -> dict[str, float]:

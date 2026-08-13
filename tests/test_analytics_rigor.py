@@ -19,6 +19,7 @@ from scripts.analytics import (
     latest_metrics,
     load_analytics,
     load_analytics_history,
+    pillar_bandit_posteriors,
     pillar_weights,
     two_proportion_ztest,
 )
@@ -432,3 +433,29 @@ def test_pillar_weights_clamped_to_range():
     result = pillar_weights(["temporal", "activity"], fake)
     assert result["temporal"] <= 2.0
     assert result["activity"] >= 0.5
+
+
+# ── pillar_bandit_posteriors (raw posterior for the dashboard) ─────────────
+def test_pillar_bandit_posteriors_empty_analytics_returns_prior_for_every_pillar():
+    result = pillar_bandit_posteriors(["temporal", "activity"], {})
+    assert set(result.keys()) == {"temporal", "activity"}
+    for stats in result.values():
+        assert stats["alpha"] == pytest.approx(1.0)
+        assert stats["beta"] == pytest.approx(1.0)
+        assert stats["n"] == 0
+        assert stats["mean"] == pytest.approx(0.5)
+
+
+def test_pillar_bandit_posteriors_reflects_observed_data():
+    fake = {}
+    for i in range(6):
+        fake[f"hi_{i}"] = {"pillar": "temporal", "videoThumbnailImpressionsClickRate": 0.08}
+    for i in range(6):
+        fake[f"lo_{i}"] = {"pillar": "activity", "videoThumbnailImpressionsClickRate": 0.01}
+    result = pillar_bandit_posteriors(["temporal", "activity"], fake)
+    assert result["temporal"]["n"] == 6
+    assert result["activity"]["n"] == 6
+    assert result["temporal"]["mean"] > result["activity"]["mean"]
+    # 6 successes / 0 failures -> alpha=7, beta=1 for the strictly-above-median arm
+    assert result["temporal"]["alpha"] == pytest.approx(7.0)
+    assert result["temporal"]["beta"] == pytest.approx(1.0)
