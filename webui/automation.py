@@ -14,6 +14,8 @@ import asyncio
 
 import auto_service as _svc
 
+from . import system_admin
+
 MIN_INTERVAL_HOURS = _svc.MIN_INTERVAL_HOURS
 VALID_INTERVALS = _svc.VALID_INTERVALS
 
@@ -29,26 +31,36 @@ status = _svc.status
 # thread so the event loop stays free; publish.py's CLI and dashboard.py's
 # TUI still call auto_service's sync functions directly, which is fine there
 # since neither has other concurrent clients to starve.
+#
+# Each also logs a system_admin.audit_log entry on success only -- an
+# exception from _svc propagates before the log call, so a failed systemctl
+# call is never recorded as if it had succeeded.
 
 
 async def start() -> None:
     await asyncio.to_thread(_svc.start)
+    system_admin.audit_log("automation_start", {})
 
 
 async def stop() -> None:
     await asyncio.to_thread(_svc.stop)
+    system_admin.audit_log("automation_stop", {})
 
 
 async def set_enabled(enabled: bool) -> None:
     await asyncio.to_thread(_svc.set_enabled, enabled)
+    system_admin.audit_log("automation_set_enabled", {"enabled": enabled})
 
 
 async def run_now() -> None:
     await asyncio.to_thread(_svc.run_now)
+    system_admin.audit_log("automation_run_now", {})
 
 
 async def set_schedule(hour: int, every_hours: int) -> None:
     await asyncio.to_thread(_svc.set_schedule, hour, every_hours)
+    system_admin.audit_log(
+        "automation_set_schedule", {"start_hour": hour, "every_hours": every_hours})
 
 
 async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:

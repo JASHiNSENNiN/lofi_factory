@@ -30,3 +30,6 @@ statsmodels>=0.14
 # track_quality.py, lofi_fx.py.
 music21>=9.1
 pyloudnorm>=0.1
+
+# System admin page (webui: resource monitor)
+psutil>=5.9

@@ -7,6 +7,7 @@ Design system in theme.py, spec in DESIGN.md. Run via:  python webui.py
 """
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import os
@@ -19,7 +20,7 @@ from fastapi.responses import RedirectResponse
 
 from nicegui import app, ui
 
-from . import auth, automation, config, data, jobs, stats, theme, youtube_oauth
+from . import auth, automation, config, data, jobs, stats, system_admin, theme, youtube_oauth
 
 NAV = [
     ("studio", "Studio", "graphic_eq"),
@@ -30,6 +31,7 @@ NAV = [
     ("analytics", "Analytics", "insights"),
     ("automation", "Automation", "autorenew"),
     ("calendar", "Calendar", "calendar_month"),
+    ("system", "System", "monitor_heart"),
     ("settings", "Settings", "settings"),
 ]
 
@@ -1645,10 +1647,256 @@ def view_samples(root) -> None:
                                 .props("flat round dense").set_visibility(not busy)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# System admin — resource monitor, disk usage, restart, backups, audit log.
+# Added as a standalone block (new NAV/VIEWS entry only) to avoid conflicting
+# with other in-flight edits to this file. All data-gathering / side-effect
+# logic lives in system_admin.py; every blocking call here goes through
+# asyncio.to_thread per the async discipline the rest of the app follows.
+# ─────────────────────────────────────────────────────────────────────────────
+def _confirm_restart_webui() -> None:
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
+            .style("max-width:420px"):
+        ui.label("Restart the web UI?").classes(theme.H)
+        ui.label("This restarts lofi-webui.service right now, which will drop this "
+                 "browser session for a few seconds while it comes back up. Only do "
+                 "this on purpose.").classes(theme.SUB)
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=dlg.close).props("flat")
+
+            async def do_restart() -> None:
+                dlg.close()
+                ui.notify("Restarting webui service…", type="warning")
+                try:
+                    await asyncio.to_thread(system_admin.restart_webui)
+                except Exception as e:  # noqa: BLE001 — surface whatever systemctl/subprocess raised
+                    ui.notify(f"Restart failed: {e}", type="negative")
+
+            ui.button("Restart now", icon="restart_alt", on_click=do_restart,
+                      color="negative").props("unelevated")
+    dlg.open()
+
+
+def _confirm_restore_backup(name: str, on_change) -> None:
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
+            .style("max-width:420px"):
+        ui.label(f"Restore backup “{name}”?").classes(theme.H)
+        ui.label("Overwrites the current token.json / .env / upload_log.json with the "
+                 "versions from this backup. This cannot be undone.").classes(theme.SUB)
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=dlg.close).props("flat")
+
+            async def do_restore() -> None:
+                try:
+                    restored = await asyncio.to_thread(system_admin.restore_backup, name)
+                except ValueError as e:
+                    ui.notify(str(e), type="negative")
+                    return
+                dlg.close()
+                ui.notify(f"Restored {len(restored)} file(s) — restart the panel to apply."
+                          if restored else "Nothing to restore.", type="positive")
+                on_change()
+
+            ui.button("Restore", icon="restore", on_click=do_restore,
+                      color="negative").props("unelevated")
+    dlg.open()
+
+
+def _confirm_delete_backup(name: str, on_change) -> None:
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
+            .style("max-width:420px"):
+        ui.label(f"Delete backup “{name}”?").classes(theme.H)
+        ui.label("This cannot be undone.").classes(theme.SUB)
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("Cancel", on_click=dlg.close).props("flat")
+
+            async def do_delete() -> None:
+                ok = await asyncio.to_thread(system_admin.delete_backup, name)
+                dlg.close()
+                ui.notify("Backup deleted." if ok else "Delete failed.",
+                          type="positive" if ok else "negative")
+                on_change()
+
+            ui.button("Delete", icon="delete", on_click=do_delete,
+                      color="negative").props("unelevated")
+    dlg.open()
+
+
+def view_system(root) -> None:
+    with root:
+        # ── Resource monitor (CPU / RAM / disk / GPU) — polls every 5s ─────────
+        with theme.card("Resource monitor", "CPU, RAM, and disk for this box. "
+                        "Refreshes every 5s."):
+            with ui.row().classes("w-full gap-4 no-wrap"):
+                cpu_lbl = ui.label("—").classes("stat-num")
+                ram_lbl = ui.label("—").classes("stat-num")
+                disk_lbl = ui.label("—").classes("stat-num")
+            with ui.row().classes("w-full gap-4 no-wrap"):
+                ui.label("CPU").classes("stat-lbl")
+                ui.label("RAM").classes("stat-lbl")
+                ui.label("Disk").classes("stat-lbl")
+            cpu_bar = ui.linear_progress(value=0, show_value=False)\
+                .props("rounded color=primary").classes("w-full")
+            ram_bar = ui.linear_progress(value=0, show_value=False)\
+                .props("rounded color=secondary").classes("w-full")
+            disk_bar = ui.linear_progress(value=0, show_value=False)\
+                .props("rounded color=info").classes("w-full")
+            gpu_box = ui.column().classes("w-full gap-1 mt-1")
+
+            async def refresh_resources() -> None:
+                snap = await asyncio.to_thread(system_admin.resource_snapshot)
+                cpu_lbl.text = f"{snap['cpu_percent']:.0f}%"
+                cpu_bar.value = snap["cpu_percent"] / 100
+                ram_lbl.text = f"{snap['ram_used_gb']:.1f}/{snap['ram_total_gb']:.1f} GB"
+                ram_bar.value = snap["ram_percent"] / 100
+                disk_lbl.text = f"{snap['disk_used_gb']:.1f}/{snap['disk_total_gb']:.1f} GB"
+                disk_bar.value = snap["disk_percent"] / 100
+
+                gpu = await asyncio.to_thread(system_admin.gpu_snapshot)
+                gpu_box.clear()
+                if gpu:
+                    with gpu_box:
+                        if gpu["util_percent"] is not None:
+                            ui.label(
+                                f"GPU ({gpu['backend']}): {gpu['util_percent']:.0f}% · "
+                                f"{gpu['mem_used_mb']:.0f}/{gpu['mem_total_mb']:.0f} MB"
+                            ).classes(theme.SUB)
+                        else:
+                            ui.label(f"GPU ({gpu['backend']}): {gpu['info']}")\
+                                .classes(theme.SUB)
+                # else: no nvidia-smi/vainfo on this box — panel stays empty rather
+                # than showing a broken GPU row.
+
+            ui.timer(0.1, refresh_resources, once=True)
+            ui.timer(5.0, refresh_resources)
+
+        # ── Disk-usage breakdown ───────────────────────────────────────────────
+        with theme.card("Disk usage", "Bytes on disk by content directory."):
+            breakdown_col = ui.column().classes("w-full gap-2")
+
+            async def refresh_breakdown() -> None:
+                breakdown = await asyncio.to_thread(system_admin.disk_usage_breakdown)
+                breakdown_col.clear()
+                total = sum(breakdown.values()) or 1
+                with breakdown_col:
+                    for name, nbytes in breakdown.items():
+                        gb = nbytes / 1_073_741_824
+                        with ui.row().classes("w-full items-center justify-between no-wrap"):
+                            ui.label(name).classes("text-sm font-medium")
+                            ui.label(f"{gb:.2f} GB").classes(theme.SUB)
+                        ui.linear_progress(value=nbytes / total, show_value=False)\
+                            .props("rounded color=secondary").classes("w-full")
+            ui.button("Refresh", icon="refresh", on_click=refresh_breakdown)\
+                .props("flat dense color=primary")
+            ui.timer(0.1, refresh_breakdown, once=True)
+
+        # ── Tailscale / TLS cert status ─────────────────────────────────────────
+        with theme.card("Tailscale / TLS", "Network + certificate status for this box."):
+            net_col = ui.column().classes("w-full gap-2")
+
+            async def refresh_network() -> None:
+                ts = await asyncio.to_thread(system_admin.tailscale_status)
+                cert = await asyncio.to_thread(system_admin.cert_status)
+                net_col.clear()
+                with net_col:
+                    if ts:
+                        ui.label(
+                            f"Tailscale: {ts['hostname']} ({ts['tailscale_ip'] or '?'}) · "
+                            f"{ts['peer_count']} peer(s) · "
+                            f"{'online' if ts['online'] else 'offline'}"
+                        ).classes("text-sm")
+                    else:
+                        ui.label("Tailscale not detected on this box (binary missing or "
+                                 "daemon unreachable).").classes(theme.SUB)
+                    if cert:
+                        color = "#e8849a" if cert["expiring_soon"] else "#6fcaa8"
+                        warn = " ⚠ expiring soon" if cert["expiring_soon"] else ""
+                        ui.label(
+                            f"TLS cert: expires {cert['expires']} "
+                            f"({cert['days_left']:.0f}d left){warn}"
+                        ).classes("text-sm").style(f"color:{color}")
+                    else:
+                        ui.label("No TLS cert configured (WEBUI_SSL_CERTFILE unset, or "
+                                 "file missing).").classes(theme.SUB)
+
+            ui.button("Refresh", icon="refresh", on_click=refresh_network)\
+                .props("flat dense color=primary")
+            ui.timer(0.1, refresh_network, once=True)
+
+        # ── Maintenance: restart + config backups ───────────────────────────────
+        with theme.card("Maintenance", "Self-service restart and local config backups."):
+            ui.button("Restart web UI", icon="restart_alt", on_click=_confirm_restart_webui)\
+                .props("color=negative")
+
+            ui.separator().classes("my-3")
+            ui.label("Config backups").classes(theme.H)
+            ui.label("Copies token.json, .env, and upload_log.json (whichever exist) to "
+                     "backups/<timestamp>/ on local disk — never sent to the browser, "
+                     "since these are live secrets.").classes(theme.SUB)
+            backup_col = ui.column().classes("w-full gap-2 mt-2")
+
+            def refresh_backups() -> None:
+                backup_col.clear()
+                backups = system_admin.list_backups()
+                with backup_col:
+                    if not backups:
+                        ui.label("No backups yet.").classes(theme.SUB)
+                    for b in backups:
+                        with ui.row().classes("w-full items-center justify-between no-wrap"):
+                            with ui.column().classes("gap-0"):
+                                ui.label(b["name"]).classes("font-mono text-sm")
+                                ui.label(f"{', '.join(b['files']) or '(empty)'} · "
+                                         f"{b['total_bytes'] / 1024:.0f} KB").classes(theme.SUB)
+                            with ui.row().classes("gap-1 no-wrap"):
+                                ui.button(icon="restore",
+                                          on_click=lambda n=b["name"]: _confirm_restore_backup(
+                                              n, refresh_backups)).props("flat round dense")
+                                ui.button(icon="delete_outline", color="negative",
+                                          on_click=lambda n=b["name"]: _confirm_delete_backup(
+                                              n, refresh_backups)).props("flat round dense")
+
+            async def do_create_backup() -> None:
+                result = await asyncio.to_thread(system_admin.create_backup)
+                ui.notify(f"Backed up {len(result['files'])} file(s)" if result["files"]
+                          else "Nothing found to back up.",
+                          type="positive" if result["files"] else "info")
+                refresh_backups()
+
+            ui.button("Create backup", icon="save", on_click=do_create_backup)\
+                .props("color=primary")
+            refresh_backups()
+
+        # ── Admin audit log ──────────────────────────────────────────────────────
+        with theme.card("Admin audit log", "Last 50 admin actions (restarts, backups, "
+                        "deletes, schedule changes)."):
+            audit_col = ui.column().classes("w-full gap-1")
+
+            async def refresh_audit() -> None:
+                entries = await asyncio.to_thread(system_admin.audit_log_tail, 50)
+                audit_col.clear()
+                with audit_col:
+                    if not entries:
+                        ui.label("No admin actions logged yet.").classes(theme.SUB)
+                    for e in entries:
+                        with ui.row().classes("w-full items-center gap-3 no-wrap"):
+                            ui.label(e.get("ts", "")).classes("text-xs font-mono")\
+                                .style("color:var(--muted); white-space:nowrap")
+                            ui.label(e.get("action", "")).classes("text-sm").style(
+                                "white-space:nowrap")
+                            ui.label(json.dumps(e.get("detail", {})))\
+                                .classes(f"text-xs {theme.SUB}").style(
+                                    "overflow:hidden; text-overflow:ellipsis; white-space:nowrap")
+
+            ui.button("Refresh", icon="refresh", on_click=refresh_audit)\
+                .props("flat dense color=primary")
+            ui.timer(0.1, refresh_audit, once=True)
+
+
 VIEWS = {
     "studio": view_studio, "library": view_library, "live": view_live,
     "trends": view_trends, "analytics": view_analytics, "samples": view_samples,
-    "automation": view_automation, "calendar": view_calendar, "settings": view_settings,
+    "automation": view_automation, "calendar": view_calendar,
+    "system": view_system, "settings": view_settings,
 }
 
 # Per-client mutable holder for the active view + nav element refs.
