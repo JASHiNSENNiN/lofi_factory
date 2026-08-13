@@ -21,6 +21,12 @@ CLIENT_SECRET = os.path.join(ROOT, "client_secret.json")
 # reusing the same one.
 CLIENT_SECRET_DEVICE = os.path.join(ROOT, "client_secret_device.json")
 TOKEN_FILE = os.path.join(ROOT, "token.json")
+# Separate token for the opt-in "Connect monetary analytics" flow (Settings)
+# -- kept out of token.json entirely so the extra yt-analytics-monetary.readonly
+# scope it carries is never silently required just to read token.json for
+# ordinary uploads/analytics. See MONETARY_SCOPES below and youtube_oauth.py's
+# monetary_* functions.
+TOKEN_FILE_MONETARY = os.path.join(ROOT, "token_monetary.json")
 COOKIES_FILE = os.path.join(ROOT, "cookies.txt")
 UPLOAD_LOG = os.path.join(ROOT, "upload_log.json")
 OUTPUT_DIR = os.path.join(ROOT, "output")
@@ -41,6 +47,15 @@ SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
+# Opt-in only (Settings -> "Connect monetary analytics"). Mirrors
+# scripts/upload_youtube.py's MONETARY_SCOPES -- see that module for why this
+# is a separate constant rather than folded into SCOPES. Used only by
+# youtube_oauth.py's monetary_* functions, which write to TOKEN_FILE_MONETARY,
+# never TOKEN_FILE.
+MONETARY_SCOPES = SCOPES + [
+    "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
+]
+
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
@@ -58,11 +73,20 @@ STORAGE_SECRET = _env("WEBUI_SECRET") or secrets.token_urlsafe(32)
 # https://lofi.example.com — the Google redirect URI is derived from it.
 PUBLIC_BASE_URL = _env("PUBLIC_BASE_URL").rstrip("/")
 OAUTH_CALLBACK_PATH = "/youtube/callback"
+# Separate callback path for the opt-in monetary-analytics consent (must be
+# registered as its own "Authorized redirect URI" in Google Cloud Console
+# alongside the main one -- shown in Settings next to the Connect button).
+OAUTH_CALLBACK_PATH_MONETARY = "/youtube/monetary/callback"
 
 
 def redirect_uri() -> str:
     base = PUBLIC_BASE_URL or f"http://localhost:{HTTP_PORT}"
     return f"{base}{OAUTH_CALLBACK_PATH}"
+
+
+def redirect_uri_monetary() -> str:
+    base = PUBLIC_BASE_URL or f"http://localhost:{HTTP_PORT}"
+    return f"{base}{OAUTH_CALLBACK_PATH_MONETARY}"
 
 
 # ── Server ────────────────────────────────────────────────────────────────────
