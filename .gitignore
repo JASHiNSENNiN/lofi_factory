@@ -26,6 +26,8 @@ assets/seo_*.json
 assets/thumb_*.jpg
 .pipeline.lock
 upload_log.json
+assets/job_queue.json
+assets/job_history.jsonl
 
 # --- Local tooling / editor / debug artifacts ---
 .claude/

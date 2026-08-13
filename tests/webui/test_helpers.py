@@ -10,7 +10,10 @@ rendering, which would need nicegui.testing's browser-driven User fixture.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
+
+import pytest
 
 from webui import config
 from webui.app import (
@@ -172,9 +175,13 @@ def test_compute_pillar_stats_marks_above_below_average():
 
 
 # ── JobManager status transitions ──────────────────────────────────────────
-def test_job_manager_marks_success_on_zero_exit():
+# Every JobManager() below passes an explicit tmp_path history_path -- since
+# JobManager now persists each finished job to disk (see webui/jobs.py's
+# _append_history_file()), an unscoped JobManager() would otherwise write
+# real entries into this repo's assets/job_history.jsonl on every test run.
+def test_job_manager_marks_success_on_zero_exit(tmp_path):
     async def run():
-        mgr = JobManager()
+        mgr = JobManager(history_path=str(tmp_path / "job_history.jsonl"))
         job = await mgr.run("ok", ["-c", "pass"])
         for _ in range(50):
             await asyncio.sleep(0.05)
@@ -187,9 +194,9 @@ def test_job_manager_marks_success_on_zero_exit():
     assert job.returncode == 0
 
 
-def test_job_manager_parses_result_line_into_artifacts():
+def test_job_manager_parses_result_line_into_artifacts(tmp_path):
     async def run():
-        mgr = JobManager()
+        mgr = JobManager(history_path=str(tmp_path / "job_history.jsonl"))
         job = await mgr.run("ok", [
             "-c",
             "import json; print('[RESULT] ' + json.dumps("
@@ -210,9 +217,9 @@ def test_job_manager_parses_result_line_into_artifacts():
     }
 
 
-def test_job_manager_artifacts_empty_when_no_result_line():
+def test_job_manager_artifacts_empty_when_no_result_line(tmp_path):
     async def run():
-        mgr = JobManager()
+        mgr = JobManager(history_path=str(tmp_path / "job_history.jsonl"))
         job = await mgr.run("ok", ["-c", "print('no result line here')"])
         for _ in range(50):
             await asyncio.sleep(0.05)
@@ -244,9 +251,9 @@ def test_card_from_artifacts_none_without_video():
     assert _card_from_artifacts(j) is None
 
 
-def test_job_manager_marks_failed_on_nonzero_exit():
+def test_job_manager_marks_failed_on_nonzero_exit(tmp_path):
     async def run():
-        mgr = JobManager()
+        mgr = JobManager(history_path=str(tmp_path / "job_history.jsonl"))
         job = await mgr.run("fail", ["-c", "import sys; sys.exit(1)"])
         for _ in range(50):
             await asyncio.sleep(0.05)
@@ -257,3 +264,142 @@ def test_job_manager_marks_failed_on_nonzero_exit():
     mgr, job = asyncio.run(run())
     assert job.status == "failed"
     assert not mgr.is_busy()
+
+
+# ── persistent job history (survives a webui restart) ──────────────────────
+def test_finished_job_appended_to_history_file(tmp_path):
+    hist_file = tmp_path / "job_history.jsonl"
+
+    async def run():
+        mgr = JobManager(history_path=str(hist_file))
+        job = await mgr.run("ok", ["-c", "pass"])
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if not job.running:
+                break
+        return job
+
+    job = asyncio.run(run())
+    assert hist_file.exists()
+    lines = [line for line in hist_file.read_text().splitlines() if line.strip()]
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert rec["id"] == job.id
+    assert rec["name"] == "ok"
+    assert rec["status"] == "success"
+    assert rec["returncode"] == 0
+    assert rec["slot"] == "main"
+
+
+def test_history_survives_fresh_jobmanager_construction(tmp_path):
+    hist_file = tmp_path / "job_history.jsonl"
+
+    async def run_one(name, code):
+        mgr = JobManager(history_path=str(hist_file))
+        job = await mgr.run(name, ["-c", f"import sys; sys.exit({code})"])
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if not job.running:
+                break
+        return job
+
+    job1 = asyncio.run(run_one("first", 0))
+    job2 = asyncio.run(run_one("second", 1))
+
+    # A brand-new JobManager (simulating a webui restart) picks history back
+    # up from disk without ever having run a job itself.
+    fresh = JobManager(history_path=str(hist_file))
+    assert [j.id for j in fresh.history] == [job2.id, job1.id]  # most-recent-first
+    assert fresh.history[0].name == "second"
+    assert fresh.history[0].status == "failed"
+    assert fresh.history[1].name == "first"
+    assert fresh.history[1].status == "success"
+    # Reloaded jobs are usable by the UI even without their old log lines.
+    assert list(fresh.history[0].lines) == []
+    assert fresh.history[0].duration >= 0
+
+
+def test_load_history_file_caps_at_limit(tmp_path):
+    hist_file = tmp_path / "job_history.jsonl"
+    with open(hist_file, "w") as f:
+        for i in range(25):
+            f.write(json.dumps({
+                "id": f"job-{i}", "name": "n", "cmd": ["python", "run.py"],
+                "status": "success", "slot": "main", "returncode": 0,
+                "started_at": float(i), "finished_at": float(i) + 1, "artifacts": {},
+            }) + "\n")
+
+    mgr = JobManager(history_path=str(hist_file))
+    assert len(mgr.history) == 20
+    # Most-recent-first, and "most recent" means latest lines in the file.
+    assert mgr.history[0].id == "job-24"
+    assert mgr.history[-1].id == "job-5"
+
+
+def test_missing_history_file_starts_empty(tmp_path):
+    mgr = JobManager(history_path=str(tmp_path / "nonexistent.jsonl"))
+    assert mgr.history == []
+
+
+def test_corrupt_history_line_is_skipped_not_fatal(tmp_path):
+    hist_file = tmp_path / "job_history.jsonl"
+    hist_file.write_text(
+        '{"id": "good", "name": "n", "cmd": [], "status": "success", "slot": "main", '
+        '"returncode": 0, "started_at": 1.0, "finished_at": 2.0, "artifacts": {}}\n'
+        "{not valid json\n"
+    )
+    mgr = JobManager(history_path=str(hist_file))
+    assert [j.id for j in mgr.history] == ["good"]
+
+
+# ── retry (re-run a failed job with its exact original cmd/slot) ────────────
+def test_retry_reruns_failed_job_with_same_cmd_and_slot(tmp_path):
+    async def run():
+        mgr = JobManager(history_path=str(tmp_path / "job_history.jsonl"))
+        job = await mgr.run("fail", ["-c", "import sys; sys.exit(3)"], slot="main")
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if not job.running:
+                break
+        assert job.status == "failed"
+
+        retried = await mgr.retry(job.id)
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if not retried.running:
+                break
+        return job, retried
+
+    job, retried = asyncio.run(run())
+    # A genuinely new Job object -- job.id has 1-second granularity so it can
+    # collide with the original when retried immediately, but it's still a
+    # fresh run (new Job instance/process), not a mutation of the old one.
+    assert retried is not job
+    assert retried.cmd == job.cmd  # exact same [python, *args]
+    assert retried.name == job.name
+    assert retried.slot == "main"
+    assert retried.status == "failed"  # exit(3) again -> still fails, same behavior
+
+
+def test_retry_raises_for_unknown_job_id(tmp_path):
+    async def run():
+        mgr = JobManager(history_path=str(tmp_path / "job_history.jsonl"))
+        with pytest.raises(ValueError):
+            await mgr.retry("does-not-exist")
+
+    asyncio.run(run())
+
+
+def test_retry_refuses_a_successful_job(tmp_path):
+    async def run():
+        mgr = JobManager(history_path=str(tmp_path / "job_history.jsonl"))
+        job = await mgr.run("ok", ["-c", "pass"])
+        for _ in range(50):
+            await asyncio.sleep(0.05)
+            if not job.running:
+                break
+        assert job.status == "success"
+        with pytest.raises(ValueError):
+            await mgr.retry(job.id)
+
+    asyncio.run(run())
