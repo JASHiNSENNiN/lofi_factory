@@ -438,22 +438,122 @@ def _draw_duration_badge(img: Image.Image, theme: str, duration: str) -> Image.I
     return img
 
 
+# ── Compositional layouts ──────────────────────────────────────────────────────
+#
+# Three genuinely different card *compositions* (not just RNG-seeded noise
+# variants). Every layout still draws through the same per-theme color/FX
+# system (THEMES, _build_bg, _add_theme_fx) — only the placement/size of the
+# text card changes:
+#
+#   centered — original layout: card dead-centre, slightly below frame middle.
+#   thirds   — rule-of-thirds: narrower card sitting in the left or right
+#              third of the frame, on the lower third gridline, leaving the
+#              opposite two-thirds free for the gradient/glow to breathe.
+#   edge     — asymmetric: a wide low band hugging the bottom edge (opposite
+#              the top-left duration badge), leaving the whole upper frame
+#              open for the atmospheric background.
+LAYOUT_NAMES = ("centered", "thirds", "edge")
+
+
+def _stable_int(s: str) -> int:
+    """
+    Deterministic string hash that does NOT depend on Python's per-process
+    hash randomization (unlike the builtin hash()), so layout selection is
+    reproducible across runs/processes given the same theme+variant -- not
+    just within a single process.
+    """
+    h = 0
+    for ch in s:
+        h = (h * 131 + ord(ch)) % 1_000_003
+    return h
+
+
+def _select_layout(theme_name: str, variant: int) -> str:
+    """
+    Deterministically pick a compositional layout from (theme_name, variant).
+    Same inputs always produce the same layout (reproducible thumbnails).
+    Consecutive variants (as run.py uses for the primary + `_alt` A/B pair)
+    always land on *different* layouts, since LAYOUT_NAMES has length 3 and
+    consecutive integers are never congruent mod 3.
+    """
+    idx = (_stable_int(theme_name) + variant) % len(LAYOUT_NAMES)
+    return LAYOUT_NAMES[idx]
+
+
+def _select_side(theme_name: str, variant: int) -> str:
+    """Deterministically pick which edge/third ('left' or 'right') an
+    off-center layout hugs, independent of the layout choice itself."""
+    idx = (_stable_int(theme_name + "|side") + variant) % 2
+    return "left" if idx == 0 else "right"
+
+
+_TITLE_FONT_SIZES = (78, 68, 60, 52, 46)
+
+
+def _fit_title_font(draw: ImageDraw.ImageDraw, text: str, font_path: str, max_text_w: int):
+    """Shrink the title font until it fits max_text_w, so narrower (thirds/
+    edge) cards don't overflow their frosted-glass backing. Falls back to the
+    smallest size if even that overflows, rather than looping forever."""
+    font = w = h = None
+    for size in _TITLE_FONT_SIZES:
+        font = _load_font(font_path, size)
+        w, h = _text_size(draw, text, font)
+        if w <= max_text_w:
+            return font, w, h
+    return font, w, h
+
+
+def _card_position(layout: str, side: str, card_w: int, card_h: int) -> tuple[int, int]:
+    """Compute the (x, y) top-left origin of the text card for a layout."""
+    if layout == "thirds":
+        cx_frac = 0.24 if side == "left" else 0.76
+        card_x  = int(TW * cx_frac) - card_w // 2
+        card_x  = max(40, min(TW - 40 - card_w, card_x))
+        card_y  = int(TH * 0.60) - card_h // 2   # sits on the lower third line
+    elif layout == "edge":
+        margin = 56
+        card_x = margin if side == "left" else TW - margin - card_w
+        card_x = max(40, min(TW - 40 - card_w, card_x))
+        card_y = TH - card_h - 64             # low band hugging the bottom edge
+    else:  # centered
+        card_x = (TW - card_w) // 2
+        card_y = int(TH * 0.52) - card_h // 2   # slightly below centre
+    return card_x, card_y
+
+
+def _max_card_width(layout: str) -> int:
+    if layout == "thirds":
+        return int(TW * 0.44)
+    if layout == "edge":
+        return int(TW * 0.62)
+    return TW - 80   # centered
+
+
 # ── Elegant frosted-glass text card ───────────────────────────────────────────
 
-def _draw_text_card(img: Image.Image, theme: str, short_title: str, duration: str) -> Image.Image:
+def _draw_text_card(
+    img: Image.Image,
+    theme: str,
+    short_title: str,
+    duration: str,
+    layout: str = "centered",
+    side: str = "left",
+    glass_alpha: int = 155,
+    force_solid_dark: bool = False,
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """
-    Centered text card with frosted-glass backing:
+    Text card with frosted-glass backing, composed per `layout`:
       ✦  (accent deco mark)
-      Title In Mixed Case   (78px)
+      Title In Mixed Case   (auto-shrinks to fit the card)
       ─────────────────     (thin accent rule)
       lofi · 2 hours        (30px subtitle)
+
+    Returns (img, card_bbox) where card_bbox is (x0, y0, x1, y1) in full-frame
+    pixel coordinates, so callers can run a legibility check against exactly
+    the region that was drawn.
     """
     c         = THEMES[theme]
     font_path = _resolve_title_font()
-
-    title_font = _load_font(font_path, 78)
-    sub_font   = _load_font(font_path, 30)
-    deco_font  = _load_font(font_path, 26)
 
     # Mixed case title — much more elegant than ALL CAPS
     title_text = short_title.title()
@@ -462,26 +562,34 @@ def _draw_text_card(img: Image.Image, theme: str, short_title: str, duration: st
 
     draw = ImageDraw.Draw(img, "RGBA")
 
-    tw_t, th_t = _text_size(draw, title_text, title_font)
-    tw_s, th_s = _text_size(draw, sub_text,   sub_font)
-    tw_d, th_d = _text_size(draw, deco_text,  deco_font)
-
-    # Card dimensions: pad around the widest element
-    inner_w  = max(tw_t, tw_s, tw_d)
     pad_x    = 44
     pad_top  = 18
     pad_bot  = 22
     rule_gap = 10    # gap above and below the accent rule
-    card_w   = inner_w + pad_x * 2
+
+    max_card_w = _max_card_width(layout)
+    title_font, tw_t, th_t = _fit_title_font(draw, title_text, font_path, max_card_w - pad_x * 2)
+    sub_font   = _load_font(font_path, 30)
+    deco_font  = _load_font(font_path, 26)
+
+    tw_s, th_s = _text_size(draw, sub_text,  sub_font)
+    tw_d, th_d = _text_size(draw, deco_text, deco_font)
+
+    # Card dimensions: pad around the widest element
+    inner_w  = max(tw_t, tw_s, tw_d)
+    card_w   = min(inner_w + pad_x * 2, max_card_w)
     card_h   = pad_top + th_d + 10 + th_t + rule_gap + 2 + rule_gap + th_s + pad_bot
 
-    # Clamp card width to frame
-    card_w = min(card_w, TW - 80)
-    card_x = (TW - card_w) // 2
-    card_y = int(TH * 0.52) - card_h // 2   # slightly below centre
+    card_x, card_y = _card_position(layout, side, card_w, card_h)
 
-    # Frosted glass: dark semi-transparent rounded rect
-    glass_col = (*c["grad_overlay"][:3], 155)
+    # Frosted glass: dark semi-transparent rounded rect. `force_solid_dark`
+    # ignores the theme's tinted overlay color in favor of a near-black
+    # backing -- used as the last-resort legibility fallback, since it
+    # guarantees strong contrast against every theme's (light) text_main.
+    if force_solid_dark:
+        glass_col = (10, 10, 14, glass_alpha)
+    else:
+        glass_col = (*c["grad_overlay"][:3], glass_alpha)
     draw.rounded_rectangle(
         [card_x, card_y, card_x + card_w, card_y + card_h],
         radius=20, fill=glass_col,
@@ -517,7 +625,64 @@ def _draw_text_card(img: Image.Image, theme: str, short_title: str, duration: st
     draw.text((sx, cur_y), sub_text, font=sub_font,
               fill=(*c["accent"], 195))
 
-    return img
+    card_bbox = (card_x, card_y, card_x + card_w, card_y + card_h)
+    return img, card_bbox
+
+
+# ── Small-size legibility check ────────────────────────────────────────────────
+#
+# Pure luminance-contrast math (WCAG relative-luminance formula), run against
+# the thumbnail downsampled to a realistic YouTube grid preview size. No AI/
+# ML involved -- just numpy on pixel values.
+
+_PREVIEW_W, _PREVIEW_H = 120, 90     # ~ a YouTube grid thumbnail preview
+_MIN_CONTRAST_RATIO    = 3.0         # WCAG AA "large text" threshold
+
+
+def _relative_luminance(rgb) -> float:
+    """WCAG 2.x relative luminance of an sRGB color."""
+    srgb = np.asarray(rgb, dtype=np.float64) / 255.0
+    lin  = np.where(srgb <= 0.03928, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
+    return float(0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2])
+
+
+def _contrast_ratio(rgb1, rgb2) -> float:
+    """WCAG contrast ratio between two sRGB colors, always >= 1.0."""
+    l1, l2 = _relative_luminance(rgb1), _relative_luminance(rgb2)
+    lighter, darker = max(l1, l2), min(l1, l2)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _check_card_legibility(
+    img: Image.Image,
+    card_bbox: tuple[int, int, int, int],
+    text_rgb: tuple[int, int, int],
+    min_ratio: float = _MIN_CONTRAST_RATIO,
+) -> tuple[bool, float]:
+    """
+    Downsample the full thumbnail to a realistic small YouTube-grid preview
+    size (~120x90) and measure the WCAG contrast ratio between the card's
+    nominal text color and the *observed* average color of the card region
+    once downsampled. At small preview sizes, thin glyph strokes get
+    resampled/anti-aliased into the surrounding card background -- so
+    comparing the nominal text color against the downsampled region average
+    is a real proxy for "does the title still read as text, or does it wash
+    out into the card" once YouTube shrinks it for the video grid.
+
+    Returns (passes, ratio).
+    """
+    small = img.convert("RGB").resize((_PREVIEW_W, _PREVIEW_H), Image.LANCZOS)
+    x0, y0, x1, y1 = card_bbox
+    sx0 = max(0, min(_PREVIEW_W - 1, round(x0 * _PREVIEW_W / TW)))
+    sx1 = max(sx0 + 1, min(_PREVIEW_W, round(x1 * _PREVIEW_W / TW)))
+    sy0 = max(0, min(_PREVIEW_H - 1, round(y0 * _PREVIEW_H / TH)))
+    sy1 = max(sy0 + 1, min(_PREVIEW_H, round(y1 * _PREVIEW_H / TH)))
+
+    region = np.array(small.crop((sx0, sy0, sx1, sy1)), dtype=np.float64)
+    bg_rgb = region.reshape(-1, 3).mean(axis=0)
+
+    ratio = _contrast_ratio(text_rgb, tuple(bg_rgb))
+    return ratio >= min_ratio, ratio
 
 
 # ── Watermark ─────────────────────────────────────────────────────────────────
@@ -579,16 +744,53 @@ def generate_thumbnail(
     seed = abs(variant * 137 + hash(theme_name) % 10000)
     rng  = np.random.default_rng(seed)
 
+    # Deterministic per-track composition: same (theme, variant) always
+    # renders the same layout, and the A/B `_alt` pair (variant, variant+1)
+    # always lands on a genuinely different composition -- not just
+    # different decorative RNG noise (see LAYOUT_NAMES docstring above).
+    layout = _select_layout(theme_name, variant)
+    side   = _select_side(theme_name, variant)
+
     ts       = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
     out_path = os.path.join(ASSETS_DIR, f"thumb_{theme_name}_{ts}.jpg")
 
-    print(f"[THUMB] {theme_name} | '{short_title}' | {duration}")
+    print(f"[THUMB] {theme_name} | '{short_title}' | {duration} | layout={layout}/{side}")
 
-    img = _build_bg(theme_name, seed)
-    img = _add_theme_fx(img, theme_name, rng)
-    img = _apply_vignette(img, strength=0.44)
-    img = _draw_duration_badge(img, theme_name, duration)
-    img = _draw_text_card(img, theme_name, short_title, duration)
+    base_img = _build_bg(theme_name, seed)
+    base_img = _add_theme_fx(base_img, theme_name, rng)
+    base_img = _apply_vignette(base_img, strength=0.44)
+    base_img = _draw_duration_badge(base_img, theme_name, duration)
+
+    c = THEMES[theme_name]
+
+    # Legibility-guarded card draw: try the selected layout at increasing
+    # card-background opacity; if it still fails the small-preview contrast
+    # check, fall back to the centered layout with a forced near-black
+    # (highest-contrast) card background rather than silently shipping an
+    # unreadable thumbnail.
+    attempts = [
+        (layout,     side, 155, False),
+        (layout,     side, 205, False),
+        (layout,     side, 240, False),
+        ("centered", "left", 245, True),
+    ]
+    img = None
+    for i, (lyt, sd, alpha, solid_dark) in enumerate(attempts):
+        candidate = base_img.copy()
+        candidate, card_bbox = _draw_text_card(
+            candidate, theme_name, short_title, duration,
+            layout=lyt, side=sd, glass_alpha=alpha, force_solid_dark=solid_dark,
+        )
+        ok, ratio = _check_card_legibility(candidate, card_bbox, c["text_main"])
+        if ok or i == len(attempts) - 1:
+            img = candidate
+            if not ok:
+                print(f"[THUMB] legibility check below threshold even after fallback "
+                      f"(ratio={ratio:.2f} < {_MIN_CONTRAST_RATIO}) -- shipping best effort")
+            elif i > 0:
+                print(f"[THUMB] legibility check passed after adjustment #{i} (ratio={ratio:.2f})")
+            break
+
     img = _draw_watermark(img)
 
     img.save(out_path, "JPEG", quality=95, optimize=True, progressive=True)
