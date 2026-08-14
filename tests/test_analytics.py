@@ -54,6 +54,9 @@ def test_title_variant_weights_empty():
 
 
 def test_title_variant_weights_prefers_higher_ctr_variant():
+    # Keyed by hook-strategy identity (not raw slot index) -- see
+    # generate_seo.py's HOOK_STRATEGIES. "statement" (idx 0) outperforms
+    # "curiosity_gap" (idx 1) here, so its weight should end up higher.
     fake = {}
     for i in range(6):
         fake[f"t0_{i}"] = {"pillar": "temporal", "title_chosen_idx": 0,
@@ -62,7 +65,21 @@ def test_title_variant_weights_prefers_higher_ctr_variant():
         fake[f"t1_{i}"] = {"pillar": "temporal", "title_chosen_idx": 1,
                             "videoThumbnailImpressionsClickRate": 0.02}
     result = title_variant_weights(fake)
-    assert result["temporal"][0] > result["temporal"][1]
+    assert result["temporal"]["statement"] > result["temporal"]["curiosity_gap"]
+
+
+def test_title_variant_weights_keys_by_explicit_strategy_when_present():
+    # When entries already carry title_chosen_strategy (the new field), that
+    # takes priority over the title_chosen_idx fallback mapping.
+    fake = {}
+    for i in range(6):
+        fake[f"s0_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "spec_led",
+                            "videoThumbnailImpressionsClickRate": 0.08}
+    for i in range(6):
+        fake[f"s1_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "statement",
+                            "videoThumbnailImpressionsClickRate": 0.01}
+    result = title_variant_weights(fake)
+    assert result["temporal"]["spec_led"] > result["temporal"]["statement"]
 
 
 def test_title_variant_weights_skips_pillars_below_threshold():
