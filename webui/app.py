@@ -452,8 +452,7 @@ def _confirm_delete_render(c: dict, on_change) -> None:
         else:
             ui.label(f"{len(manifest)} file(s), {total_bytes / 1_048_576:.0f} MB total — "
                      f"this cannot be undone.").classes(theme.SUB)
-            with ui.column().classes("w-full gap-1").style(
-                    "max-height:180px; overflow-y:auto"):
+            with ui.column().classes("w-full gap-1 max-h-[180px] overflow-y-auto"):
                 for m in manifest:
                     with ui.row().classes("w-full justify-between no-wrap"):
                         ui.label(m["name"]).classes("text-sm truncate")
@@ -606,10 +605,8 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
                               on_click=lambda cm=cm, box=reply_box: _reply(cm, box))\
                         .props("flat dense color=primary")
                     if cm.get("replies"):
-                        with ui.column().classes("w-full gap-1").style(
-                                "margin-left:20px; "
-                                "border-left:2px solid rgba(255,255,255,0.08); "
-                                "padding-left:10px"):
+                        with ui.column().classes(
+                                "w-full gap-1 ml-5 pl-2.5 border-l-2 border-white/10"):
                             for rep in cm["replies"]:
                                 with ui.row().classes(
                                         "w-full items-center justify-between no-wrap"):
@@ -917,15 +914,13 @@ def view_analytics(root) -> None:
             posteriors = analytics_mod.pillar_bandit_posteriors(analytics=data_dict)
             with ui.column().classes("w-full gap-1 mt-2"):
                 for pillar, st in sorted(posteriors.items(), key=lambda kv: -kv[1]["mean"]):
-                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                            "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                        ui.label(pillar).classes("text-sm font-medium").style("min-width:120px")
+                    with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
+                        ui.label(pillar).classes("text-sm font-medium col-md")
                         ui.linear_progress(value=st["mean"], show_value=False)\
                             .classes("grow").props("rounded color=primary")
-                        ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm")\
-                            .style("min-width:56px")
+                        ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm col-xs")
                         ui.label(f"α={st['alpha']:.0f} β={st['beta']:.0f}")\
-                            .classes(theme.SUB).style("min-width:90px")
+                            .classes(f"{theme.SUB} col-md")
                         ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
 
         # ── Cohort growth curves + forecast + viral-moment flags ────────────
@@ -977,12 +972,12 @@ def view_analytics(root) -> None:
 
                 ui.echart({
                     "grid": {"left": 60, "right": 16, "top": 40, "bottom": 40},
-                    "legend": {"top": 0, "textStyle": {"color": "#a89db5", "fontSize": 10}},
+                    "legend": {"top": 0, "textStyle": {"color": theme.MUTED, "fontSize": 10}},
                     "tooltip": {"trigger": "axis"},
                     "xAxis": {"type": "value", "name": "days since upload",
-                              "axisLabel": {"color": "#a89db5"}},
+                              "axisLabel": {"color": theme.MUTED}},
                     "yAxis": {"type": "value", "name": "cumulative views",
-                              "axisLabel": {"color": "#a89db5"}},
+                              "axisLabel": {"color": theme.MUTED}},
                     "series": series,
                 }).classes("w-full mt-1").style("height:280px")
 
@@ -993,27 +988,29 @@ def view_analytics(root) -> None:
                         title = d.get("title") or vid
                         forecast = analytics_mod.forecast_views(hist)
                         viral = analytics_mod.detect_viral_moment(hist)
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.label(title[:40]).classes("text-sm").style(
-                                "min-width:200px; flex:1; overflow:hidden; "
-                                "text-overflow:ellipsis; white-space:nowrap")
-                            ui.label(f"now {stats.fmt_count(int(current_views))}")\
-                                .classes(theme.SUB).style("min-width:90px")
-                            if forecast:
-                                ui.label(f"7d ~{stats.fmt_count(int(forecast['forecast']['7d']))}")\
-                                    .classes(theme.SUB).style("min-width:90px")
-                                ui.label(f"30d ~{stats.fmt_count(int(forecast['forecast']['30d']))}")\
-                                    .classes(theme.SUB).style("min-width:90px")
-                            else:
-                                ui.label("forecast: needs more history")\
-                                    .classes(theme.SUB).style("min-width:180px")
-                            if viral and viral.get("flagged"):
-                                color = "#6fcaa8" if viral["direction"] == "up" else "#e8849a"
-                                icon = "trending_up" if viral["direction"] == "up" else "trending_down"
-                                ui.icon(icon).style(f"color:{color}")
-                                ui.label(f"viral moment {viral['change_point_date']}")\
-                                    .classes("text-sm").style(f"color:{color}")
+                        cells = [
+                            {"text": title[:40], "classes": "text-sm truncate", "width": "grow"},
+                            {"text": f"now {stats.fmt_count(int(current_views))}",
+                             "classes": theme.SUB, "width": "md"},
+                        ]
+                        if forecast:
+                            cells.append({
+                                "text": f"7d ~{stats.fmt_count(int(forecast['forecast']['7d']))}",
+                                "classes": theme.SUB, "width": "md"})
+                            cells.append({
+                                "text": f"30d ~{stats.fmt_count(int(forecast['forecast']['30d']))}",
+                                "classes": theme.SUB, "width": "md"})
+                        else:
+                            cells.append({"text": "forecast: needs more history",
+                                          "classes": theme.SUB, "width": "xl"})
+                        if viral and viral.get("flagged"):
+                            up = viral["direction"] == "up"
+                            color_cls = "text-teal" if up else "text-rose"
+                            cells.append({"icon": "trending_up" if up else "trending_down",
+                                          "color": color_cls})
+                            cells.append({"text": f"viral moment {viral['change_point_date']}",
+                                          "classes": f"text-sm {color_cls}"})
+                        theme.data_row(cells)
 
         rows: list[dict] = []
         if data_dict:
@@ -1067,14 +1064,14 @@ def view_analytics(root) -> None:
                             "text-sm font-medium mt-2")
                         ui.echart({
                             "grid": {"left": 60, "right": 16, "top": 40, "bottom": 60},
-                            "legend": {"top": 0, "textStyle": {"color": "#a89db5",
+                            "legend": {"top": 0, "textStyle": {"color": theme.MUTED,
                                                                 "fontSize": 10}},
                             "tooltip": {"trigger": "axis"},
                             "xAxis": {"type": "category",
                                       "data": ["CTR %", "Views (100s)", "Watch (min)",
                                                "Likes", "Comments"],
-                                      "axisLabel": {"color": "#a89db5", "rotate": 15}},
-                            "yAxis": {"type": "value", "axisLabel": {"color": "#a89db5"}},
+                                      "axisLabel": {"color": theme.MUTED, "rotate": 15}},
+                            "yAxis": {"type": "value", "axisLabel": {"color": theme.MUTED}},
                             "series": [{
                                 "name": c["title"][:30], "type": "bar",
                                 "data": [
@@ -1125,10 +1122,10 @@ def view_analytics(root) -> None:
                         _selected_ids.remove(vid)
                     _render_comparison()
 
-                with ui.column().classes("w-full gap-1 mt-2 table-scroll").style(
-                        "max-height:420px; overflow-y:auto"):
+                with ui.column().classes(
+                        "w-full gap-1 mt-2 table-scroll max-h-[420px] overflow-y-auto"):
                     with ui.row().classes("w-full items-center gap-2 no-wrap"):
-                        ui.label("").classes("shrink-0").style("width:28px")
+                        ui.label("").classes("shrink-0 w-7")
                         theme.data_row([
                             {"text": "Title", "width": "grow"},
                             {"text": "Pillar", "width": "md"},
@@ -1192,32 +1189,29 @@ def view_analytics(root) -> None:
             if ab_tested:
                 ui.label("Significance panel (most recent z-test per video)").classes(
                     "text-sm font-medium mt-4")
-                with ui.column().classes("w-full gap-1 mt-1"):
-                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                            "padding:4px; opacity:0.6"):
-                        ui.label("Title").classes(theme.SUB).style("min-width:200px; flex:1")
-                        ui.label("CTR").classes(theme.SUB).style("min-width:60px")
-                        ui.label("z").classes(theme.SUB).style("min-width:70px")
-                        ui.label("p-value").classes(theme.SUB).style("min-width:80px")
-                        ui.label("variant").classes(theme.SUB).style("min-width:60px")
+                with ui.column().classes("w-full gap-1 mt-1 table-scroll"):
+                    theme.data_row([
+                        {"text": "Title", "width": "grow"},
+                        {"text": "CTR", "width": "xs"},
+                        {"text": "z", "width": "xs"},
+                        {"text": "p-value", "width": "sm"},
+                        {"text": "variant", "width": "xs"},
+                    ], header=True)
                     for s in ab_tested:
                         m = analytics_mod.latest_metrics(s)
                         p_value = s["thumb_ab_p"]
                         significant = p_value < 0.05
-                        color = "#e8849a" if significant else "#a89db5"
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.label(s.get("title", s["video_id"])[:40]).classes("text-sm")\
-                                .style("min-width:200px; flex:1; overflow:hidden; "
-                                       "text-overflow:ellipsis; white-space:nowrap")
-                            ui.label(f"{(m.get('videoThumbnailImpressionsClickRate') or 0) * 100:.1f}%")\
-                                .classes("text-sm").style("min-width:60px")
-                            ui.label(f"{s.get('thumb_ab_z', 0):.2f}").classes("text-sm")\
-                                .style("min-width:70px")
-                            ui.label(f"{p_value:.4f}" + (" *" if significant else ""))\
-                                .classes("text-sm").style(f"color:{color}; min-width:80px")
-                            ui.label(s.get("ab_variant") or "—").classes(theme.SUB)\
-                                .style("min-width:60px")
+                        color_cls = "text-rose" if significant else theme.SUB
+                        theme.data_row([
+                            {"text": s.get("title", s["video_id"])[:40],
+                             "classes": "text-sm truncate", "width": "grow"},
+                            {"text": f"{(m.get('videoThumbnailImpressionsClickRate') or 0) * 100:.1f}%",
+                             "classes": "text-sm", "width": "xs"},
+                            {"text": f"{s.get('thumb_ab_z', 0):.2f}", "classes": "text-sm", "width": "xs"},
+                            {"text": f"{p_value:.4f}" + (" *" if significant else ""),
+                             "classes": f"text-sm {color_cls}", "width": "sm"},
+                            {"text": s.get("ab_variant") or "—", "classes": theme.SUB, "width": "xs"},
+                        ])
 
         # ── Traffic-source breakdown + subscriber growth (YT Analytics API) ──
         with ui.element("div").classes("studio-card w-full"):
@@ -1235,11 +1229,11 @@ def view_analytics(root) -> None:
                 ui.echart({
                     "tooltip": {"trigger": "item"},
                     "legend": {"orient": "vertical", "left": "left",
-                               "textStyle": {"color": "#a89db5", "fontSize": 10}},
+                               "textStyle": {"color": theme.MUTED, "fontSize": 10}},
                     "series": [{
                         "type": "pie", "radius": ["35%", "65%"],
                         "data": [{"name": t["source"], "value": t["views"]} for t in traffic],
-                        "label": {"color": "#a89db5"},
+                        "label": {"color": theme.MUTED},
                     }],
                 }).classes("w-full mt-2").style("height:260px")
 
@@ -1251,14 +1245,14 @@ def view_analytics(root) -> None:
                     "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
                     "tooltip": {"trigger": "axis"},
                     "xAxis": {"type": "category", "data": [g["date"] for g in growth],
-                              "axisLabel": {"color": "#a89db5", "rotate": 30, "fontSize": 9}},
+                              "axisLabel": {"color": theme.MUTED, "rotate": 30, "fontSize": 9}},
                     "yAxis": {"type": "value", "name": "net subs",
-                              "axisLabel": {"color": "#a89db5"}},
+                              "axisLabel": {"color": theme.MUTED}},
                     "series": [{
                         "type": "bar",
                         "data": [{"value": g["net"],
-                                  "itemStyle": {"color": "#6fcaa8" if g["net"] >= 0
-                                                else "#e8849a"}}
+                                  "itemStyle": {"color": theme.TEAL if g["net"] >= 0
+                                                else theme.ROSE}}
                                  for g in growth],
                     }],
                 }).classes("w-full mt-2").style("height:220px")
@@ -1301,13 +1295,13 @@ def view_analytics(root) -> None:
                         "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
                         "tooltip": {"trigger": "axis"},
                         "xAxis": {"type": "category", "data": [r["date"] for r in revenue],
-                                  "axisLabel": {"color": "#a89db5", "rotate": 30,
+                                  "axisLabel": {"color": theme.MUTED, "rotate": 30,
                                                 "fontSize": 9}},
                         "yAxis": {"type": "value", "name": "$ est. revenue",
-                                  "axisLabel": {"color": "#a89db5"}},
+                                  "axisLabel": {"color": theme.MUTED}},
                         "series": [{"type": "line", "data": [r["revenue"] for r in revenue],
                                     "smooth": True, "areaStyle": {"opacity": 0.15},
-                                    "color": "#e8a45c"}],
+                                    "color": theme.PRIMARY}],
                     }).classes("w-full mt-3").style("height:220px")
 
         # ── Playlist-level aggregation (pillar -> playlist mapping from
@@ -1321,28 +1315,24 @@ def view_analytics(root) -> None:
                          "mapping, with the legacy duration-based vars as fallback). "
                          "'Unassigned' means no matching env var is set for that "
                          "video's pillar/duration.").classes(theme.SUB)
-                with ui.column().classes("w-full gap-1 mt-2"):
-                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                            "padding:4px; opacity:0.6"):
-                        ui.label("Playlist").classes(theme.SUB).style("min-width:220px; flex:1")
-                        ui.label("Pillars").classes(theme.SUB).style("min-width:160px")
-                        ui.label("Avg CTR").classes(theme.SUB).style("min-width:70px")
-                        ui.label("Avg views").classes(theme.SUB).style("min-width:80px")
-                        ui.label("n").classes(theme.SUB).style("min-width:40px")
+                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
+                    theme.data_row([
+                        {"text": "Playlist", "width": "xl"},
+                        {"text": "Pillars", "width": "lg"},
+                        {"text": "Avg CTR", "width": "sm"},
+                        {"text": "Avg views", "width": "sm"},
+                        {"text": "n", "width": "xs"},
+                    ], header=True)
                     for p in plist:
                         label = p["playlist_id"] or "Unassigned"
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.label(label).classes("text-sm font-medium").style(
-                                "min-width:220px; flex:1; overflow:hidden; "
-                                "text-overflow:ellipsis; white-space:nowrap")
-                            ui.label(", ".join(p["pillars"])).classes(theme.SUB)\
-                                .style("min-width:160px")
-                            ui.label(f"{p['avg_ctr'] * 100:.1f}%").classes("text-sm")\
-                                .style("min-width:70px")
-                            ui.label(stats.fmt_count(int(p["avg_views"]))).classes("text-sm")\
-                                .style("min-width:80px")
-                            ui.label(str(p["n"])).classes(theme.SUB).style("min-width:40px")
+                        theme.data_row([
+                            {"text": label, "classes": "text-sm font-medium truncate", "width": "xl"},
+                            {"text": ", ".join(p["pillars"]), "classes": theme.SUB, "width": "lg"},
+                            {"text": f"{p['avg_ctr'] * 100:.1f}%", "classes": "text-sm", "width": "sm"},
+                            {"text": stats.fmt_count(int(p["avg_views"])), "classes": "text-sm",
+                             "width": "sm"},
+                            {"text": str(p["n"]), "classes": theme.SUB, "width": "xs"},
+                        ])
 
 
 def view_automation(root) -> None:
@@ -1542,8 +1532,8 @@ def view_automation(root) -> None:
                 code = rs.get("exec_main_code") or "—"
                 status_num = rs.get("exec_main_status")
                 ok = code == "exited" and status_num in ("0", 0)
-                color = "#6fcaa8" if ok else ("#e8849a" if code != "—" else "#a89db5")
-                res_note.style(f"color:{color}")
+                color_cls = "text-teal" if ok else ("text-rose" if code != "—" else "text-muted")
+                res_note.classes(replace=f"text-sm {color_cls}")
                 res_note.text = (f"Last run: {code}"
                                   + (f", exit code {status_num}" if status_num is not None else ""))
 
@@ -1584,25 +1574,25 @@ def view_automation(root) -> None:
 # entry so it doesn't touch view_analytics/view_automation.
 # ─────────────────────────────────────────────────────────────────────────────
 _CAL_KIND_STYLE = {
-    "published":      ("check_circle", "#6fcaa8"),
-    "scheduled":      ("schedule", "#e8a45c"),
-    "live":           ("sensors", "#e8849a"),
-    "scheduled_live": ("event", "#e8a45c"),
+    "published":      ("check_circle", "text-teal"),
+    "scheduled":      ("schedule", "text-amber"),
+    "live":           ("sensors", "text-rose"),
+    "scheduled_live": ("event", "text-amber"),
 }
 # Queue-slot chip styling -- "stream" queue items are new (see queue_dialog's
 # slot selector) and need to read as clearly distinct from "main" ones in
 # the shared "Up next" list rather than blending into a plain text label.
 _SLOT_STYLE = {
-    "main":   ("movie", "#a89db5", "render"),
-    "stream": ("sensors", "#e8849a", "live"),
+    "main":   ("movie", "text-muted", "render"),
+    "stream": ("sensors", "text-rose", "live"),
 }
 
 
 def _slot_chip(slot: str) -> None:
-    icon, color, label = _SLOT_STYLE.get(slot, ("event_note", "#a89db5", slot))
-    with ui.row().classes("items-center gap-1 no-wrap").style("min-width:70px"):
-        ui.icon(icon).style(f"color:{color}; font-size:16px")
-        ui.label(label).classes(theme.SUB).style(f"color:{color}")
+    icon, color_cls, label = _SLOT_STYLE.get(slot, ("event_note", "text-muted", slot))
+    with ui.row().classes("items-center gap-1 no-wrap col-sm"):
+        ui.icon(icon).classes(f"{color_cls} text-base")
+        ui.label(label).classes(f"{theme.SUB} {color_cls}")
 
 
 def queue_dialog() -> None:
@@ -1632,14 +1622,14 @@ def queue_dialog() -> None:
             if not yt_connected:
                 ui.label("YouTube isn't connected — \"Render only\" still works; "
                          "connect YouTube in Settings before queuing an upload.") \
-                    .classes(theme.SUB).style("color:#e8a45c")
+                    .classes(f"{theme.SUB} text-amber")
 
         with ui.column().classes("w-full gap-2") as stream_fields:
             qsel = ui.select(config.STREAM_QUALITY, value="720p15", label="Quality").classes("w-full")
             psel_stream = ui.select(config.PRIVACY, value="public", label="Privacy").classes("w-full")
             if not yt_connected:
                 ui.label("YouTube isn't connected — connect it in Settings before "
-                         "queuing a live stream.").classes(theme.SUB).style("color:#e8a45c")
+                         "queuing a live stream.").classes(f"{theme.SUB} text-amber")
 
         def add(upload: bool) -> None:
             if slot_sel.value == "stream":
@@ -1711,15 +1701,13 @@ def view_calendar(root) -> None:
                 ui.label('Nothing queued. Use "Add to queue" to batch up renders ahead of time.') \
                     .classes(theme.SUB + " mt-2")
             else:
-                with ui.column().classes("w-full gap-1 mt-2"):
+                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
                     for idx, item in enumerate(pending):
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.label(f"#{idx + 1}").classes(theme.SUB).style("min-width:28px")
-                            ui.label(item["name"]).classes("text-sm font-medium") \
-                                .style("min-width:140px")
+                        with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
+                            ui.label(f"#{idx + 1}").classes(f"{theme.SUB} col-xs")
+                            ui.label(item["name"]).classes("text-sm font-medium col-lg")
                             _slot_chip(item["slot"])
-                            ui.label(item["note"] or "").classes(theme.SUB).style("flex:1")
+                            ui.label(item["note"] or "").classes(f"{theme.SUB} col-grow")
                             if idx > 0:
                                 ui.button(icon="arrow_upward",
                                           on_click=lambda item=item, idx=idx: (
@@ -1743,18 +1731,15 @@ def view_calendar(root) -> None:
             if not history:
                 ui.label("No queued runs finished yet.").classes(theme.SUB + " mt-2")
             else:
-                with ui.column().classes("w-full gap-1 mt-2"):
+                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
                     for item in history:
-                        color = _STATUS_COLOR.get(item.status, "#a89db5")
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.icon(_STATUS_ICON.get(item.status, "help")).style(f"color:{color}")
-                            ui.label(item.name).classes("text-sm font-medium") \
-                                .style("min-width:140px")
+                        color_cls = _STATUS_COLOR.get(item.status, "text-muted")
+                        with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
+                            ui.icon(_STATUS_ICON.get(item.status, "help")).classes(color_cls)
+                            ui.label(item.name).classes("text-sm font-medium col-lg")
                             _slot_chip(item.slot)
-                            ui.label(item.status).classes("text-sm") \
-                                .style(f"color:{color}; min-width:80px")
-                            ui.label(item.note or "").classes(theme.SUB).style("flex:1")
+                            ui.label(item.status).classes(f"text-sm {color_cls} col-sm")
+                            ui.label(item.note or "").classes(f"{theme.SUB} col-grow")
                             if item.status == "failed":
                                 ui.button("Retry", icon="replay",
                                           on_click=lambda item=item: (
@@ -1770,24 +1755,20 @@ def view_calendar(root) -> None:
             if not timeline:
                 ui.label("No uploads yet.").classes(theme.SUB + " mt-2")
             else:
-                with ui.column().classes("w-full gap-1 mt-2").style(
-                        "max-height:520px; overflow-y:auto"):
+                with ui.column().classes("w-full gap-1 mt-2 max-h-[520px] overflow-y-auto"):
                     last_day = None
                     for row in timeline:
                         day = row["when"].strftime("%A, %b %d, %Y") if row["when"] else "Unknown date"
                         if day != last_day:
-                            ui.label(day).classes("text-sm font-semibold mt-3") \
-                                .style("color:#e8a45c")
+                            ui.label(day).classes("text-sm font-semibold mt-3 text-amber")
                             last_day = day
-                        icon, color = _CAL_KIND_STYLE.get(row["kind"], ("event_note", "#a89db5"))
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.icon(icon).style(f"color:{color}")
+                        icon, color_cls = _CAL_KIND_STYLE.get(row["kind"], ("event_note", "text-muted"))
+                        with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
+                            ui.icon(icon).classes(color_cls)
                             time_str = row["when"].strftime("%H:%M UTC") if row["when"] else "—"
-                            ui.label(time_str).classes(theme.SUB).style("min-width:80px")
-                            ui.label(row["title"]).classes("text-sm font-medium").style(
-                                "flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap")
-                            ui.label(row["status"]).classes(theme.SUB).style("min-width:190px")
+                            ui.label(time_str).classes(f"{theme.SUB} col-sm")
+                            ui.label(row["title"]).classes("text-sm font-medium truncate col-grow")
+                            ui.label(row["status"]).classes(f"{theme.SUB} col-xl")
                             if row.get("url"):
                                 ui.link("Open ↗", row["url"], new_tab=True).classes("text-sm")
 
@@ -2000,11 +1981,11 @@ def view_settings(root) -> None:
                         ui.label("⚠ client_secret.json missing — upload it in the "
                                  "'YouTube account' card above first (same OAuth client "
                                  "is reused, just with an extra scope requested).")\
-                            .classes("text-sm").style("color:#e8a45c")
+                            .classes("text-sm text-amber")
                     ui.label("Redirect URI for Google Cloud Console (register alongside "
                              "the main one):").classes(theme.SUB + " mt-1")
-                    ui.label(mst["redirect_uri"]).classes("font-mono text-sm")\
-                        .style("background:rgba(0,0,0,.35);padding:3px 8px;border-radius:8px")
+                    ui.label(mst["redirect_uri"])\
+                        .classes("font-mono text-sm bg-black/35 rounded-lg px-2 py-0.5")
 
             refresh_monetary()
 
@@ -2342,12 +2323,12 @@ def view_system(root) -> None:
                         ui.label("Tailscale not detected on this box (binary missing or "
                                  "daemon unreachable).").classes(theme.SUB)
                     if cert:
-                        color = "#e8849a" if cert["expiring_soon"] else "#6fcaa8"
+                        color_cls = "text-rose" if cert["expiring_soon"] else "text-teal"
                         warn = " ⚠ expiring soon" if cert["expiring_soon"] else ""
                         ui.label(
                             f"TLS cert: expires {cert['expires']} "
                             f"({cert['days_left']:.0f}d left){warn}"
-                        ).classes("text-sm").style(f"color:{color}")
+                        ).classes(f"text-sm {color_cls}")
                     else:
                         ui.label("No TLS cert configured (WEBUI_SSL_CERTFILE unset, or "
                                  "file missing).").classes(theme.SUB)
@@ -2412,13 +2393,11 @@ def view_system(root) -> None:
                         ui.label("No admin actions logged yet.").classes(theme.SUB)
                     for e in entries:
                         with ui.row().classes("w-full items-center gap-3 no-wrap"):
-                            ui.label(e.get("ts", "")).classes("text-xs font-mono")\
-                                .style("color:var(--muted); white-space:nowrap")
-                            ui.label(e.get("action", "")).classes("text-sm").style(
-                                "white-space:nowrap")
+                            ui.label(e.get("ts", "")).classes(
+                                "text-xs font-mono text-muted whitespace-nowrap")
+                            ui.label(e.get("action", "")).classes("text-sm whitespace-nowrap")
                             ui.label(json.dumps(e.get("detail", {})))\
-                                .classes(f"text-xs {theme.SUB}").style(
-                                    "overflow:hidden; text-overflow:ellipsis; white-space:nowrap")
+                                .classes(f"text-xs {theme.SUB} truncate")
 
             ui.button("Refresh", icon="refresh", on_click=refresh_audit)\
                 .props("flat dense color=primary")
