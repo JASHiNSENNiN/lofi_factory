@@ -119,15 +119,13 @@ def _fmt_elapsed(secs: float) -> str:
 
 def render_dialog() -> None:
     yt_connected = youtube_oauth.status()["connected"]
-    with ui.dialog() as dlg, ui.element("div").classes("studio-card w-96 gap-3"):
-        ui.label("New render").classes(theme.H)
+    with ui.dialog() as dlg, theme.card(title="New render", classes="w-96 gap-3"):
         tsel = ui.select(config.THEMES, value=config.DEFAULT_THEME, label="Theme").classes("w-full")
         dsel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION, label="Duration").classes("w-full")
         psel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY, label="Privacy").classes("w-full")
         if not yt_connected:
             ui.label("YouTube isn't connected yet — connect it in Settings before uploading. "
-                     "\"Render only\" works fine without it.").classes(theme.SUB)\
-                .style("color:#e8a45c")
+                     "\"Render only\" works fine without it.").classes(f"{theme.SUB} text-amber")
 
         async def go(upload: bool) -> None:
             if jobs.manager.is_busy():
@@ -162,24 +160,25 @@ def render_dialog() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Views
 # ─────────────────────────────────────────────────────────────────────────────
+_HERO_STATUS_CLASSES = "text-amber text-rose text-teal"
+
+
 def view_studio(root) -> None:
     with root:
         # ── Hero: Now Rendering ────────────────────────────────────────────────
         with ui.element("div").classes("hero w-full"):
-            with ui.row().classes("items-center gap-5 no-wrap w-full"):
+            with ui.row().classes("items-center gap-5 no-wrap w-full overflow-x-auto"):
                 lib = stats.library(limit=1)
                 if lib:
-                    ui.image(f"/media/{lib[0]['thumb_name']}")\
-                        .style("width:148px;height:148px;border-radius:18px")\
-                        .classes("hero-art").props("fit=cover")
+                    ui.image(f"/media/{lib[0]['thumb_name']}").classes("hero-art")\
+                        .props("fit=cover")
                 else:
-                    with ui.element("div").classes("hero-art hero-art-empty")\
-                            .style("width:148px;height:148px"):
+                    with ui.element("div").classes("hero-art hero-art-empty"):
                         ui.label("🎧")
                 with ui.column().classes("gap-2 grow min-w-0"):
                     with ui.row().classes("items-center gap-2"):
                         status = ui.label().classes("pill")
-                        ttl = ui.label("").classes("studio-h")
+                        ttl = ui.label("").classes("text-h1")
                     sub = ui.label("").classes("studio-sub")
                     theme.waveform(30)
                     prog = ui.linear_progress(value=1.0, show_value=False)\
@@ -196,7 +195,7 @@ def view_studio(root) -> None:
             if jobs.manager.is_busy():
                 j = jobs.manager.current
                 status.text = "● RENDERING"
-                status.style("color:#e8a45c")
+                status.classes(remove=_HERO_STATUS_CLASSES, add="text-amber")
                 ttl.text = j.name
                 stage = _stage_from_lines(j) or _last_stage(j)
                 elapsed = _fmt_elapsed(time.time() - j.started_at)
@@ -221,20 +220,20 @@ def view_studio(root) -> None:
                 prog.visible = True
             elif jobs.manager.stream_running():
                 status.text = "🔴 LIVE"
-                status.style("color:#e8849a")
+                status.classes(remove=_HERO_STATUS_CLASSES, add="text-rose")
                 ttl.text = "Broadcasting"
                 sub.text = f"{_fmt_elapsed(time.time() - jobs.manager.stream.started_at)} on air"
                 prog.visible = False
             elif jobs.manager.current is not None and jobs.manager.current.status == "failed":
                 j = jobs.manager.current
                 status.text = "⚠ FAILED"
-                status.style("color:#e8849a")
+                status.classes(remove=_HERO_STATUS_CLASSES, add="text-rose")
                 ttl.text = j.name
                 sub.text = f"Last run failed · {_last_stage(j)}"
                 prog.visible = False
             else:
                 status.text = "● IDLE"
-                status.style("color:#6fcaa8")
+                status.classes(remove=_HERO_STATUS_CLASSES, add="text-teal")
                 ttl.text = "Studio idle"
                 sub.text = "Press New render to generate a fresh lofi video."
                 prog.visible = False
@@ -244,14 +243,13 @@ def view_studio(root) -> None:
 
         # ── Stat cards ─────────────────────────────────────────────────────────
         if not youtube_oauth.status()["connected"]:
-            with ui.row().classes("w-full items-center justify-between studio-card")\
-                    .style("background:rgba(232,164,92,0.08) !important"):
+            with theme.card(classes="w-full flex items-center justify-between", tone="amber"):
                 ui.label("Connect YouTube to see channel stats (subscribers, views, videos).")\
                     .classes(theme.SUB)
                 ui.button("Connect", icon="link",
                           on_click=lambda: set_view("settings")).props("dense color=primary")
         else:
-            with ui.row().classes("w-full gap-4 no-wrap"):
+            with ui.row().classes("w-full gap-4 no-wrap overflow-x-auto"):
                 cells = {}
                 for key, label in [("subs", "Subscribers"), ("views", "Views"),
                                    ("videos", "Videos")]:
@@ -269,7 +267,7 @@ def view_studio(root) -> None:
             ui.timer(30.0, refresh_stats)
 
         # ── Library preview ────────────────────────────────────────────────────
-        with ui.element("div").classes("studio-card w-full"):
+        with theme.card():
             with ui.row().classes("w-full items-center justify-between"):
                 ui.label("Recent renders").classes(theme.H)
                 ui.button("View all", on_click=lambda: set_view("library"))\
@@ -277,8 +275,7 @@ def view_studio(root) -> None:
             _library_grid(stats.library(limit=8))
 
         # ── Run history ─────────────────────────────────────────────────────────
-        with ui.element("div").classes("studio-card w-full"):
-            ui.label("Recent runs").classes(theme.H)
+        with theme.card(title="Recent runs"):
             _runs_table(jobs.manager.history[:10])
 
         # ── Collapsible live output ────────────────────────────────────────────
@@ -286,8 +283,8 @@ def view_studio(root) -> None:
             live_log(lambda: jobs.manager.current, height="h-72")
 
 
-_STATUS_COLOR = {"running": "#e8a45c", "success": "#6fcaa8",
-                  "failed": "#e8849a", "cancelled": "#a89db5"}
+_STATUS_COLOR = {"running": "text-amber", "success": "text-teal",
+                  "failed": "text-rose", "cancelled": "text-muted"}
 _STATUS_ICON = {"running": "sync", "success": "check_circle",
                  "failed": "error", "cancelled": "block"}
 
@@ -317,22 +314,22 @@ def _runs_table(history: list) -> None:
     if not history:
         ui.label("No runs yet this session.").classes(theme.SUB + " mt-1")
         return
-    with ui.column().classes("w-full gap-1 mt-2"):
+    with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
         for j in history:
-            color = _STATUS_COLOR.get(j.status, "#a89db5")
+            color_cls = _STATUS_COLOR.get(j.status, "text-muted")
             card = _card_from_artifacts(j) if j.status == "success" else None
-            with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                    "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                ui.icon(_STATUS_ICON.get(j.status, "help")).style(f"color:{color}")
-                ui.label(j.name).classes("text-sm font-medium").style("min-width:140px")
-                ui.label(j.status).classes("text-sm").style(f"color:{color}; min-width:80px")
-                ui.label(_fmt_elapsed(j.duration)).classes(theme.SUB).style("min-width:60px")
-                ui.label(_last_stage(j) if j.status == "failed" else "")\
-                    .classes(theme.SUB).style("overflow:hidden;text-overflow:ellipsis")
-                if card:
-                    ui.button("View", icon="visibility",
-                              on_click=lambda card=card: _open_detail([card], 0))\
-                        .props("flat dense color=primary")
+
+            def _view(card=card) -> None:
+                _open_detail([card], 0)
+
+            theme.data_row([
+                {"icon": _STATUS_ICON.get(j.status, "help"), "color": color_cls},
+                {"text": j.name, "classes": "text-body font-medium", "width": "lg"},
+                {"text": j.status, "color": color_cls, "width": "sm"},
+                {"text": _fmt_elapsed(j.duration), "classes": theme.SUB, "width": "xs"},
+                {"text": _last_stage(j) if j.status == "failed" else "", "classes": f"{theme.SUB} truncate"},
+            ], extra=(lambda: ui.button("View", icon="visibility", on_click=_view)
+                      .props("flat dense color=primary")) if card else None)
 
 
 def _library_grid(cards: list[dict], on_change=lambda: None) -> None:
@@ -343,7 +340,7 @@ def _library_grid(cards: list[dict], on_change=lambda: None) -> None:
             "w-full grid gap-3 mt-2").style(
             "grid-template-columns:repeat(auto-fill,minmax(190px,1fr))"):
         for i, c in enumerate(cards):
-            with ui.element("div").classes("libcard").style("position:relative")\
+            with ui.element("div").classes("libcard")\
                     .on("click", lambda i=i: _open_detail(cards, i, on_change)):
                 if c.get("video_file"):
                     # Hover-to-preview: swap the static poster for the actual clip
@@ -355,7 +352,7 @@ def _library_grid(cards: list[dict], on_change=lambda: None) -> None:
                     # ui.html() strips those as an XSS precaution, confirmed via a
                     # real DOM dump showing every other attribute survived except
                     # the two on* handlers).
-                    with ui.element("div").style("position:relative") as media:
+                    with ui.element("div").classes("libcard-media") as media:
                         ui.image(f"/media/{c['thumb_name']}")\
                             .props("ratio=1.7778 fit=cover loading=lazy")
                         ui.html(
@@ -408,8 +405,7 @@ def _library_grid(cards: list[dict], on_change=lambda: None) -> None:
                     ui.label(f"{c['theme']} · {c['when']}").classes("d")
                 ui.button(icon="delete_outline") \
                     .props("flat round dense color=white") \
-                    .style("position:absolute; top:6px; right:6px; "
-                           "background:rgba(20,14,26,0.55)") \
+                    .classes("libcard-del") \
                     .on("click.stop", lambda c=c: _confirm_delete_render(c, on_change))
 
 
@@ -417,9 +413,7 @@ def _confirm_delete_render(c: dict, on_change) -> None:
     busy = jobs.manager.is_busy()
     manifest = [] if busy else data.render_delete_manifest(c)
     total_bytes = sum(m["size_bytes"] for m in manifest)
-    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
-            .style("max-width:480px"):
-        ui.label(f"Delete “{c['title']}”?").classes(theme.H)
+    with ui.dialog() as dlg, theme.card(title=f"Delete “{c['title']}”?", classes="gap-3 max-w-lg"):
         if busy:
             ui.label("A render is in progress — delete is disabled until it "
                      "finishes (this protects against deleting a file that's "
@@ -434,8 +428,7 @@ def _confirm_delete_render(c: dict, on_change) -> None:
                     "max-height:180px; overflow-y:auto"):
                 for m in manifest:
                     with ui.row().classes("w-full justify-between no-wrap"):
-                        ui.label(m["name"]).classes("text-sm").style(
-                            "overflow:hidden;text-overflow:ellipsis;white-space:nowrap")
+                        ui.label(m["name"]).classes("text-sm truncate")
                         ui.label(f"{m['size_bytes'] / 1_048_576:.1f} MB")\
                             .classes(f"text-sm {theme.SUB}")
         with ui.row().classes("w-full justify-end gap-2"):
@@ -459,8 +452,7 @@ def _confirm_delete_render(c: dict, on_change) -> None:
 
 def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
     c = cards[index]
-    with ui.dialog() as dlg, ui.element("div").classes("studio-card w-full gap-3")\
-            .style("max-width:760px"):
+    with ui.dialog() as dlg, theme.card(classes="w-full gap-3 max-w-3xl"):
         with ui.row().classes("w-full items-start justify-between no-wrap"):
             with ui.column().classes("gap-0"):
                 ui.label(c["title"]).classes(theme.H)
@@ -499,22 +491,21 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
         # ── Player ──────────────────────────────────────────────────────────
         if c.get("video_id"):
             ui.html(
-                f'<iframe width="100%" height="380" style="border-radius:14px;border:0" '
+                f'<iframe width="100%" height="380" class="detail-media" '
                 f'src="https://www.youtube.com/embed/{c["video_id"]}" '
                 f'allowfullscreen></iframe>'
             )
         elif c.get("video_file"):
             ui.html(
-                f'<video controls preload="metadata" style="width:100%;border-radius:14px" '
+                f'<video controls preload="metadata" class="detail-media" '
                 f'poster="/media/{c["thumb_name"]}">'
                 f'<source src="/videos/{c["video_file"]}" type="video/mp4"></video>'
             )
         else:
-            ui.image(f"/media/{c['thumb_name']}").props("fit=cover")\
-                .style("width:100%;border-radius:14px")
+            ui.image(f"/media/{c['thumb_name']}").props("fit=cover").classes("detail-media")
 
         # ── Metadata ────────────────────────────────────────────────────────
-        with ui.row().classes("w-full gap-4 no-wrap"):
+        with ui.row().classes("w-full gap-4 no-wrap overflow-x-auto"):
             if c.get("video_file"):
                 try:
                     st = os.stat(os.path.join(config.OUTPUT_DIR, c["video_file"]))
@@ -540,11 +531,11 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
                 ui.echart({
                     "grid": {"left": 40, "right": 16, "top": 16, "bottom": 28},
                     "xAxis": {"type": "category", "data": xs,
-                              "name": "% of video", "axisLabel": {"color": "#a89db5"}},
+                              "name": "% of video", "axisLabel": {"color": theme.MUTED}},
                     "yAxis": {"type": "value", "name": "% watching",
-                              "axisLabel": {"color": "#a89db5"}},
+                              "axisLabel": {"color": theme.MUTED}},
                     "series": [{"type": "line", "data": ys, "smooth": True,
-                                "areaStyle": {"opacity": 0.15}, "color": "#e8a45c"}],
+                                "areaStyle": {"opacity": 0.15}, "color": theme.PRIMARY}],
                 }).classes("w-full").style("height:220px")
             else:
                 ui.label("No retention data yet — needs more views, or check that YouTube "
@@ -554,8 +545,11 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
 
 def view_library(root) -> None:
     with root:
-        with ui.element("div").classes("studio-card w-full"):
-            with ui.row().classes("w-full items-center justify-between gap-3 no-wrap"):
+        with theme.card():
+            # No `no-wrap` here (unlike the pseudo-table rows) -- title/search/refresh
+            # read fine reflowing to a second line on a narrow phone width instead of
+            # needing a horizontal-scroll affordance for just 3 items.
+            with ui.row().classes("w-full items-center justify-between gap-3"):
                 ui.label("Library").classes(theme.H)
                 search = ui.input(placeholder="Search title or theme...")\
                     .props("dense clearable").classes("grow max-w-xs")
@@ -588,9 +582,12 @@ def view_library(root) -> None:
             render()
 
 
+_PILL_STATUS_CLASSES = "text-muted text-teal text-rose text-amber"
+
+
 def view_live(root) -> None:
     with root:
-        with ui.element("div").classes("studio-card w-full"):
+        with theme.card():
             pill = ui.label().classes("pill")
             detail = ui.label("").classes(theme.SUB)
 
@@ -598,16 +595,16 @@ def view_live(root) -> None:
                 st = data.live_status()
                 if st is None:
                     pill.text = "○ OFFLINE"
-                    pill.style("color:#a89db5")
+                    pill.classes(remove=_PILL_STATUS_CLASSES, add="text-muted")
                     detail.text = "No active broadcast."
                 elif st["alive"]:
                     pill.text = "🔴 LIVE"
-                    pill.style("color:#6fcaa8")
+                    pill.classes(remove=_PILL_STATUS_CLASSES, add="text-teal")
                     started = (st.get("started_at") or "")[:16].replace("T", " ")
                     detail.text = f"{st.get('title', '')} · started {started}"
                 else:
                     pill.text = "⚠ CRASHED / STALE"
-                    pill.style("color:#e8849a")
+                    pill.classes(remove=_PILL_STATUS_CLASSES, add="text-rose")
                     detail.text = ("live_state.json says a stream is running, but the ffmpeg "
                                    "process is gone. Use Force kill / End stream to clean up.")
 
@@ -676,7 +673,11 @@ def view_trends(root) -> None:
             live_log(lambda: jobs.manager.current, height="h-72")
 
 
-_PILLAR_MARKER_COLOR = {"▲": "#6fcaa8", "▼": "#e8849a", " ": "#e8a45c"}
+_PILLAR_MARKER_COLOR = {"▲": "text-teal", "▼": "text-rose", " ": "text-amber"}
+# echarts itemStyle needs real hex (can't reach into CSS custom properties from
+# a JSON series config), so this mirrors _PILLAR_MARKER_COLOR using the same
+# theme constants instead of a second set of raw literals.
+_PILLAR_MARKER_HEX = {"▲": theme.TEAL, "▼": theme.ROSE, " ": theme.PRIMARY}
 
 
 def view_analytics(root) -> None:
@@ -695,7 +696,7 @@ def view_analytics(root) -> None:
                 return
             set_view("analytics")
 
-        with ui.element("div").classes("studio-card w-full"):
+        with theme.card():
             with ui.row().classes("w-full items-center justify-between"):
                 ui.label("Performance by pillar").classes(theme.H)
                 ui.button("Sync now", icon="sync", on_click=do_sync)\
@@ -711,7 +712,7 @@ def view_analytics(root) -> None:
                          "`python scripts/analytics.py --report` on the server).")\
                     .classes(theme.SUB + " mt-3")
             else:
-                with ui.row().classes("w-full gap-4 no-wrap mt-2"):
+                with ui.row().classes("w-full gap-4 no-wrap mt-2 overflow-x-auto"):
                     with ui.element("div").classes("stat grow"):
                         ui.label(f"{result['channel_avg_ctr'] * 100:.1f}%").classes("stat-num")
                         ui.label("Channel avg CTR").classes("stat-lbl")
@@ -721,14 +722,14 @@ def view_analytics(root) -> None:
 
                 pillars = [r["pillar"] for r in result["by_pillar"]]
                 ctrs = [round(r["avg_ctr"] * 100, 2) for r in result["by_pillar"]]
-                colors = [_PILLAR_MARKER_COLOR.get(r["marker"], "#e8a45c")
+                colors = [_PILLAR_MARKER_HEX.get(r["marker"], theme.PRIMARY)
                           for r in result["by_pillar"]]
                 ui.echart({
                     "grid": {"left": 60, "right": 16, "top": 16, "bottom": 40},
                     "xAxis": {"type": "category", "data": pillars,
-                              "axisLabel": {"color": "#a89db5", "rotate": 20}},
+                              "axisLabel": {"color": theme.MUTED, "rotate": 20}},
                     "yAxis": {"type": "value", "name": "avg CTR %",
-                              "axisLabel": {"color": "#a89db5"}},
+                              "axisLabel": {"color": theme.MUTED}},
                     "series": [{
                         "type": "bar", "data": [
                             {"value": v, "itemStyle": {"color": c}}
@@ -737,28 +738,23 @@ def view_analytics(root) -> None:
                     }],
                 }).classes("w-full mt-3").style("height:260px")
 
-                with ui.column().classes("w-full gap-1 mt-2"):
+                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
                     for row in result["by_pillar"]:
-                        color = _PILLAR_MARKER_COLOR.get(row["marker"], "#e8a45c")
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.label(row["marker"] or "·").style(f"color:{color}")
-                            ui.label(row["pillar"]).classes("text-sm font-medium")\
-                                .style("min-width:120px")
-                            ui.label(f"{row['avg_ctr'] * 100:.1f}% CTR").classes("text-sm")\
-                                .style(f"color:{color}; min-width:90px")
-                            ui.label(f"{row['avg_views']:.0f} avg views").classes(theme.SUB)
-                            ui.label(f"{row['avg_watch_min']:.0f} min avg watch")\
-                                .classes(theme.SUB)
-                            ui.label(f"n={row['n']}").classes(theme.SUB)
+                        color_cls = _PILLAR_MARKER_COLOR.get(row["marker"], "text-amber")
+                        theme.data_row([
+                            {"text": row["marker"] or "·", "color": color_cls, "classes": ""},
+                            {"text": row["pillar"], "classes": "text-sm font-medium", "width": "lg"},
+                            {"text": f"{row['avg_ctr'] * 100:.1f}% CTR", "color": color_cls,
+                             "classes": "text-sm", "width": "md"},
+                            {"text": f"{row['avg_views']:.0f} avg views", "classes": theme.SUB},
+                            {"text": f"{row['avg_watch_min']:.0f} min avg watch", "classes": theme.SUB},
+                            {"text": f"n={row['n']}", "classes": theme.SUB},
+                        ])
 
         if data_dict:
-            with ui.element("div").classes("studio-card w-full"):
-                ui.label("Per-video performance").classes(theme.H)
-                ui.label("Every tracked upload, most-clicked first. Click a row to open it "
-                         "(retention chart, player) the same way as from Library.")\
-                    .classes(theme.SUB)
-
+            with theme.card("Per-video performance",
+                            "Every tracked upload, most-clicked first. Click a row to open it "
+                            "(retention chart, player) the same way as from Library."):
                 vids = list(data_dict.keys())
                 engagement = stats.video_engagement(vids)
                 card_by_vid = {c["video_id"]: c for c in stats.library(limit=200)
@@ -779,17 +775,17 @@ def view_analytics(root) -> None:
                     })
                 rows.sort(key=lambda r: r["ctr"], reverse=True)
 
-                with ui.column().classes("w-full gap-1 mt-2").style(
+                with ui.column().classes("w-full gap-1 mt-2 table-scroll").style(
                         "max-height:420px; overflow-y:auto"):
-                    with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                            "padding:4px; opacity:0.6"):
-                        ui.label("Title").classes(theme.SUB).style("min-width:220px; flex:2")
-                        ui.label("Pillar").classes(theme.SUB).style("min-width:100px")
-                        ui.label("CTR").classes(theme.SUB).style("min-width:60px")
-                        ui.label("Views").classes(theme.SUB).style("min-width:70px")
-                        ui.label("Watch").classes(theme.SUB).style("min-width:60px")
-                        ui.label("Likes").classes(theme.SUB).style("min-width:60px")
-                        ui.label("Comments").classes(theme.SUB).style("min-width:70px")
+                    theme.data_row([
+                        {"text": "Title", "width": "grow"},
+                        {"text": "Pillar", "width": "md"},
+                        {"text": "CTR", "width": "xs"},
+                        {"text": "Views", "width": "sm"},
+                        {"text": "Watch", "width": "xs"},
+                        {"text": "Likes", "width": "xs"},
+                        {"text": "Comments", "width": "sm"},
+                    ], header=True)
                     for r in rows:
                         card = card_by_vid.get(r["video_id"])
 
@@ -801,45 +797,34 @@ def view_analytics(root) -> None:
                                     f"https://youtube.com/watch?v={r['video_id']}",
                                     new_tab=True)
 
-                        with ui.row().classes("w-full items-center gap-3 no-wrap cursor-pointer")\
-                                .style("padding:6px 4px; "
-                                       "border-bottom:1px solid rgba(255,255,255,0.06)")\
-                                .on("click", _open):
-                            ui.label(r["title"]).classes("text-sm").style(
-                                "min-width:220px; flex:2; overflow:hidden; "
-                                "text-overflow:ellipsis; white-space:nowrap")
-                            ui.label(r["pillar"]).classes("text-sm").style("min-width:100px")
-                            ui.label(f"{r['ctr'] * 100:.1f}%").classes("text-sm")\
-                                .style("min-width:60px")
-                            ui.label(stats.fmt_count(r["views"])).classes("text-sm")\
-                                .style("min-width:70px")
-                            ui.label(f"{r['watch_min']}m").classes("text-sm")\
-                                .style("min-width:60px")
-                            ui.label(stats.fmt_count(r["likes"]) if r["likes"] is not None else "—")\
-                                .classes("text-sm").style("min-width:60px")
-                            ui.label(stats.fmt_count(r["comments"])
-                                     if r["comments"] is not None else "—")\
-                                .classes("text-sm").style("min-width:70px")
+                        theme.data_row([
+                            {"text": r["title"], "classes": "text-sm truncate", "width": "grow"},
+                            {"text": r["pillar"], "classes": "text-sm", "width": "md"},
+                            {"text": f"{r['ctr'] * 100:.1f}%", "classes": "text-sm", "width": "xs"},
+                            {"text": stats.fmt_count(r["views"]), "classes": "text-sm", "width": "sm"},
+                            {"text": f"{r['watch_min']}m", "classes": "text-sm", "width": "xs"},
+                            {"text": stats.fmt_count(r["likes"]) if r["likes"] is not None else "—",
+                             "classes": "text-sm", "width": "xs"},
+                            {"text": stats.fmt_count(r["comments"]) if r["comments"] is not None else "—",
+                             "classes": "text-sm", "width": "sm"},
+                        ], on_click=_open)
 
         swapped = [{"video_id": vid, **d} for vid, d in data_dict.items() if d.get("thumb_swapped")]
-        with ui.element("div").classes("studio-card w-full"):
-            ui.label("Thumbnail A/B testing").classes(theme.H)
-            ui.label("Runs automatically with the daily analytics sync (lofi-analytics.timer): "
-                     "any video 7-30 days old with CTR below 70% of the channel average gets "
-                     "its thumbnail swapped to the alt variant generated alongside it during "
-                     "render.").classes(theme.SUB)
+        with theme.card("Thumbnail A/B testing",
+                        "Runs automatically with the daily analytics sync (lofi-analytics.timer): "
+                        "any video 7-30 days old with CTR below 70% of the channel average gets "
+                        "its thumbnail swapped to the alt variant generated alongside it during "
+                        "render."):
             if not swapped:
                 ui.label("No swaps yet.").classes(theme.SUB + " mt-2")
             else:
-                with ui.column().classes("w-full gap-1 mt-2"):
+                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
                     for s in swapped:
-                        with ui.row().classes("w-full items-center gap-3 no-wrap").style(
-                                "padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
-                            ui.icon("swap_horiz").style("color:#e8a45c")
-                            ui.label(s.get("title", s["video_id"])).classes("text-sm")\
-                                .style("min-width:200px")
-                            ui.label(f"swapped {s.get('thumb_swapped_at', '')[:10]}")\
-                                .classes(theme.SUB)
+                        theme.data_row([
+                            {"icon": "swap_horiz", "color": "text-amber"},
+                            {"text": s.get("title", s["video_id"]), "classes": "text-sm", "width": "xl"},
+                            {"text": f"swapped {s.get('thumb_swapped_at', '')[:10]}", "classes": theme.SUB},
+                        ])
 
 
 def view_automation(root) -> None:
@@ -857,7 +842,7 @@ def view_automation(root) -> None:
                 st = automation.status()
                 if not st["installed"]:
                     pill.text = "⚠ NOT INSTALLED"
-                    pill.style("color:#e8a45c")
+                    pill.classes(remove=_PILL_STATUS_CLASSES, add="text-amber")
                     sub.text = "Run deploy/setup.sh on this server to install lofi-auto.timer."
                     next_lbl.text = ""
                     for b in (start_btn, stop_btn, boot_btn, run_now_btn, hour_sel, every_sel, apply_btn):
@@ -867,13 +852,13 @@ def view_automation(root) -> None:
                     b.visible = True
                 if st["running_now"]:
                     pill.text = "● RUNNING NOW"
-                    pill.style("color:#e8a45c")
+                    pill.classes(remove=_PILL_STATUS_CLASSES, add="text-amber")
                 elif st["active"]:
                     pill.text = "● ARMED"
-                    pill.style("color:#6fcaa8")
+                    pill.classes(remove=_PILL_STATUS_CLASSES, add="text-teal")
                 else:
                     pill.text = "○ STOPPED"
-                    pill.style("color:#e8849a")
+                    pill.classes(remove=_PILL_STATUS_CLASSES, add="text-rose")
                 sub.text = (f"Every {st['every_hours']}h, starting {st['start_hour']:02d}:00"
                             f" · boot: {'yes' if st['enabled'] else 'no'}")
                 bits = []
@@ -1033,7 +1018,7 @@ def view_settings(root) -> None:
                                   on_click=lambda: ui.navigate.to("/youtube/login")).props("color=primary")
                     if not st["client_present"]:
                         ui.label("⚠ client_secret.json missing — add it to the repo root.")\
-                            .classes("text-warning text-sm").style("color:#e8a45c")
+                            .classes("text-sm text-amber")
 
                         async def on_client_secret_upload(e) -> None:
                             raw = await e.file.read()
@@ -1061,16 +1046,15 @@ def view_settings(root) -> None:
                     elif st["needs_web_client"]:
                         ui.label("⚠ Desktop OAuth client + tunnel: in-browser re-login needs a "
                                  "Web-application client. (Local login works as-is.)")\
-                            .style("color:#e8a45c").classes("text-sm")
+                            .classes("text-sm text-amber")
                     ui.label("Redirect URI for Google Cloud Console:").classes(theme.SUB + " mt-1")
-                    ui.label(st["redirect_uri"]).classes("font-mono text-sm")\
-                        .style("background:rgba(0,0,0,.35);padding:3px 8px;border-radius:8px")
+                    ui.label(st["redirect_uri"]).classes("font-mono text-sm code-chip")
                     ui.label(
                         "⚠ Before relying on unattended auto-uploads: publish the OAuth "
                         "consent screen to Production in Google Cloud Console. Apps left in "
                         "Testing mode get refresh tokens that expire after 7 days, which "
                         "silently breaks lofi-auto's scheduled runs once it happens."
-                    ).classes("text-sm mt-2").style("color:#e8a45c")
+                    ).classes("text-sm mt-2 text-amber")
 
             refresh_yt()
 
@@ -1125,8 +1109,7 @@ def view_settings(root) -> None:
                             ui.label("Go to:").classes(theme.SUB)
                             ui.label(d["verification_url"]).classes("font-mono text-sm")
                             ui.label("Enter this code:").classes(theme.SUB + " mt-1")
-                            ui.label(d["user_code"]).classes("text-lg font-bold")\
-                                .style("letter-spacing:3px")
+                            ui.label(d["user_code"]).classes("text-lg font-bold tracking-widest")
                             with ui.row().classes("items-center gap-2 mt-1"):
                                 ui.spinner()
                                 ui.label("Waiting for you to finish on Google's site...")\
@@ -1162,10 +1145,10 @@ def view_settings(root) -> None:
                 cs = data.cookies_status()
                 if cs["present"]:
                     cookie_status.text = f"✅ cookies.txt ({cs['size_kb']} KB, {cs['modified']})"
-                    cookie_status.style("color:#6fcaa8")
+                    cookie_status.classes(remove="text-teal text-rose", add="text-teal")
                 else:
                     cookie_status.text = "❌ no cookies.txt — downloads fall back to MIDI"
-                    cookie_status.style("color:#e8849a")
+                    cookie_status.classes(remove="text-teal text-rose", add="text-rose")
 
             async def on_upload(e) -> None:
                 raw = await e.file.read()
@@ -1234,10 +1217,8 @@ def _fmt_dur(secs: float | None) -> str:
 
 
 def _confirm_delete_sample(path: str, name: str, on_change) -> None:
-    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
-            .style("max-width:420px"):
-        ui.label(f"Delete “{name}”?").classes(theme.H)
-        ui.label("This cannot be undone.").classes(theme.SUB)
+    with ui.dialog() as dlg, theme.card(title=f"Delete “{name}”?", subtitle="This cannot be undone.",
+                                        classes="gap-3 max-w-md"):
         with ui.row().classes("w-full justify-end gap-2"):
             ui.button("Cancel", on_click=dlg.close).props("flat")
 
@@ -1257,7 +1238,7 @@ def view_samples(root) -> None:
     with root:
         busy = jobs.manager.is_busy()
 
-        with ui.element("div").classes("studio-card w-full"):
+        with theme.card():
             with ui.row().classes("w-full items-center justify-between"):
                 ui.label("Music tracks").classes(theme.H)
                 ui.button("Refresh", icon="refresh",
@@ -1271,26 +1252,24 @@ def view_samples(root) -> None:
             if not tracks:
                 ui.label("No generated tracks yet.").classes(theme.SUB)
             for t in tracks:
-                with ui.column().classes("w-full gap-1").style(
-                        "padding:10px 4px; border-bottom:1px solid rgba(255,255,255,0.06)"):
+                with ui.column().classes("w-full gap-1 list-row"):
                     with ui.row().classes("w-full items-center justify-between no-wrap"):
-                        with ui.column().classes("gap-0"):
-                            ui.label(t["title"]).classes("text-sm font-medium")
+                        with ui.column().classes("gap-0 min-w-0"):
+                            ui.label(t["title"]).classes("text-sm font-medium truncate")
                             sub = f"{t['genre'] + ' · ' if t.get('genre') else ''}" \
                                   f"{_fmt_dur(t['duration_secs'])} · {t['size_mb']} MB · " \
                                   f"{t['modified']}"
-                            ui.label(sub).classes(theme.SUB)
+                            ui.label(sub).classes(f"{theme.SUB} truncate")
                         ui.button(icon="delete_outline", color="negative",
                                   on_click=lambda t=t: _confirm_delete_sample(
                                       t["path"], t["name"], lambda: set_view("samples")))\
                             .props("flat round dense").set_visibility(not busy)
                     ui.html(
-                        f'<audio controls preload="none" style="width:100%;height:32px" '
+                        f'<audio controls preload="none" class="sample-audio" '
                         f'src="/music/{t["name"]}"></audio>'
                     )
 
-        with ui.element("div").classes("studio-card w-full mt-4"):
-            ui.label("Visual loops").classes(theme.H)
+        with theme.card("Visual loops", classes="w-full mt-4"):
             visuals = data.visual_samples()
             if not visuals:
                 ui.label("No visual loops yet.").classes(theme.SUB)
@@ -1299,8 +1278,7 @@ def view_samples(root) -> None:
                 for v in visuals:
                     with ui.column().classes("gap-1"):
                         ui.html(
-                            f'<video controls preload="metadata" muted '
-                            f'style="width:100%;border-radius:12px" '
+                            f'<video controls preload="metadata" muted class="sample-video" '
                             f'src="/visuals/{v["name"]}"></video>'
                         )
                         with ui.row().classes("w-full items-center justify-between no-wrap"):
@@ -1334,8 +1312,7 @@ def index() -> None:
     drawer = ui.left_drawer(value=False).classes("studio-sidebar p-3")\
         .props("breakpoint=768 show-if-above bordered")
 
-    with ui.header().classes("lg:hidden items-center gap-2 px-3 py-2")\
-            .style("background:#100d16 !important; border-bottom:1px solid rgba(232,164,92,0.16)"):
+    with ui.header().classes("lg:hidden items-center gap-2 px-3 py-2 appbar-mobile"):
         ui.button(icon="menu", on_click=drawer.toggle).props("flat round dense color=white")
         ui.label("🎧 LO-FI FACTORY").classes("studio-brand")
 
@@ -1386,13 +1363,12 @@ def login_page() -> None:
     if auth.is_authenticated():
         ui.navigate.to("/")
         return
-    with ui.element("div").classes("studio-card absolute-center w-80 gap-3").style(
-            "display:flex;flex-direction:column"):
+    with theme.card(classes="absolute-center w-80 gap-3 flex flex-col"):
         ui.label("🎧 LO-FI FACTORY").classes("studio-brand self-center")
         ui.label("studio control panel").classes(theme.SUB + " self-center")
         if not config.is_configured():
             ui.label("No WEBUI_PASSWORD set. Add it to .env and restart.")\
-                .style("color:#e8a45c").classes("text-sm")
+                .classes("text-sm text-amber")
             return
         pw = ui.input("Password", password=True, password_toggle_button=True)\
             .classes("w-full").on("keydown.enter", lambda: do_login())
