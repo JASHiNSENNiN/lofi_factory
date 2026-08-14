@@ -6,6 +6,8 @@ mocked -- these tests never touch the real systemd user session.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from webui import automation, system_admin
@@ -24,7 +26,7 @@ def _actions() -> list[str]:
 
 def test_start_logs_on_success(monkeypatch, _isolated_audit_log):
     monkeypatch.setattr(automation._svc, "start", lambda: None)
-    automation.start()
+    asyncio.run(automation.start())
     assert _actions() == ["automation_start"]
 
 
@@ -34,19 +36,19 @@ def test_start_does_not_log_on_failure(monkeypatch, _isolated_audit_log):
 
     monkeypatch.setattr(automation._svc, "start", boom)
     with pytest.raises(RuntimeError):
-        automation.start()
+        asyncio.run(automation.start())
     assert _actions() == []
 
 
 def test_stop_logs_on_success(monkeypatch, _isolated_audit_log):
     monkeypatch.setattr(automation._svc, "stop", lambda: None)
-    automation.stop()
+    asyncio.run(automation.stop())
     assert _actions() == ["automation_stop"]
 
 
 def test_set_enabled_logs_with_detail(monkeypatch, _isolated_audit_log):
     monkeypatch.setattr(automation._svc, "set_enabled", lambda enabled: None)
-    automation.set_enabled(True)
+    asyncio.run(automation.set_enabled(True))
     entries = system_admin.audit_log_tail()
     assert entries[0] == {
         "ts": entries[0]["ts"], "action": "automation_set_enabled",
@@ -57,7 +59,7 @@ def test_set_enabled_logs_with_detail(monkeypatch, _isolated_audit_log):
 def test_set_schedule_logs_with_detail(monkeypatch, _isolated_audit_log):
     monkeypatch.setattr(automation._svc, "set_schedule",
                          lambda start_hour, every_hours: None)
-    automation.set_schedule(6, 12)
+    asyncio.run(automation.set_schedule(6, 12))
     entries = system_admin.audit_log_tail()
     assert entries[0]["action"] == "automation_set_schedule"
     assert entries[0]["detail"] == {"start_hour": 6, "every_hours": 12}
@@ -69,5 +71,5 @@ def test_set_schedule_does_not_log_on_validation_error(monkeypatch, _isolated_au
 
     monkeypatch.setattr(automation._svc, "set_schedule", boom)
     with pytest.raises(ValueError):
-        automation.set_schedule(99, 5)
+        asyncio.run(automation.set_schedule(99, 5))
     assert _actions() == []
