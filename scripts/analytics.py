@@ -290,12 +290,14 @@ def sync_analytics() -> dict:
                 # thumbnail" always maps to the same variant slot across the
                 # whole channel history.
                 container = {
-                    "pillar":           entry.get("pillar"),
-                    "concept":          entry.get("concept"),
-                    "title":            entry.get("title"),
-                    "title_variants":   entry.get("title_variants", []),
-                    "title_chosen_idx": entry.get("title_chosen_idx", 0),
-                    "duration_secs":    entry.get("duration_secs"),
+                    "pillar":                entry.get("pillar"),
+                    "concept":               entry.get("concept"),
+                    "title":                 entry.get("title"),
+                    "title_variants":        entry.get("title_variants", []),
+                    "title_variant_strategies": entry.get("title_variant_strategies", []),
+                    "title_chosen_idx":      entry.get("title_chosen_idx", 0),
+                    "title_chosen_strategy": entry.get("title_chosen_strategy"),
+                    "duration_secs":         entry.get("duration_secs"),
                     "upload_date":      upload_date,
                     "ab_variant":       random.choice(["A", "B"]),
                     "history":          [],
@@ -624,47 +626,73 @@ def duration_weights(duration_map: dict[str, int], analytics: dict | None = None
     return weights
 
 
-def title_variant_weights(analytics: dict | None = None) -> dict[str, list[float]]:
+def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, float]]:
     """
-    Per-pillar list of weights for title_variants[i], same 0.5x-2.0x/
-    >=5-samples pattern, now bandit-backed (see _bandit_weights()) using
-    composite_engagement_score() (falls back to CTR-only when that's all a
-    logged entry has, which is the common case for older rows). Returns
-    {pillar: [w_0, w_1, w_2, ...]} sized to however many variant slots that
-    pillar has seen chosen at least once -- callers should pad/fall back to
-    1.0 for any index beyond what's returned (a variant slot with zero
-    observed picks has no performance data yet).
+    Per-pillar weights for title HOOK STRATEGIES (see generate_seo.py's
+    HOOK_STRATEGIES: "statement", "curiosity_gap", "spec_led"), same
+    0.5x-2.0x/>=5-samples pattern, bandit-backed (see _bandit_weights())
+    using composite_engagement_score() (falls back to CTR-only when that's
+    all a logged entry has, which is the common case for older rows).
+
+    Returns {pillar: {strategy: weight}} -- keyed by hook-strategy IDENTITY
+    (which creative hook family won), not by raw title_variants[] slot
+    position. generate_title_variants() always builds slot i from a
+    specific hook family, so a naive positional key was really only ever
+    learning "which slot index tends to get clicked" -- keying by the
+    strategy name itself makes the bandit learn something creatively
+    meaningful ("curiosity_gap outperforms statement for the 'emotional'
+    pillar"), which also survives generate_title_variants() reordering or
+    resizing its variant slots in the future. Callers should fall back to
+    1.0 for any strategy not present in the returned per-pillar dict (no
+    performance data yet).
+
+    Backward compatibility: analytics rows logged before
+    title_chosen_strategy existed only carry the older title_chosen_idx.
+    Since generate_title_variants() assigns strategy =
+    HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)] to slot i, that same mapping
+    is used as a best-effort strategy label for those older rows instead of
+    silently discarding them.
     """
     if analytics is None:
         analytics = load_analytics()
     if not analytics:
         return {}
 
+    from scripts.generate_seo import HOOK_STRATEGIES
+
     from collections import defaultdict as _dd
-    by_pillar_idx: dict[str, dict[int, list[float]]] = _dd(lambda: _dd(list))
+    by_pillar_strategy: dict[str, dict[str, list[float]]] = _dd(lambda: _dd(list))
     for entry in analytics.values():
         pillar = entry.get("pillar")
-        idx = entry.get("title_chosen_idx")
-        if not pillar or idx is None:
+        if not pillar:
             continue
+
+        strategy = entry.get("title_chosen_strategy")
+        if strategy is None:
+            idx = entry.get("title_chosen_idx")
+            if idx is None:
+                continue
+            try:
+                idx = int(idx)
+            except (TypeError, ValueError):
+                continue
+            if not (0 <= idx < len(HOOK_STRATEGIES)):
+                continue
+            strategy = HOOK_STRATEGIES[idx]
+
         score = composite_engagement_score(entry)
         if score is None:
             continue
-        by_pillar_idx[pillar][int(idx)].append(score)
+        by_pillar_strategy[pillar][strategy].append(score)
 
-    result: dict[str, list[float]] = {}
-    for pillar, idx_rows in by_pillar_idx.items():
-        all_scores = [c for rows in idx_rows.values() for c in rows]
+    result: dict[str, dict[str, float]] = {}
+    for pillar, strategy_rows in by_pillar_strategy.items():
+        all_scores = [c for rows in strategy_rows.values() for c in rows]
         if len(all_scores) < 5:
             continue
-        buckets = {str(idx): rows for idx, rows in idx_rows.items()}
-        bandit_weights = _bandit_weights(buckets, min_samples=5)
-        max_idx = max(idx_rows.keys())
-        weights = [1.0] * (max_idx + 1)
+        bandit_weights = _bandit_weights(dict(strategy_rows), min_samples=5)
         if bandit_weights:
-            for idx_str, w in bandit_weights.items():
-                weights[int(idx_str)] = w
-        result[pillar] = weights
+            result[pillar] = bandit_weights
     return result
 
 

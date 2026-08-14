@@ -340,95 +340,137 @@ CROSS_GENRE_POOL = [
 # Title patterns — varied structure, duration placement, separators, and story-first hooks
 # Rule: "lofi", "lo-fi", or "study music" must appear within the first 35 characters.
 # Vary the skeleton: don't always use [keyword] · {duration} · [thing].
+#
+# HOOK STRATEGIES — each pillar's patterns are grouped into distinct rhetorical
+# families (not just reshuffled wording of the same idea), grounded in
+# standard copywriting/YouTube-title hook taxonomy:
+#   "statement"     — descriptive, straightforward. States the scene/mood
+#                      plainly and lets the concept carry the click.
+#   "curiosity_gap" — implies something without fully stating it ("why X hits
+#                      different", "what happens after", "nobody tells you") —
+#                      invites a click to resolve the gap. Classic
+#                      open-loop/curiosity-gap copywriting hook.
+#   "spec_led"      — leads with a concrete number/fact (usually the duration)
+#                      instead of mood language — a "specificity" hook that
+#                      trades atmosphere for a hard, scannable fact up front.
+#
+# generate_title_variants() draws exactly one title per strategy so the 3
+# variants it returns are genuinely different hooks, not 3 rolls of the same
+# skeleton family.
+HOOK_STRATEGIES = ("statement", "curiosity_gap", "spec_led")
 
+TITLE_PATTERNS_TEMPORAL = {
+    "statement": [
+        "lofi hip hop · it's {time} and you're still awake — {duration}",
+        "study music · {time}, the deadline blinked first — {duration} 📚",
+        "lofi · {time}, headphones in, world out — {duration} 🎵",
+        "lofi hip hop, {time}, still {activity}, {duration}",
+    ],
+    "curiosity_gap": [
+        "lofi · what {time} does to your focus — {duration}",
+        "study music · nobody warned you about {time} — {duration}",
+        "lofi hip hop · the real reason {time} hits different ({duration})",
+        "lofi · this {time} session went somewhere unexpected — {duration}",
+    ],
+    "spec_led": [
+        "{duration} lofi hip hop · {time} · {activity}",
+        "{duration} of lofi for {time}, no filler",
+        "{duration} · study music · {time} focus block",
+        "{duration} straight · lofi · {time}, {activity}",
+    ],
+}
 
-TITLE_PATTERNS_TEMPORAL = [
-    # Duration at end
-    "lofi hip hop · it's {time} and you're still awake — {duration}",
-    "study music · {time}, the deadline blinked first — {duration} 📚",
-    "lofi · {time}, headphones in, world out — {duration} 🎵",
-    # Parenthetical
-    "lofi hip hop · {time} focus (the {activity} kind) — {duration}",
-    "study music · {time} — one more hour ({duration})",
-    # Comma chain
-    "lofi hip hop, {time}, still {activity}, {duration}",
-    # Observation with twist
-    "lofi · {duration} — started at {time}, forgot to stop",
-    "study lofi · {time} hits different when you're finally {activity} · {duration}",
-    # Short/punchy
-    "lofi hip hop · {time} · {duration} · go",
-    "lofi · {time}, no sleep, {duration} to go 🌙",
-]
+TITLE_PATTERNS_ACTIVITY = {
+    "statement": [
+        "lofi hip hop · put this on, start {activity}, check back in {duration}",
+        "study music · {activity} until it clicks — {duration} 📚",
+        "lofi · headphones on, {activity} open, timer set — {duration}",
+        "study lofi · {duration} of {activity}, no commentary",
+    ],
+    "curiosity_gap": [
+        "lofi · what happens after {duration} of {activity}",
+        "study music · the {activity} trick nobody mentions ({duration})",
+        "lofi hip hop · why this {activity} session actually worked ({duration})",
+        "lofi · {duration} in, {activity} started making sense",
+    ],
+    "spec_led": [
+        "{duration} lofi hip hop mix for {activity}",
+        "{duration} · {activity} · lofi, zero interruptions",
+        "{duration} of lofi built for {activity}",
+        "{duration} · lofi · {activity} session, start to finish",
+    ],
+}
 
-TITLE_PATTERNS_ACTIVITY = [
-    # Duration at end
-    "lofi hip hop · put this on, start {activity}, check back in {duration}",
-    "study music · {activity} until it clicks — {duration} 📚",
-    "lofi · headphones on, {activity} open, timer set — {duration}",
-    # Parenthetical
-    "lofi hip hop · you said five more minutes ({duration} ago)",
-    "study music · the {activity} session that actually worked ({duration}) 🎵",
-    # Action-first
-    "lofi hip hop · {duration} · close the other tabs, {activity}",
-    "lofi · {duration} · {activity} now, everything else later",
-    # Understated
-    "study lofi · {duration} of {activity}, no commentary",
-    "lofi hip hop · {duration} · {activity}. that's it. that's the video.",
-    # Question turned statement
-    "lofi · {duration} · what if you just {activity} for the whole thing 🎧",
-]
+TITLE_PATTERNS_EMOTIONAL = {
+    "statement": [
+        "lofi hip hop · {emotional_state} but the cursor is moving again — {duration}",
+        "study music · for the {emotional_state} ones still at their desk — {duration} 🌙",
+        "lofi · {emotional_state} and somehow still {activity} — {duration}",
+        "lofi hip hop · {duration} · {emotional_state}. working anyway.",
+    ],
+    "curiosity_gap": [
+        "lofi · what {emotional_state} actually sounds like ({duration})",
+        "study music · nobody tells you {emotional_state} can be productive ({duration})",
+        "lofi hip hop · the {emotional_state} playlist nobody admits to needing — {duration}",
+        "lofi · why {emotional_state} nights hit different — {duration}",
+    ],
+    "spec_led": [
+        "{duration} lofi for {emotional_state} focus",
+        "{duration} · {emotional_state}, working anyway · lofi",
+        "{duration} of lofi, made for {emotional_state} nights",
+        "{duration} · study music · {emotional_state} but productive",
+    ],
+}
 
-TITLE_PATTERNS_EMOTIONAL = [
-    # Duration at end — emotion leads
-    "lofi hip hop · {emotional_state} but the cursor is moving again — {duration}",
-    "study music · for the {emotional_state} ones still at their desk — {duration} 🌙",
-    "lofi · {emotional_state} and somehow still {activity} — {duration}",
-    # Parenthetical
-    "lofi hip hop · some nights are {emotional_state} ({duration} to get through it)",
-    "study music · you're {emotional_state} and that's fine ({duration}) 🎵",
-    # Short and honest
-    "lofi hip hop · {duration} · {emotional_state}. working anyway.",
-    "lofi · {duration} · {emotional_state} nights deserve good music",
-    # Understated empathy
-    "study lofi · {duration} · nobody has to know it was a {emotional_state} day",
-    "lofi hip hop · {duration} · the {emotional_state} kind of productive",
-    # Specific
-    "lofi · {duration} · {emotional_state} at {time} is its own thing 🌙",
-]
+TITLE_PATTERNS_AESTHETIC = {
+    "statement": [
+        "lofi hip hop · {aesthetic} light, {activity} open, timer running — {duration}",
+        "study music · {aesthetic} energy study block — {duration} 📚",
+        "lofi · {aesthetic} room, {aesthetic} playlist, see what happens — {duration}",
+        "lofi hip hop · {aesthetic} focus session ({duration}, no breaks)",
+    ],
+    "curiosity_gap": [
+        "lofi · turns out {aesthetic} actually helps you focus ({duration})",
+        "study music · the {aesthetic} thing nobody explains ({duration})",
+        "lofi hip hop · why {aesthetic} aesthetic works for {activity} — {duration}",
+        "lofi · what {aesthetic} sounds like, {duration} in",
+    ],
+    "spec_led": [
+        "{duration} lofi · {aesthetic} aesthetic, {activity}",
+        "{duration} of {aesthetic} lofi for {activity}",
+        "{duration} · {aesthetic} · lofi hip hop",
+        "{duration} straight of {aesthetic} lofi",
+    ],
+}
 
-TITLE_PATTERNS_AESTHETIC = [
-    # Duration at end
-    "lofi hip hop · {aesthetic} light, {activity} open, timer running — {duration}",
-    "study music · {aesthetic} energy study block — {duration} 📚",
-    "lofi · {aesthetic} room, {aesthetic} playlist, see what happens — {duration}",
-    # Parenthetical
-    "lofi hip hop · {aesthetic} focus session ({duration}, no breaks)",
-    "study lofi · the {aesthetic} {activity} arc ({duration}) 🎵",
-    # Minimal
-    "lofi hip hop · {aesthetic} · {duration}",
-    "lofi · {aesthetic}, {activity}, {duration} 🌙",
-    # Wry observation
-    "study music · {duration} · {aesthetic} aesthetic, actual productivity",
-    "lofi hip hop · {duration} · turns out {aesthetic} helps you focus",
-    "lofi · {duration} · {aesthetic} era, {activity} grind 📚",
-]
+TITLE_PATTERNS_CROSSGENRE = {
+    "statement": [
+        "lofi hip hop · what if {genre} never left the library — {duration}",
+        "study music · {genre} roots, lofi filter, {activity} session — {duration} 🎵",
+        "lofi · {genre} but quieter, {duration} to {activity}",
+        "lofi hip hop · the {genre} {activity} playlist ({duration})",
+    ],
+    "curiosity_gap": [
+        "lofi · {genre} never sounded like this — {duration}",
+        "study music · what {genre} fans keep on repeat ({duration})",
+        "lofi hip hop · the {genre} experiment that actually worked — {duration}",
+        "lofi · why {genre} and study music just works ({duration})",
+    ],
+    "spec_led": [
+        "{duration} of {genre} lofi for {activity}",
+        "{duration} · {genre} · lofi hip hop",
+        "{duration} straight of {genre}, no loop",
+        "{genre} lofi · {duration} · {activity}",
+    ],
+}
 
-TITLE_PATTERNS_CROSSGENRE = [
-    # Duration at end — concept leads
-    "lofi hip hop · what if {genre} never left the library — {duration}",
-    "study music · {genre} roots, lofi filter, {activity} session — {duration} 🎵",
-    "lofi · {genre} but quieter, {duration} to {activity}",
-    # Parenthetical
-    "lofi hip hop · the {genre} {activity} playlist ({duration})",
-    "study lofi · {genre} without the crowd ({duration}) 📚",
-    # Minimal
-    "lofi hip hop · {genre} · {duration}",
-    "{genre} lofi · {duration} · {activity} 🌙",
-    # Observation
-    "lofi hip hop · {duration} · {genre} never sounded this focused",
-    "study music · {duration} · {genre} energy, library quiet",
-    "lofi · {duration} · {genre} fan? this one's for you 🎵",
-]
+_TITLE_PATTERNS_BY_PILLAR: dict[str, dict[str, list[str]]] = {
+    "temporal":    TITLE_PATTERNS_TEMPORAL,
+    "activity":    TITLE_PATTERNS_ACTIVITY,
+    "emotional":   TITLE_PATTERNS_EMOTIONAL,
+    "aesthetic":   TITLE_PATTERNS_AESTHETIC,
+    "cross_genre": TITLE_PATTERNS_CROSSGENRE,
+}
 
 # Duration display strings — shown in titles and descriptions
 DURATION_DISPLAY = {
@@ -1079,25 +1121,49 @@ def generate_title_variants(
     duration: str,
     trends: dict | None = None,
     n: int = 3,
-) -> list[str]:
-    """Return up to n unique title candidates for this concept. Procedural
+) -> tuple[list[str], list[str]]:
+    """Return up to n unique title candidates for this concept, each drawn
+    from a DIFFERENT hook-strategy family (HOOK_STRATEGIES: "statement",
+    "curiosity_gap", "spec_led") so the variants are genuinely different
+    creative hooks -- not n rolls of the same skeleton family. Procedural
     template-pattern titles (build_title) are primary; Groq is only used as
-    an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1)."""
-    variants: list[str] = []
+    an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1), tagged with the
+    synthetic strategy label "llm_failsafe" for the returned strategies list.
 
-    attempts = 0
-    while len(variants) < n and attempts < 12:
-        candidate = build_title(concept, duration)
-        if candidate not in variants:
+    Returns (titles, strategies) -- two parallel lists, `strategies[i]` is
+    the hook-strategy family `titles[i]` was built from. If n > len(
+    HOOK_STRATEGIES), strategies repeat (cycled) for the extra slots.
+    """
+    variants: list[str] = []
+    strategies: list[str] = []
+
+    for i in range(n):
+        strategy = HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)]
+        candidate = None
+        for _attempt in range(12):
+            cand = build_title(concept, duration, strategy=strategy)
+            if cand not in variants:
+                candidate = cand
+                break
+        if candidate is None:
+            # This strategy's small pattern set was exhausted by dedup --
+            # fall back to any strategy rather than dropping the slot.
+            for _attempt in range(12):
+                cand = build_title(concept, duration)
+                if cand not in variants:
+                    candidate = cand
+                    break
+        if candidate is not None:
             variants.append(candidate)
-        attempts += 1
+            strategies.append(strategy)
 
     if len(variants) < n and os.getenv("LOFI_LLM_FAILSAFE") == "1":
         groq_title = build_title_groq(concept, duration, trends)
         if groq_title and groq_title not in variants:
             variants.append(groq_title)
+            strategies.append("llm_failsafe")
 
-    return variants[:n]
+    return variants[:n], strategies[:len(variants[:n])]
 
 
 def pick_concept_from_pool() -> dict:
@@ -1246,7 +1312,15 @@ def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concep
 #  TITLE BUILDER
 # ──────────────────────────────────────────────────────────────────────────────
 
-def build_title(concept: dict, duration: str) -> str:
+def build_title(concept: dict, duration: str, strategy: str | None = None) -> str:
+    """Build one title from the concept's pillar pattern set.
+
+    `strategy` picks a specific hook-strategy family (one of HOOK_STRATEGIES:
+    "statement", "curiosity_gap", "spec_led"). If omitted (or unrecognized),
+    a pattern is drawn from the pooled union of all strategies for that
+    pillar — this preserves the old flat-random behavior for any caller that
+    doesn't care which hook family it gets.
+    """
     dur_str  = DURATION_DISPLAY.get(duration, duration)
     pillar   = concept.get("pillar", "temporal")
     city     = concept.get("city") or "city"
@@ -1275,22 +1349,20 @@ def build_title(concept: dict, duration: str) -> str:
     mood_lower = mood.lower()
     emo = next((v for k, v in _EMO_MAP if k in mood_lower), "tired but focused")
 
-    if pillar == "temporal":
-        pattern = random.choice(TITLE_PATTERNS_TEMPORAL)
-        title = pattern.format(time=time_l, activity=activity, duration=dur_str)
-    elif pillar == "activity":
-        pattern = random.choice(TITLE_PATTERNS_ACTIVITY)
-        title = pattern.format(activity=activity, duration=dur_str)
-    elif pillar == "emotional":
-        pattern = random.choice(TITLE_PATTERNS_EMOTIONAL)
-        title = pattern.format(emotional_state=emo, activity=activity,
-                               time=time_l, duration=dur_str)
-    elif pillar == "aesthetic":
-        pattern = random.choice(TITLE_PATTERNS_AESTHETIC)
-        title = pattern.format(aesthetic=aesthetic, activity=activity, duration=dur_str)
-    else:  # cross_genre
-        pattern = random.choice(TITLE_PATTERNS_CROSSGENRE)
-        title = pattern.format(genre=genre, activity=activity, duration=dur_str)
+    patterns_by_strategy = _TITLE_PATTERNS_BY_PILLAR.get(pillar, TITLE_PATTERNS_TEMPORAL)
+    if strategy in patterns_by_strategy:
+        candidates = patterns_by_strategy[strategy]
+    else:
+        # Unknown/omitted strategy -- pool every strategy's patterns together
+        # (preserves the old flat-random-across-all-10 behavior).
+        candidates = [p for plist in patterns_by_strategy.values() for p in plist]
+    pattern = random.choice(candidates)
+
+    format_kwargs = {
+        "time": time_l, "activity": activity, "duration": dur_str,
+        "emotional_state": emo, "aesthetic": aesthetic, "genre": genre,
+    }
+    title = pattern.format(**format_kwargs)
 
     # Trim to 100 chars (YouTube hard limit) at a word boundary
     if len(title) > 100:
@@ -1393,16 +1465,19 @@ def generate_seo(theme_name: str = None, duration: str = None,
         print("  [SEO] Generating concept...")
         concept = pick_concept(trends)
 
-    # Generate 3 title variants; pick one for upload diversity tracking, weighted
-    # by past per-slot CTR for this pillar once enough data exists (same
-    # 0.5x-2.0x/needs-5-samples pattern as _pillar_weights()) -- falls back to
-    # uniform random for any variant slot without performance data yet.
-    title_variants  = generate_title_variants(concept, duration, trends, n=3)
+    # Generate 3 title variants (one per hook-strategy family -- statement,
+    # curiosity_gap, spec_led); pick one for upload diversity tracking,
+    # weighted by past per-hook-strategy performance for this pillar once
+    # enough data exists (same 0.5x-2.0x/needs-5-samples pattern as
+    # _pillar_weights()) -- falls back to uniform random for any strategy
+    # without performance data yet.
+    title_variants, variant_strategies = generate_title_variants(concept, duration, trends, n=3)
     from scripts.analytics import title_variant_weights as _title_variant_weights
-    _tvw = _title_variant_weights().get(concept.get("pillar"), [])
-    _weights = (_tvw + [1.0] * len(title_variants))[:len(title_variants)]
-    chosen_idx      = random.choices(range(len(title_variants)), weights=_weights, k=1)[0]
-    title           = title_variants[chosen_idx]
+    _tvw = _title_variant_weights().get(concept.get("pillar"), {})
+    _weights = [_tvw.get(s, 1.0) for s in variant_strategies]
+    chosen_idx        = random.choices(range(len(title_variants)), weights=_weights, k=1)[0]
+    title             = title_variants[chosen_idx]
+    chosen_strategy   = variant_strategies[chosen_idx] if chosen_idx < len(variant_strategies) else None
     description = build_description(concept, duration)
     tags        = build_tags(concept, duration, theme_name=theme_name)
 
@@ -1472,8 +1547,10 @@ def generate_seo(theme_name: str = None, duration: str = None,
         "activity":         concept.get("activity", ""),
         "generated_at":     _now_utc.isoformat(),
         "ref_id":           ref_id,
-        "title_variants":   title_variants,
-        "title_chosen_idx": chosen_idx,
+        "title_variants":           title_variants,
+        "title_variant_strategies": variant_strategies,
+        "title_chosen_idx":         chosen_idx,
+        "title_chosen_strategy":    chosen_strategy,
     }
     out_path = os.path.join(ASSETS_DIR, f"seo_{ts}.json")
     with open(out_path, "w") as f:
