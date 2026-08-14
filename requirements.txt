@@ -33,3 +33,8 @@ pyloudnorm>=0.1
 
 # System admin page (webui: resource monitor)
 psutil>=5.9
+
+# Multi-platform failure alerting (webui/alerts.py) — Discord/Slack/Telegram/
+# email/etc. from one apprise-format URL list, instead of hand-rolling a
+# webhook formatter per platform.
+apprise>=1.9

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from unittest.mock import patch
 
 import pytest
 
@@ -233,3 +234,105 @@ def test_drain_forever_respects_busy_slot(queue):
     # Never launched -- still sitting in pending, untouched.
     assert mgr.launched == []
     assert len(queue.list_pending()) == 1
+
+
+# ── stream-slot queue add (queue_dialog's new slot selector) ────────────────
+
+def test_add_stream_slot_queues_live_args(queue):
+    item = queue.add("live", ["publish.py", "live", "--quality", "720p15",
+                               "--privacy", "public"], slot="stream", note="go live at 8pm")
+    assert item.slot == "stream"
+    assert item.args == ["publish.py", "live", "--quality", "720p15", "--privacy", "public"]
+    assert [i.slot for i in queue.list_pending()] == ["stream"]
+
+
+# ── retry (re-queue a failed history item) ──────────────────────────────────
+
+def test_retry_requeues_failed_item_with_original_args(queue):
+    item = queue.add("render", ["run.py", "--theme", "vaporwave"], slot="main", note="batch A")
+    popped = queue.pop_next("main")
+    popped.status = "failed"
+    popped.returncode = 1
+    queue.push_history(popped)
+    assert queue.list_pending() == []
+
+    retried = queue.retry(popped.id)
+    assert retried is not None
+    assert retried.id != popped.id  # a new queue item, not a mutation of the old one
+    assert retried.name == "render"
+    assert retried.args == ["run.py", "--theme", "vaporwave"]
+    assert retried.slot == "main"
+    assert retried.note == "batch A"
+    assert retried.status == "pending"
+    assert [i.id for i in queue.list_pending()] == [retried.id]
+
+
+def test_retry_unknown_id_returns_none(queue):
+    assert queue.retry("nope") is None
+
+
+def test_retry_refuses_non_failed_history_item(queue):
+    item = queue.add("render", ["a"])
+    queue.cancel(item.id)  # history entry, but status == "cancelled", not "failed"
+    assert queue.retry(item.id) is None
+
+
+# ── queue-drain failure alerting ─────────────────────────────────────────────
+class _FakeFailingManager:
+    """Like _FakeManager, but the launched job always finishes 'failed' --
+    exercises JobQueue._run_item's alerts.send_queue_failure() call."""
+
+    def __init__(self):
+        self._busy = False
+
+    def is_busy(self) -> bool:
+        return self._busy
+
+    def stream_running(self) -> bool:
+        return False
+
+    async def run(self, name, args, *, slot="main"):
+        self._busy = True
+        job = Job(id=f"{name}-1", name=name, cmd=args, status="running")
+
+        async def _finish():
+            await asyncio.sleep(0.01)
+            job.status = "failed"
+            job.returncode = 1
+            job.finished_at = 1.0
+            self._busy = False
+
+        asyncio.create_task(_finish())
+        return job
+
+
+def test_drain_forever_alerts_on_queue_item_failure(queue, monkeypatch):
+    monkeypatch.setenv("LOFI_STREAM_ALERT_WEBHOOK", "json://example.com/hook")
+
+    async def run():
+        mgr = _FakeFailingManager()
+        queue.add("render", ["run.py", "--skip-upload"], slot="main")
+
+        with patch("apprise.Apprise.add", return_value=True), \
+             patch("apprise.Apprise.notify", return_value=True) as mock_notify:
+            drain_task = asyncio.create_task(queue.drain_forever(mgr, poll_secs=0.01))
+            try:
+                # Wait for the alert itself (not just the history write, which
+                # happens synchronously a moment earlier in _run_item) -- the
+                # notify call is offloaded to a thread via asyncio.to_thread,
+                # so it lands on the mock slightly after list_history() would
+                # already show the finished item.
+                for _ in range(300):
+                    if mock_notify.called:
+                        break
+                    await asyncio.sleep(0.01)
+            finally:
+                drain_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await drain_task
+            return mock_notify
+
+    mock_notify = asyncio.run(run())
+    mock_notify.assert_called_once()
+    _, kwargs = mock_notify.call_args
+    assert "render" in kwargs["title"]

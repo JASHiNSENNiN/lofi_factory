@@ -23,7 +23,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
-from . import config
+from . import alerts, config
 
 # How many log lines to retain per job (ring buffer for late-joining pages).
 _MAX_LINES = 4000
@@ -35,6 +35,10 @@ class Job:
     name: str
     cmd: list[str]
     status: str = "running"          # running | success | failed | cancelled
+    # Which JobManager tracker this ran under ("main"/"stream") -- stored so
+    # a retry (see JobManager.retry()) re-launches into the same slot rather
+    # than guessing from the job name.
+    slot: str = "main"
     returncode: int | None = None
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -86,12 +90,82 @@ class Job:
                 pass
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Persistent job history (JobManager.history survives a webui restart)
+# ─────────────────────────────────────────────────────────────────────────────
+HISTORY_FILE = os.path.join(config.ASSETS_DIR, "job_history.jsonl")
+# How many finished jobs to keep on disk / reload on startup -- matches the
+# in-memory history's existing cap (JobManager.run() trims to 20 too).
+_MAX_HISTORY = 20
+# Only these fields are persisted -- notably not `lines` (the full log ring
+# buffer) or the subscriber sets, which are live-session-only concerns.
+_PERSIST_FIELDS = ("id", "name", "cmd", "status", "slot", "returncode",
+                    "started_at", "finished_at", "artifacts")
+
+
+def _job_to_record(job: "Job") -> dict:
+    return {k: getattr(job, k) for k in _PERSIST_FIELDS}
+
+
+def _record_to_job(rec: dict) -> "Job":
+    """Reconstruct a Job from a persisted record for display purposes only
+    (history rows, retry). `lines` is deliberately left empty -- we don't
+    persist full log output, so a reloaded-from-disk history entry just
+    won't have "Live output" to show, same as any other Job whose log ring
+    buffer hasn't been populated yet."""
+    job = Job(id=rec.get("id", ""), name=rec.get("name", ""),
+              cmd=list(rec.get("cmd") or []), slot=rec.get("slot", "main"))
+    job.status = rec.get("status", "failed")
+    job.returncode = rec.get("returncode")
+    job.started_at = rec.get("started_at") or 0.0
+    job.finished_at = rec.get("finished_at")
+    job.artifacts = rec.get("artifacts") or {}
+    return job
+
+
+def _append_history_file(job: "Job", path: str) -> None:
+    """Best-effort append-only write -- persistence must never break a
+    running job, so any I/O error here is swallowed."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(json.dumps(_job_to_record(job)) + "\n")
+    except Exception:
+        pass
+
+
+def _load_history_file(path: str, limit: int = _MAX_HISTORY) -> list["Job"]:
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path) as f:
+            raw_lines = f.readlines()
+    except Exception:
+        return []
+    records = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except Exception:
+            continue  # skip a corrupt line rather than losing the whole file
+    records = records[-limit:]
+    records.reverse()  # most-recent-first, matching JobManager.history's order
+    return [_record_to_job(r) for r in records]
+
+
 class JobManager:
     """Owns the single active job and recent history. One heavy job at a time."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, history_path: str | None = None) -> None:
         self.current: Job | None = None
-        self.history: list[Job] = []
+        # history_path is overridable (tests pass a tmp_path file) so a fresh
+        # JobManager() in production picks up assets/job_history.jsonl but a
+        # test never touches the real repo's file.
+        self._history_path = history_path or HISTORY_FILE
+        self.history: list[Job] = _load_history_file(self._history_path)
         # The live-stream job is tracked separately so a generation run and an
         # active broadcast can coexist.
         self.stream: Job | None = None
@@ -118,7 +192,7 @@ class JobManager:
                 raise RuntimeError("Another job is already running.")
 
         cmd = [config.PYTHON, *args]
-        job = Job(id=f"{name}-{int(time.time())}", name=name, cmd=cmd)
+        job = Job(id=f"{name}-{int(time.time())}", name=name, cmd=cmd, slot=slot)
         if slot == "stream":
             self.stream = job
         else:
@@ -155,7 +229,25 @@ class JobManager:
             job.status = "failed"
         finally:
             job.finished_at = time.time()
+            _append_history_file(job, self._history_path)
+            if job.status == "failed":
+                try:
+                    await alerts.send_job_failure(job)
+                except Exception:
+                    pass  # alerting must never take down the job pump
             job._emit_status()
+
+    async def retry(self, job_id: str) -> Job:
+        """Re-run a failed job from history with its exact original cmd/args
+        and slot. Raises ValueError if no matching failed job is in history,
+        RuntimeError (from run()) if that slot is currently busy."""
+        job = next((j for j in self.history if j.id == job_id and j.status == "failed"), None)
+        if job is None:
+            raise ValueError(f"No failed job with id {job_id!r} in history")
+        # job.cmd is [config.PYTHON, *args] (see run()) -- strip the
+        # interpreter back off since run() re-adds it.
+        args = job.cmd[1:]
+        return await self.run(job.name, args, slot=job.slot)
 
     async def cancel(self, slot: str = "main") -> None:
         job = self.stream if slot == "stream" else self.current
@@ -296,6 +388,16 @@ class JobQueue:
             return True
         return False
 
+    def retry(self, item_id: str) -> QueueItem | None:
+        """Re-queue a failed history item with its exact original name/args/
+        slot/note, appended to the back of the pending queue (it drains in
+        FIFO order like any other add()). Returns the new pending QueueItem,
+        or None if no matching failed item is in history."""
+        item = next((i for i in self._history if i.id == item_id and i.status == "failed"), None)
+        if item is None:
+            return None
+        return self.add(item.name, item.args, slot=item.slot, note=item.note)
+
     def reorder(self, item_id: str, new_index: int) -> bool:
         """Move a pending item to `new_index` within the pending queue
         (clamped to valid range). Only pending items are reorderable —
@@ -345,6 +447,11 @@ class JobQueue:
         item.returncode = job.returncode
         item.finished_at = job.finished_at or time.time()
         self.push_history(item)
+        if item.status == "failed":
+            try:
+                await alerts.send_queue_failure(item)
+            except Exception:
+                pass  # alerting must never take down the drain loop
 
     async def drain_forever(self, manager: "JobManager", poll_secs: float = 3.0) -> None:
         """Background loop: whenever a slot is free and the queue has a

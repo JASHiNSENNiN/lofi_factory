@@ -63,6 +63,12 @@ async def set_schedule(hour: int, every_hours: int) -> None:
         "automation_set_schedule", {"start_hour": hour, "every_hours": every_hours})
 
 
+# Sync passthrough, same as auto_service's other read-only functions --
+# callers on the async side (app.py's Automation view) run it via
+# asyncio.to_thread since it shells out to `systemctl show` under the hood.
+resource_status = _svc.resource_status
+
+
 async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:
     """Stream `journalctl --user -u lofi-auto -f` lines to on_line(str).
 
