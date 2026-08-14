@@ -88,6 +88,58 @@ def test_title_variant_weights_skips_pillars_below_threshold():
     assert title_variant_weights(fake) == {}
 
 
+def test_title_variant_weights_is_deterministic_and_keyed_by_hook_strategy():
+    # The bandit dimension was extended from raw title_variants[] slot index
+    # to hook-strategy identity (see generate_seo.py's HOOK_STRATEGIES). The
+    # underlying weight is an analytic Beta posterior mean (no sampling), so
+    # repeated calls on the same data must be bit-for-bit identical, and the
+    # returned per-pillar dict must be keyed by strategy name, not int index.
+    # Non-constant per-arm CTRs (rather than one repeated value) so the
+    # pooled median used for success/failure binarization doesn't land
+    # exactly on an arm's value and produce a spurious tie between arms.
+    spec_led_ctrs     = [0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.095]
+    statement_ctrs    = [0.05, 0.048, 0.052, 0.045, 0.05, 0.049, 0.051, 0.047]
+    curiosity_gap_ctrs = [0.02, 0.015, 0.025, 0.01, 0.02, 0.018, 0.022, 0.017]
+
+    fake = {}
+    for i, v in enumerate(spec_led_ctrs):
+        fake[f"a{i}"] = {"pillar": "activity", "title_chosen_strategy": "spec_led",
+                          "videoThumbnailImpressionsClickRate": v}
+    for i, v in enumerate(curiosity_gap_ctrs):
+        fake[f"b{i}"] = {"pillar": "activity", "title_chosen_strategy": "curiosity_gap",
+                          "videoThumbnailImpressionsClickRate": v}
+    for i, v in enumerate(statement_ctrs):
+        fake[f"c{i}"] = {"pillar": "activity", "title_chosen_strategy": "statement",
+                          "videoThumbnailImpressionsClickRate": v}
+
+    result_1 = title_variant_weights(fake)
+    result_2 = title_variant_weights(fake)
+    assert result_1 == result_2  # deterministic
+
+    weights = result_1["activity"]
+    assert set(weights.keys()) <= {"statement", "curiosity_gap", "spec_led"}
+    assert all(isinstance(k, str) for k in weights)  # keyed by strategy name, not int
+    assert weights["spec_led"] > weights["statement"] > weights["curiosity_gap"]
+
+
+def test_title_variant_weights_falls_back_to_idx_mapped_strategy_for_old_rows():
+    # Rows logged before title_chosen_strategy existed only have
+    # title_chosen_idx. HOOK_STRATEGIES[idx] is used as a best-effort label
+    # so that old data still contributes instead of being silently dropped.
+    from scripts.generate_seo import HOOK_STRATEGIES
+    fake = {}
+    for i in range(6):
+        fake[f"t0_{i}"] = {"pillar": "temporal", "title_chosen_idx": 0,
+                            "videoThumbnailImpressionsClickRate": 0.07}
+    for i in range(6):
+        fake[f"t1_{i}"] = {"pillar": "temporal", "title_chosen_idx": 1,
+                            "videoThumbnailImpressionsClickRate": 0.02}
+    result = title_variant_weights(fake)
+    assert HOOK_STRATEGIES[0] in result["temporal"]
+    assert HOOK_STRATEGIES[1] in result["temporal"]
+    assert result["temporal"][HOOK_STRATEGIES[0]] > result["temporal"][HOOK_STRATEGIES[1]]
+
+
 # ── thumbnail A/B swap: alt-file lookup ────────────────────────────────────
 # The feature previously derived the expected alt filename from the video's
 # own timestamp (thumb_{video_ts}_alt.jpg) -- but that never matched real
