@@ -86,15 +86,15 @@ GM_FLUTE          = 73   # ambient, morning_lofi, bossa_lofi whisper
 
 _SUBGENRE_CONFIG = {
     # ── Hip-hop / beat ───────────────────────────────────────────────────────────
-    'chillhop':     {'piano': GM_RHODES,    'melody': 0,            'cmelo': GM_WARM_PAD,
+    'chillhop':     {'piano': GM_RHODES,    'melody': GM_GUITAR_NYLON,'cmelo': GM_WARM_PAD,
                      'scale': ['pent','dorian','natural_minor'],
                      'drum_pats': [0,1,2,13], 'bpm': (76,88), 'energy': None,
                      'progs': [0,1,7,10,11,13,33,38,44,45]},
-    'hip_hop_lofi': {'piano': GM_RHODES,    'melody': 0,            'cmelo': GM_ORGAN_ROCK,
+    'hip_hop_lofi': {'piano': GM_RHODES,    'melody': GM_MUTED_TRUMPET,'cmelo': GM_ORGAN_ROCK,
                      'scale': ['pent','dorian','mixo','blues'],
                      'drum_pats': [0,2,6,11,14], 'bpm': (78,92), 'energy': None,
                      'progs': [0,1,3,10,11,38,39,45]},
-    'lo_fi_funk':   {'piano': GM_EP2,       'melody': 0,            'cmelo': GM_ORGAN_ROCK,
+    'lo_fi_funk':   {'piano': GM_EP2,       'melody': GM_GUITAR_JAZZ,'cmelo': GM_ORGAN_ROCK,
                      'scale': ['mixo','pent','blues'],
                      'drum_pats': [5,8,12,14], 'bpm': (82,96), 'energy': 'high',
                      'progs': [26,27,10,11,3,38,45]},
@@ -119,11 +119,11 @@ _SUBGENRE_CONFIG = {
                      'scale': ['dorian','pent','lydian','natural_minor'],
                      'drum_pats': [1,0,10,14], 'bpm': (80,92), 'energy': None,
                      'progs': [6,2,28,32,37,39,40]},
-    'neo_soul':     {'piano': GM_EP2,       'melody': 0,            'cmelo': GM_CELLO,
+    'neo_soul':     {'piano': GM_EP2,       'melody': GM_MUTED_TRUMPET,'cmelo': GM_CELLO,
                      'scale': ['dorian','pent','blues','natural_minor'],
                      'drum_pats': [2,5,8,12], 'bpm': (72,86), 'energy': None,
                      'progs': [10,11,27,38,40,45]},
-    'bossa_lofi':   {'piano': GM_VIBRAPHONE,'melody': 0,            'cmelo': GM_GUITAR_NYLON,
+    'bossa_lofi':   {'piano': GM_VIBRAPHONE,'melody': GM_FLUTE,     'cmelo': GM_GUITAR_NYLON,
                      'scale': ['pent','dorian','major'],
                      'drum_pats': [4,12], 'bpm': (74,88), 'energy': None,
                      'progs': [8,9,29,33,34,44]},
@@ -132,11 +132,11 @@ _SUBGENRE_CONFIG = {
                      'drum_pats': [2,5,8,12], 'bpm': (70,84), 'energy': None,
                      'progs': [10,11,3,0,6,27,38,40,45]},
     # ── Dark / moody ─────────────────────────────────────────────────────────────
-    'dark_lofi':    {'piano': GM_RHODES,    'melody': 0,            'cmelo': GM_CELLO,
+    'dark_lofi':    {'piano': GM_RHODES,    'melody': GM_GUITAR_JAZZ,'cmelo': GM_CELLO,
                      'scale': ['phryg','pent','natural_minor','harmonic_minor','blues'],
                      'drum_pats': [0,2,5,9,14], 'bpm': (65,80), 'energy': None,
                      'progs': [14,15,3,31,39,41,42,43]},
-    'lofi_phonk':   {'piano': GM_RHODES,    'melody': 0,            'cmelo': GM_CELLO,
+    'lofi_phonk':   {'piano': GM_RHODES,    'melody': GM_ORGAN_ROCK,'cmelo': GM_CELLO,
                      'scale': ['phryg','pent','natural_minor'],
                      'drum_pats': [0,2,5,9,11,14], 'bpm': (65,78), 'energy': None,
                      'progs': [14,15,3,7,41,42,43]},
@@ -169,11 +169,11 @@ _SUBGENRE_CONFIG = {
                      'scale': ['major_pent','major','pent'],
                      'drum_pats': [0,4,7,13], 'bpm': (78,92), 'energy': None,
                      'progs': [16,17,22,18,44,46,49]},
-    'city_pop':     {'piano': GM_EP2,       'melody': 0,            'cmelo': GM_GUITAR_JAZZ,
+    'city_pop':     {'piano': GM_EP2,       'melody': GM_FLUTE,     'cmelo': GM_GUITAR_JAZZ,
                      'scale': ['major_pent','pent','major'],
                      'drum_pats': [0,6,8,12], 'bpm': (78,92), 'energy': None,
                      'progs': [8,4,18,29,44,46,48,49]},
-    'study_lofi':   {'piano': GM_RHODES,    'melody': 0,            'cmelo': GM_WARM_PAD,
+    'study_lofi':   {'piano': GM_RHODES,    'melody': GM_MARIMBA,   'cmelo': GM_WARM_PAD,
                      'scale': ['pent','dorian','major_pent','major'],
                      'drum_pats': [0,1,9,13], 'bpm': (74,90), 'energy': 'medium',
                      'progs': [0,1,7,22,16,28,33,35,44,46]},
@@ -329,6 +329,15 @@ _GUIDE_TONES = {
     'C7':    (4, 10), 'Bb7':   (4, 10),
     'D7':    (4, 10), 'D9':    (4, 10),
     'F7':    (4, 10), 'A7':    (4, 10),
+}
+
+# Tension-driven chord-extension escalation (build_chords()'s `tension` param):
+# near peak tension, a plain 7th chord can upgrade to its denser 9th-family
+# equivalent. Every entry here is a real VOICING_OPTIONS/BASS_ROOTS/
+# _GUIDE_TONES key already — no new voicings introduced.
+_CHORD_EXTEND_UP = {
+    'Am7': 'Am9', 'Dm7': 'Dm9', 'Gm7': 'Gm9', 'Cmaj7': 'Cmaj9',
+    'Fmaj7': 'Fmaj9', 'G7': 'G7b9', 'D7': 'D9', 'E7': 'E7b9',
 }
 
 # ─── CHORD PROGRESSIONS ───────────────────────────────────────────────────────
@@ -1023,6 +1032,26 @@ def jitter(tick, ms, bpm):
 def v(base, var):
     return max(1, min(127, base + random.randint(-var, var)))
 
+# Gaussian humanization — ported from generate_music_v2.py's better-reviewed
+# model (real human timing/velocity variance clusters near the target rather
+# than spreading flat/uniform). Used selectively (melody/chords/bass), not as
+# a blanket replacement for jitter()/v() — see call sites in build_melody(),
+# build_chords(), build_bass().
+def _gauss_jitter(tick: int, ms: float, bpm: int) -> int:
+    """Gaussian timing jitter — clusters near grid, sigma = ms/2, capped at +-1.5x ms."""
+    ticks_per_ms = (PPQN * bpm) / 60_000.0
+    offset_ms = max(-ms * 1.5, min(ms * 1.5, random.gauss(0, ms * 0.5)))
+    return max(0, tick + int(offset_ms * ticks_per_ms))
+
+def _gauss_velocity(base: int, sigma: float = 8.0) -> int:
+    return max(1, min(127, round(random.gauss(base, sigma))))
+
+def _lofi_late(tick: int, bpm: int) -> int:
+    """Systematic late feel for melody — lands +10-25ms behind the grid."""
+    offset_ms = random.gauss(17, 4)
+    ticks_per_ms = (PPQN * bpm) / 60_000.0
+    return max(0, tick + int(offset_ms * ticks_per_ms))
+
 def abs_to_track(events, channel, program=None, cc_events=None, bank_msb=None):
     """
     Convert absolute-tick note events to a MIDI track.
@@ -1176,7 +1205,7 @@ def _voice_lead_choice(chord_name, prev_top=None):
     return min(options, key=lambda vv: abs(vv[-1] - prev_top))
 
 
-def build_chords(progression, start_bar, num_loops, swing, bpm):
+def build_chords(progression, start_bar, num_loops, swing, bpm, tension: float = 0.5):
     """
     Chords with:
     - Voice-leading voicing: top note moves minimally between chords
@@ -1184,6 +1213,9 @@ def build_chords(progression, start_bar, num_loops, swing, bpm):
     - Top note louder (melody voice)
     - 50% comp hit on beat 3
     - Occasional secondary dominant substitution
+    - Near peak `tension` (>0.75), a chance to escalate a chord to its denser
+      9th-family extension (_CHORD_EXTEND_UP) — part of the storytelling arc,
+      additive to the existing substitution roll below.
     """
     events = []
     cursor = start_bar
@@ -1192,6 +1224,9 @@ def build_chords(progression, start_bar, num_loops, swing, bpm):
         for chord_idx, (chord_name, dur_bars) in enumerate(progression):
             # Occasional secondary dominant or tritone substitution
             chord_name = maybe_sub_chord(chord_name, chord_idx)
+            if tension > 0.75 and chord_name in _CHORD_EXTEND_UP \
+                    and random.random() < (tension - 0.75) * 4:
+                chord_name = _CHORD_EXTEND_UP[chord_name]
             # Voice-leading: pick voicing with top note closest to previous chord top note
             voicing  = _voice_lead_choice(chord_name, prev_top)
             prev_top = voicing[-1]
@@ -1201,23 +1236,23 @@ def build_chords(progression, start_bar, num_loops, swing, bpm):
 
             for i, note in enumerate(voicing):
                 strum_t = int(i * random.uniform(5,12) * (PPQN*bpm)/60000)
-                t = jitter(base_t, 14, bpm) + strum_t
-                if i == len(voicing)-1: vel_val = v(78, 10)   # top note
-                elif i == 0:            vel_val = v(58,  8)   # bottom
-                else:                   vel_val = v(66, 10)   # inner
+                t = _gauss_jitter(base_t, 14, bpm) + strum_t
+                if i == len(voicing)-1: vel_val = _gauss_velocity(78, 10)   # top note
+                elif i == 0:            vel_val = _gauss_velocity(58,  8)   # bottom
+                else:                   vel_val = _gauss_velocity(66, 10)   # inner
                 events.append((t, note, vel_val, note_dur))
 
             # Comp hit beat 3 (50%)
             if dur_bars >= 2 and random.random() < 0.5:
                 b3_t = grid_tick(cursor*16 + 8, swing)
                 for note in voicing[-3:]:
-                    events.append((jitter(b3_t,16,bpm), note, v(50,10), int(BAR*0.45)))
+                    events.append((_gauss_jitter(b3_t,16,bpm), note, _gauss_velocity(50,10), int(BAR*0.45)))
 
             # Occasional beat 2 comp hit (25%)
             if dur_bars >= 2 and random.random() < 0.25:
                 b2_t = grid_tick(cursor*16 + 4, swing)
                 for note in voicing[-2:]:
-                    events.append((jitter(b2_t,16,bpm), note, v(44,8), int(BAR*0.30)))
+                    events.append((_gauss_jitter(b2_t,16,bpm), note, _gauss_velocity(44,8), int(BAR*0.30)))
 
             cursor += dur_bars
     return events
@@ -1288,24 +1323,24 @@ def build_bass(progression, start_bar, num_loops, swing, bpm, walking=False):
                         walk_notes = [root, root+2, root+4, root+7]
                         random.shuffle(walk_notes[1:])  # keep root first, vary rest
                     for beat, note in enumerate(walk_notes):
-                        t = jitter(grid_tick(abs_bar*16 + beat*4, swing), 8, bpm)
-                        events.append((t, note, v(72,10), int(PPQN*0.85)))
+                        t = _gauss_jitter(grid_tick(abs_bar*16 + beat*4, swing), 8, bpm)
+                        events.append((t, note, _gauss_velocity(72,10), int(PPQN*0.85)))
                 else:
                     # Beat 1: root
-                    t1 = jitter(grid_tick(abs_bar*16, swing), 8, bpm)
-                    events.append((t1, root, v(80,10), int(BAR*0.82)))
+                    t1 = _gauss_jitter(grid_tick(abs_bar*16, swing), 8, bpm)
+                    events.append((t1, root, _gauss_velocity(80,10), int(BAR*0.82)))
                     # Beat 2-and: guide tone (3rd when walking, fifth otherwise) 70%
                     if random.random() < 0.70:
-                        t2 = jitter(grid_tick(abs_bar*16+6, swing), 8, bpm)
-                        events.append((t2, beat2_note, v(68,12), int(BAR*0.35)))
+                        t2 = _gauss_jitter(grid_tick(abs_bar*16+6, swing), 8, bpm)
+                        events.append((t2, beat2_note, _gauss_velocity(68,12), int(BAR*0.35)))
                     # Beat 3: guide tone (7th when walking, root otherwise) 35%
                     if random.random() < 0.35:
-                        t3 = jitter(grid_tick(abs_bar*16+8, swing), 8, bpm)
-                        events.append((t3, beat3_note, v(72,10), int(BAR*0.40)))
+                        t3 = _gauss_jitter(grid_tick(abs_bar*16+8, swing), 8, bpm)
+                        events.append((t3, beat3_note, _gauss_velocity(72,10), int(BAR*0.40)))
                     # Beat 4-and passing (20%) — chromatic approach to next chord root
                     if random.random() < 0.20:
-                        t4 = jitter(grid_tick(abs_bar*16+14, swing), 8, bpm)
-                        events.append((t4, approach, v(60,10), int(S16*1.5)))
+                        t4 = _gauss_jitter(grid_tick(abs_bar*16+14, swing), 8, bpm)
+                        events.append((t4, approach, _gauss_velocity(60,10), int(S16*1.5)))
 
             cursor += dur_bars
     return events
@@ -1336,7 +1371,8 @@ def _markov_next_pitch_class(markov_nodes: dict, prev_pc: int, scale_pcs: set) -
 
 
 def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', scale='pent',
-                 motif=None, progression=None, prog_bars=None, markov_nodes=None):
+                 motif=None, progression=None, prog_bars=None, markov_nodes=None,
+                 tension: float = 0.5):
     """
     Motif-based melody with phi-point (0.618) contour arc + chord-aware phrase starts.
     Develops a 3-5 note motif through retrograde/inversion/transposition variations.
@@ -1348,6 +1384,12 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
     real source melody. When present, blended in as a probabilistic nudge
     toward pitch classes the source tends to move to — additive to, not a
     replacement for, the existing chord-tone/phi-point logic above.
+
+    tension: 0.0-1.0 storytelling-arc scalar (see _tension()). Higher tension
+    raises the phrase-trigger probability (denser phrasing) and biases phrase
+    contour toward wider melodic leaps — part of threading the track-wide
+    arc through the melody, not just drum velocity. density='dense' (used
+    for the climax loop) additionally drops the forced rest floor to 0.
     """
     if scale == 'dorian':
         notes_scale = get_dorian(key_root)
@@ -1387,12 +1429,13 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
     var_idx = 0
     events = []
     bar = start_bar
-    rest_min = 2 if density == 'sparse' else 1
+    rest_min = 2 if density == 'sparse' else (1 if density == 'medium' else 0)
     scale_pcs = {n % 12 for n in notes_scale}
     prev_final_note = None   # tracks the last emitted note, across phrases, for Markov nudging
+    phrase_prob = 0.72 + 0.15 * tension
 
     while bar < start_bar + num_bars:
-        if random.random() < 0.72:
+        if random.random() < phrase_prob:
             phrase_notes = vary_motif(motif, notes_scale, VARIATIONS[var_idx % len(VARIATIONS)])
             var_idx += 1
             phrase_len   = len(phrase_notes)
@@ -1403,12 +1446,16 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                 if g >= (start_bar + num_bars) * 16:
                     break
 
-                # Phi-point contour: ascending before 0.618, descending after
+                # Phi-point contour: ascending before 0.618, descending after.
+                # Step choice is tension-weighted toward the wider leap as
+                # tension rises (0.5 = neutral, matching the old flat choice).
                 pos = i / max(1, phrase_len - 1)
                 if pos < 0.618:
-                    step = random.choice([-1, 0, 1, 1, 2])
+                    step = random.choices([-1, 0, 1, 2],
+                                          weights=[2, 2, 3, 1 + 3 * tension], k=1)[0]
                 else:
-                    step = random.choice([-2, -2, -1, -1, 0])
+                    step = random.choices([-2, -1, 0],
+                                          weights=[1 + 3 * tension, 3, 2], k=1)[0]
                 idx = notes_scale.index(note) if note in notes_scale else len(notes_scale)//2
                 idx = max(0, min(len(notes_scale)-1, idx + step))
                 note = notes_scale[idx]
@@ -1440,7 +1487,7 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                 beat_pos  = g % 16
                 vel_bonus = 8 if beat_pos == 0 else (4 if beat_pos == 8 else 0)
 
-                t   = jitter(grid_tick(g, swing), 22, bpm)
+                t   = _lofi_late(_gauss_jitter(grid_tick(g, swing), 22, bpm), bpm)
 
                 # Grace note: acciaccatura — leading-tone approach 1 step below main note
                 # 15% chance on first note of each phrase; adds jazz phrasing feel
@@ -1449,11 +1496,11 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                     gn_idx = max(0, n_idx - 1)
                     grace_note = notes_scale[gn_idx]
                     grace_t = max(0, t - int(S16 * 0.35))
-                    events.append((grace_t, grace_note, v(38, 6), int(S16 * 0.30)))
+                    events.append((grace_t, grace_note, _gauss_velocity(38, 6), int(S16 * 0.30)))
                 dur = int(BAR * random.uniform(0.22, 0.72))
                 if random.random() < 0.30:
                     dur = int(dur * 1.5)
-                events.append((t, note, v(70 + vel_bonus + vel_arc, 13), dur))
+                events.append((t, note, _gauss_velocity(70 + vel_bonus + vel_arc, 13), dur))
 
             bar += phrase_len + random.randint(rest_min, rest_min + 3)
         else:
@@ -1491,6 +1538,34 @@ def build_break_hats(start_bar: int, num_bars: int, swing: float, bpm: int) -> l
             if random.random() < 0.55:
                 t = jitter(grid_tick((start_bar + bar) * 16 + beat, swing), 8, bpm)
                 events.append((t, RIM, v(22, 6), 20))
+    return events
+
+
+def build_buildup_fill(end_bar: int, num_bars: int, swing: float, bpm: int) -> list:
+    """
+    Escalating hi-hat-subdivision ramp for the `num_bars` immediately before
+    `end_bar` (where a tension-peak / 'B'-section entry begins) — a riser
+    substitute needing no synth sample. Subdivision density ramps
+    8th -> 8th-and-16th -> full 16ths across num_bars, velocity ramps up bar
+    to bar. ADDITIVE: appended on top of whatever the preceding section's own
+    drum builder already emitted at those bars, never a replacement.
+    """
+    events = []
+    num_bars  = max(1, num_bars)
+    start_bar = end_bar - num_bars
+    for bar_i in range(num_bars):
+        abs_bar = start_bar + bar_i
+        prog = (bar_i + 1) / num_bars   # ramp progress across the fill, 0-1
+        if prog < 0.5:
+            steps = [0, 4, 8, 12]
+        elif prog < 0.85:
+            steps = [0, 2, 4, 6, 8, 10, 12, 14]
+        else:
+            steps = list(range(16))
+        base_vel = int(30 + 55 * prog)
+        for step in steps:
+            t = jitter(grid_tick(abs_bar * 16 + step, swing), 5, bpm)
+            events.append((t, CHH, v(base_vel, 8), 20))
     return events
 
 
@@ -2306,6 +2381,62 @@ _SCALE_MODAL_LIFT = {
 }
 
 
+# ─── BRIDGE (real reharmonization for the 'BR' section) ───────────────────────
+
+def _bridge_progression(key: str, prog: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """
+    A harmonically-distinct progression for the 'BR' section: same tonal
+    center as `prog`, but genuinely different chords, so the bridge reads as
+    a reharmonization instead of the same progression at lower drum volume.
+
+    Primary path: the music21-backed harmony engine (same call pattern
+    pick_params() already uses for `harmony_progression`), with a higher
+    secondary-dominant probability than the main-progression call so the
+    bridge specifically leans into tonicization.
+
+    Fallback (harmony engine unavailable/fails, or happens to return the
+    same chord sequence): a relative-major transposition of each chord
+    (mirrors the existing _SCALE_MODAL_LIFT +3-semitone convention already
+    used for the bridge's counter-melody key) with an unconditional
+    secondary-dominant "pickup" chord prepended. The prepend alone
+    guarantees the returned sequence differs from `prog` -- even for
+    degenerate 1-2-chord vamp progressions where the transposition lookup
+    might not find a matching voicing for every slot.
+    """
+    try:
+        from scripts.harmony_engine import generate_functional_progression, center_for_key
+        chord_count = len(prog) if prog else 4
+        center, hmode = center_for_key(key)
+        hp = generate_functional_progression(
+            tonal_center=center, mode=hmode,
+            length=max(2, min(6, chord_count)),
+            secondary_dominant_prob=round(random.uniform(0.5, 0.75), 2),
+        )
+        if hp.chords and [c for c, _ in hp.chords] != [c for c, _ in prog]:
+            return hp.chords
+    except Exception as e:
+        print(f"  [bridge] Harmony-engine bridge progression failed ({e}) — using reharmonized fallback")
+
+    reharmonized = []
+    for chord_name, dur in prog:
+        new_name = chord_name
+        root    = BASS_ROOTS.get(chord_name)
+        quality = _GUIDE_TONES.get(chord_name)
+        if root is not None and quality is not None:
+            target_root = (root + 3) % 12   # relative-major shift
+            for cand in VOICING_OPTIONS:
+                cand_root = BASS_ROOTS.get(cand)
+                if cand_root is not None and _GUIDE_TONES.get(cand) == quality \
+                        and cand_root % 12 == target_root:
+                    new_name = cand
+                    break
+        new_name = maybe_sub_chord(new_name, 1)
+        reharmonized.append((new_name, dur))
+
+    pickup_name = _SEC_DOM_SUBS.get(prog[0][0], ('G7', 0))[0] if prog else 'G7'
+    return [(pickup_name, 1)] + reharmonized
+
+
 def build_midi(params, output_path):
     import mido
 
@@ -2430,9 +2561,20 @@ def build_midi(params, output_path):
         active_bars = 0
 
         cursor = 0
+        prev_label    = None
+        prev_sec_bars = 0
         for sec_label, n_loops in form:
             sec_start = cursor
             sec_bars  = prog_bars * n_loops
+            # Storytelling-arc scalar for this section (see _tension()) —
+            # threaded into melody/chord density and texture probability
+            # below, not just drum velocity.
+            sec_tension = _tension(sec_start + sec_bars // 2, TOTAL)
+
+            if sec_label == 'B' and prev_label in ('BR', 'A'):
+                # Escalating build-up fill in the tail of the *previous*
+                # section, marking the transition into the tension peak.
+                drum_ev += build_buildup_fill(sec_start, min(2, prev_sec_bars), swing, bpm)
 
             if sec_label == 'I':
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
@@ -2447,45 +2589,65 @@ def build_midi(params, output_path):
                 cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
 
             elif sec_label == 'A':
-                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
+                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
                 bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
                 drum_ev    += build_drums(pat_a, sec_start, sec_bars, swing, bpm, fill_bars)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
                                            'sparse', scale, motif=track_motif,
                                            progression=prog, prog_bars=prog_bars,
-                                           markov_nodes=markov_nodes)
+                                           markov_nodes=markov_nodes, tension=sec_tension)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 active_bars += sec_bars
                 _tex = _SUBGENRE_TEXTURE.get(sub_genre)
-                if _tex and random.random() < 0.50:
+                if _tex and random.random() < (0.35 + 0.40 * sec_tension):
                     texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
 
             elif sec_label == 'BR':
-                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
-                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
-                pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
+                bridge_prog      = _bridge_progression(key, prog)
+                bridge_prog_bars = sum(d for _, d in bridge_prog) or prog_bars
+                bridge_loops     = max(1, sec_bars // bridge_prog_bars)
+                piano_ev   += build_chords(bridge_prog, sec_start, bridge_loops, swing, bpm, tension=sec_tension)
+                bass_ev    += build_bass(bridge_prog, sec_start, bridge_loops, swing, bpm, walking)
+                pad_ev     += build_pad(bridge_prog, sec_start, bridge_loops, swing, bpm)
                 drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
                 cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm)
-                sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                sustain_ev += build_sustain_pedal(bridge_prog, sec_start, bridge_loops, swing, bpm)
 
             elif sec_label == 'B':
-                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
+                piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
                 bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
                 drum_ev    += build_drums(pat_b, sec_start, sec_bars, swing, bpm, fill_bars)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-                mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
-                                           'medium', scale, motif=track_motif,
-                                           progression=prog, prog_bars=prog_bars,
-                                           markov_nodes=markov_nodes)
-                if sec_bars > prog_bars:
-                    cmelo_ev += build_counter_melody(key_root, sec_start + prog_bars,
-                                                     sec_bars - prog_bars, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 active_bars += sec_bars
                 _tex = _SUBGENRE_TEXTURE.get(sub_genre)
-                if _tex and random.random() < 0.50:
-                    texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+
+                # Per-loop climax handling: the loop(s) coinciding with
+                # _tension()'s peak plateau get denser melody, a guaranteed
+                # texture layer, an extra counter-melody voice, and a
+                # stronger fill — distinguishable from an ordinary B-loop
+                # repeat instead of every loop in the section being identical.
+                for loop_i in range(max(1, n_loops)):
+                    loop_start   = sec_start + loop_i * prog_bars
+                    loop_tension = _tension(loop_start + prog_bars // 2, TOTAL)
+                    is_climax    = loop_tension >= 0.95
+                    mel_ev += build_melody(key_root, loop_start, prog_bars, swing, bpm,
+                                           'dense' if is_climax else 'medium', scale,
+                                           motif=track_motif, progression=prog,
+                                           prog_bars=prog_bars, markov_nodes=markov_nodes,
+                                           tension=loop_tension)
+                    if loop_i >= 1 or is_climax:
+                        cmelo_ev += build_counter_melody(key_root, loop_start, prog_bars, swing, bpm)
+                    if is_climax:
+                        if _tex:
+                            texture_ev += build_texture(_tex[0], prog, loop_start, prog_bars,
+                                                        swing, bpm, _tex[1])
+                        drum_ev += build_buildup_fill(loop_start + prog_bars,
+                                                      min(1, prog_bars), swing, bpm)
+                    elif _tex and random.random() < (0.35 + 0.40 * loop_tension):
+                        texture_ev += build_texture(_tex[0], prog, loop_start, prog_bars,
+                                                    swing, bpm, _tex[1])
 
             elif sec_label == 'O':
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
@@ -2503,6 +2665,8 @@ def build_midi(params, output_path):
                     drum_ev += build_intro_hats(sec_start + od_bars, sec_bars - od_bars, swing, bpm)
 
             cursor += sec_bars
+            prev_label    = sec_label
+            prev_sec_bars = sec_bars
 
         this_events = (piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev)
 
