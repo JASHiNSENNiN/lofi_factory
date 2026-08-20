@@ -2,17 +2,19 @@
 generate_music_gemini.py — v3 (Alive Edition)
 ==============================================
 Every track is unique. Infinite combinations guaranteed by:
-  · Groq picks personality (key, progression, bpm, swing, mood, density, energy)
+  · pick_params() procedurally picks personality (key, progression, bpm, swing,
+    density, energy) — no LLM in the loop; Groq/Gemini only ever supply a
+    decorative mood-text phrase, and only as an opt-in failsafe (LOFI_LLM_FAILSAFE=1)
   · Multiple voicings per chord — rotates randomly each hit
   · 4 drum patterns + per-bar mutation + fills at section boundaries
   · Hi-hat 16th-note runs every 4 bars for energy bursts
   · Quiet pad layer (strings) under chords for depth
-  · Sparse / dense melody toggle per track
+  · Sparse / dense melody toggle per track, driven by a per-track tension arc
   · Syncopated bass with walking fill option
   · All timing + velocity fully humanized per instrument
 
-Math: 5 keys × 8 progressions × 15 BPMs × 10 swing values
-      × 4² drum combos × voicing variants × melody/bass randomness
+Math: 14 keys × 51 progressions × BPM/swing ranges per sub-genre
+      × drum-pattern combos × voicing variants × melody/bass randomness
       = effectively infinite unique tracks
 """
 
@@ -410,6 +412,26 @@ PROGRESSIONS = [
     [('Cmaj9',2),('Em7',2),('Gmaj7',1),('Am9',1)],          # 49 I-iii-V-vi city pop
     [('Ebmaj7',2),('Bbmaj7',2),('Gm7',2),('Cm7',2)],        # 50 Eb warm jazz cycle
 ]
+
+# Real tonal center of each PROGRESSIONS entry (functional-harmony read: which
+# chord actually functions as "home" — the first chord for most vamps, but the
+# resolution target for progressions that build toward it, e.g. #29's IV-iii-vi-V
+# arc lands in G even though it starts on Fmaj9). Parallel to PROGRESSIONS by
+# index. This is what pick_params() now derives `key` from — previously `key`
+# was picked fully independently of `prog`, which meant a melody scale could be
+# built in a key with zero relation to the chords actually playing underneath
+# (6 of the old 14 KEY_ROOTS entries — Em, F#m, Bm, Ebm, A, D — were never the
+# real center of any progression at all, so picking them was a guaranteed
+# mismatch every time).
+PROGRESSION_KEY = [
+    'Am', 'C',  'Am', 'Am', 'C',  'Dm', 'Am', 'Am', 'F',  'Eb',   #  0- 9
+    'Am', 'C',  'C',  'Am', 'Cm', 'Gm', 'C',  'C',  'G',  'Am',   # 10-19
+    'C',  'C',  'C',  'C',  'C',  'C',  'C',  'Am', 'C',  'G',    # 20-29
+    'Bb', 'Eb', 'Am', 'C',  'F',  'F',  'Am', 'Am', 'Dm', 'Am',   # 30-39
+    'C',  'Cm', 'Bb', 'Am', 'G',  'G',  'C',  'Bb', 'C',  'C',    # 40-49
+    'Eb',                                                        # 50
+]
+assert len(PROGRESSION_KEY) == len(PROGRESSIONS)
 
 # Secondary dominant / tritone substitutions — applied by maybe_sub_chord()
 # key = chord being approached; value = (substitute_chord, probability)
@@ -886,6 +908,7 @@ KEY_ROOTS = {
     'D':  62,   # D major  — bossa, bright morning
     'Bb': 58,   # Bb major — jazz cafe warmth, neo-soul
     'A':  69,   # A major  — energetic, bedroom pop
+    'Eb': 63,   # Eb major — bossa/jazz cycles that land in Eb (see PROGRESSION_KEY)
 }
 
 def get_pentatonic(root):
@@ -1911,11 +1934,17 @@ def _pick_key_avoiding_recent(sub: str, history: list[dict]) -> str:
     return random.choice(available)
 
 
-def _pick_progression_avoiding_recent(sub: str, key: str, cfg: dict, history: list[dict]) -> int:
-    """Pick a progression not recently used for this (sub_genre, key) pair."""
+def _pick_progression_avoiding_recent(sub: str, cfg: dict, history: list[dict]) -> int:
+    """Pick a progression not recently used for this sub-genre.
+
+    Dedupes on (sub_genre, progression) directly rather than (sub_genre, key) —
+    `key` is now derived from whichever progression gets picked here (see
+    PROGRESSION_KEY), not picked independently beforehand, so deduping on the
+    actual chord content is the more direct check.
+    """
     recent: set[int] = set()
     for h in history[-10:]:
-        if h.get('sub_genre') == sub and h.get('key') == key:
+        if h.get('sub_genre') == sub:
             raw = h.get('progression', '')
             if str(raw).lstrip('-').isdigit():
                 recent.add(int(raw))
@@ -2002,8 +2031,12 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
 
     sub = (_resolve_genre_hint(genre_hint) if genre_hint else None) or _pick_subgenre_weighted(history)
     cfg  = _SUBGENRE_CONFIG[sub]
-    key  = _pick_key_avoiding_recent(sub, history)
-    prog = _pick_progression_avoiding_recent(sub, key, cfg, history)
+    prog = _pick_progression_avoiding_recent(sub, cfg, history)
+    # `key` is derived from the chosen progression's real tonal center (see
+    # PROGRESSION_KEY) rather than picked independently — previously these were
+    # two unrelated random draws, so the melody scale could land in a key with
+    # no relation to the chords actually playing underneath it.
+    key  = PROGRESSION_KEY[prog]
 
     n_pats = len(DRUM_PATTERNS)
     pat_a  = random.choice(cfg['drum_pats']) % n_pats
@@ -2076,6 +2109,7 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
             params['generated_progression'] = generate_progression(
                 length=max(2, min(6, chord_count)),
                 jazziness=round(random.uniform(0.2, 0.8), 2),
+                seed_chord=PROGRESSIONS[prog][0][0],
             )
         except Exception as e:
             print(f"  [params] Progression generation failed ({e}) — using curated table")
@@ -2118,8 +2152,6 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
     except Exception as e:
         print(f"  [params] Self-referential Markov build failed ({e}) — skipping")
 
-    if key in ('C', 'G', 'F') and prog < 16:
-        print(f"  [params] NOTE: major key '{key}' with minor prog {prog} — voicings will be modal")
     print(f"  [params] key={key} bpm={params['bpm']} prog={prog} sub={sub} mood='{params['mood']}'")
 
     _save_params_history(params)
