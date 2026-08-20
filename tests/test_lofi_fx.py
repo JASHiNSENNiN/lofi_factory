@@ -2,12 +2,14 @@ import numpy as np
 import pytest
 
 from scripts.lofi_fx import (
+    _apply_ir_reverb,
     _apply_kick_sidechain_duck,
     _apply_lufs_mastering,
     _apply_stereo_width,
     _apply_sub_bass_saturation,
     _apply_wow_flutter,
     _GENRE_PRESETS,
+    _IR_GENRES,
     _kick_envelope,
     _SIDECHAIN_DUCK_GENRES,
     _TRACK_LUFS_TARGET,
@@ -290,6 +292,28 @@ def test_apply_lofi_fx_output_is_not_silent(tmp_path):
     apply_lofi_fx(str(wav_in), str(wav_out), sub_genre="chillhop", bpm=82, energy="medium")
     result, _sr = sf.read(str(wav_out), dtype="float32", always_2d=True)
     assert np.sqrt(np.mean(result ** 2)) > 1e-4
+
+
+# ── IR convolution reverb (assets/ir/*.wav) ──────────────────────────────────
+# Previously dead on three independent fronts: assets/ir/ didn't exist, the
+# audiomentations dependency wasn't declared, and even with both present the
+# ApplyImpulseResponse call used a kwarg (`ir_paths`) that doesn't exist on
+# the actual API (`ir_path`, singular) -- silently swallowed by this
+# function's own except-and-return-None.
+
+def test_ir_reverb_finds_real_files_and_returns_wet_audio():
+    stereo, sr = _sine_stereo(seconds=2, amplitude=0.3)
+    wet = _apply_ir_reverb(stereo, sr)
+    assert wet is not None
+    assert wet.shape == stereo.shape
+    assert not np.isnan(wet).any()
+    assert np.max(np.abs(wet)) > 0.0
+
+
+def test_ir_genres_gate_is_a_small_opt_in_set():
+    assert 0 < len(_IR_GENRES) < 10
+    assert "lofi_jazz" in _IR_GENRES
+    assert "lofi_house" not in _IR_GENRES
 
 
 def test_apply_lofi_fx_respects_energy_levels(tmp_path):

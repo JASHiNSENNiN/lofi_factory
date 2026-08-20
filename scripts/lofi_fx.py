@@ -69,6 +69,17 @@ _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_
 # Genres that use real impulse-response reverb when IR files are present.
 # Jazz/piano genres benefit most — acoustic room reflections are more natural than
 # algorithmic Schroeder reverb for these instruments.
+#
+# assets/ir/*.wav: 3 impulses (a small room, a salon-sized chamber, a concert
+# hall) from Aleksey Vaneev / Voxengo's free "IM Reverbs" pack
+# (https://www.voxengo.com/impulses/) — free for any use including
+# commercial, redistribution permitted unaltered with the license preserved
+# (see assets/ir/license.txt, included alongside per that requirement; same
+# unaltered-plus-credit pattern as assets/drums/*.wav's CC0 sourcing, though
+# this pack's own terms aren't CC0 itself). Needs the `audiomentations`
+# dependency (see requirements.txt) — previously imported here but never
+# actually declared, so this path was unreachable even before the files
+# were missing.
 _IR_GENRES = {"lofi_jazz", "jazz_cafe", "piano_lofi", "lofi_classical", "bossa_lofi", "neo_soul"}
 _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 
@@ -482,8 +493,12 @@ def _apply_ir_reverb(audio: "np.ndarray", sr: int) -> "np.ndarray | None":
         import numpy as np
         from audiomentations import ApplyImpulseResponse
         ir_path = random.choice(ir_files)
-        # ApplyImpulseResponse expects (channels, samples) float32 numpy array
-        transform = ApplyImpulseResponse(ir_paths=[ir_path], p=1.0, leave_length_unchanged=True)
+        # ApplyImpulseResponse expects (channels, samples) float32 numpy array.
+        # Constructor param is `ir_path` (singular, accepts a str/Path or a
+        # list) -- the previous `ir_paths=[...]` kwarg here doesn't exist on
+        # this library and raised TypeError every call, silently swallowed
+        # by this function's own except-and-return-None below.
+        transform = ApplyImpulseResponse(ir_path=ir_path, p=1.0, leave_length_unchanged=True)
         wet = transform(audio.copy().astype(np.float32), sample_rate=sr)
         return wet
     except Exception:

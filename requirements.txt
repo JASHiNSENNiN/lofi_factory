@@ -31,6 +31,11 @@ statsmodels>=0.14
 music21>=9.1
 pyloudnorm>=0.1
 
+# IR convolution reverb (lofi_fx.py: _apply_ir_reverb, jazz/piano/classical
+# genres) — was imported but never declared here, so the code path was
+# unreachable regardless of whether assets/ir/*.wav files existed.
+audiomentations>=0.36
+
 # System admin page (webui: resource monitor)
 psutil>=5.9
 
