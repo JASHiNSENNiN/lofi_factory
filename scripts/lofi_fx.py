@@ -11,10 +11,11 @@ but it's fundamentally a per-note MIDI-generation-time effect (each instrument
 pitch-bent slightly relative to the others), not something a final-mix
 post-processing stage like this one can add after the fact -- a whole-mix
 pitch shift here would just transpose everything together, leaving relative
-pitch relationships (and therefore the "detuned" character) unchanged. The
-existing Chorus stage below is the standard post-processing approximation of
-that same "slightly out of tune" character (continuous micro pitch-modulation
-via a short delay line), so no separate detune stage was added here.
+pitch relationships (and therefore the "detuned" character) unchanged. What
+this module DOES add, as a genuine mix-bus effect (see _apply_wow_flutter),
+is tape wow & flutter -- real transport-speed modulation via a variable-delay
+line, not per-note detuning, but the same "not quite in tune with itself"
+territory and, unlike per-note detune, entirely legitimate to add post-render.
 """
 
 from __future__ import annotations
@@ -28,42 +29,42 @@ from scipy.signal import lfilter as _lfilter
 # bits: bitcrusher depth (lower = more grit, 8=MPC2000, 12=Akai S950, 16=clean)
 # room: reverb room size 0-1
 # wet: reverb wet mix
-# chorus_depth: tape wobble amount 0-1
+# wobble_depth: tape wobble amount 0-1
 # compress_ratio: compression ratio
 # vinyl: vinyl crackle amplitude
 _GENRE_PRESETS: dict[str, dict] = {
     # ── Dark / moody ─────────────────────────────────────────────────────────
-    "dark_lofi":     {"lpf": 7500,  "bits": 9,  "room": 0.5, "wet": 0.28, "chorus_depth": 0.25, "compress_ratio": 3.5, "vinyl": 0.18},
-    "lofi_phonk":    {"lpf": 7000,  "bits": 8,  "room": 0.4, "wet": 0.22, "chorus_depth": 0.30, "compress_ratio": 4.0, "vinyl": 0.22},
-    "vaporwave":     {"lpf": 8000,  "bits": 9,  "room": 0.6, "wet": 0.35, "chorus_depth": 0.28, "compress_ratio": 3.0, "vinyl": 0.14},
-    "ambient":       {"lpf": 12000, "bits": 13, "room": 0.7, "wet": 0.40, "chorus_depth": 0.12, "compress_ratio": 2.0, "vinyl": 0.05},
+    "dark_lofi":     {"lpf": 7500,  "bits": 9,  "room": 0.5, "wet": 0.28, "wobble_depth": 0.25, "compress_ratio": 3.5, "vinyl": 0.18},
+    "lofi_phonk":    {"lpf": 7000,  "bits": 8,  "room": 0.4, "wet": 0.22, "wobble_depth": 0.30, "compress_ratio": 4.0, "vinyl": 0.22},
+    "vaporwave":     {"lpf": 8000,  "bits": 9,  "room": 0.6, "wet": 0.35, "wobble_depth": 0.28, "compress_ratio": 3.0, "vinyl": 0.14},
+    "ambient":       {"lpf": 12000, "bits": 13, "room": 0.7, "wet": 0.40, "wobble_depth": 0.12, "compress_ratio": 2.0, "vinyl": 0.05},
     # ── Jazz / soul ───────────────────────────────────────────────────────────
-    "lofi_jazz":     {"lpf": 10000, "bits": 11, "room": 0.4, "wet": 0.22, "chorus_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
-    "jazz_cafe":     {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "chorus_depth": 0.15, "compress_ratio": 2.5, "vinyl": 0.08},
-    "nujabes":       {"lpf": 10000, "bits": 11, "room": 0.45,"wet": 0.25, "chorus_depth": 0.20, "compress_ratio": 2.8, "vinyl": 0.12},
-    "neo_soul":      {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.22, "chorus_depth": 0.16, "compress_ratio": 2.5, "vinyl": 0.09},
-    "bossa_lofi":    {"lpf": 12500, "bits": 13, "room": 0.35,"wet": 0.18, "chorus_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "lofi_rnb":      {"lpf": 11000, "bits": 11, "room": 0.4, "wet": 0.22, "chorus_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
+    "lofi_jazz":     {"lpf": 10000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
+    "jazz_cafe":     {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 2.5, "vinyl": 0.08},
+    "nujabes":       {"lpf": 10000, "bits": 11, "room": 0.45,"wet": 0.25, "wobble_depth": 0.20, "compress_ratio": 2.8, "vinyl": 0.12},
+    "neo_soul":      {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.22, "wobble_depth": 0.16, "compress_ratio": 2.5, "vinyl": 0.09},
+    "bossa_lofi":    {"lpf": 12500, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
+    "lofi_rnb":      {"lpf": 11000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
     # ── Hip-hop / beat ───────────────────────────────────────────────────────
-    "chillhop":      {"lpf": 9500,  "bits": 11, "room": 0.35,"wet": 0.20, "chorus_depth": 0.18, "compress_ratio": 3.0, "vinyl": 0.12},
-    "hip_hop_lofi":  {"lpf": 9000,  "bits": 10, "room": 0.35,"wet": 0.18, "chorus_depth": 0.20, "compress_ratio": 3.5, "vinyl": 0.15},
-    "lo_fi_funk":    {"lpf": 9500,  "bits": 10, "room": 0.35,"wet": 0.18, "chorus_depth": 0.22, "compress_ratio": 3.5, "vinyl": 0.14},
-    "chill_beats":   {"lpf": 11000, "bits": 12, "room": 0.45,"wet": 0.25, "chorus_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.08},
-    "lofi_house":    {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "chorus_depth": 0.15, "compress_ratio": 3.0, "vinyl": 0.09},
+    "chillhop":      {"lpf": 9500,  "bits": 11, "room": 0.35,"wet": 0.20, "wobble_depth": 0.18, "compress_ratio": 3.0, "vinyl": 0.12},
+    "hip_hop_lofi":  {"lpf": 9000,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.20, "compress_ratio": 3.5, "vinyl": 0.15},
+    "lo_fi_funk":    {"lpf": 9500,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.22, "compress_ratio": 3.5, "vinyl": 0.14},
+    "chill_beats":   {"lpf": 11000, "bits": 12, "room": 0.45,"wet": 0.25, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.08},
+    "lofi_house":    {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 3.0, "vinyl": 0.09},
     # ── Cozy / bright ────────────────────────────────────────────────────────
-    "cozy_cafe":     {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "chorus_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "morning_lofi":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.15, "chorus_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.05},
-    "anime_lofi":    {"lpf": 13500, "bits": 14, "room": 0.3, "wet": 0.15, "chorus_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.04},
-    "summer_vibes":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "chorus_depth": 0.11, "compress_ratio": 2.0, "vinyl": 0.05},
-    "bedroom_pop":   {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "chorus_depth": 0.13, "compress_ratio": 2.2, "vinyl": 0.06},
-    "city_pop":      {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "chorus_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "study_lofi":    {"lpf": 11000, "bits": 12, "room": 0.38,"wet": 0.20, "chorus_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.09},
+    "cozy_cafe":     {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
+    "morning_lofi":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.05},
+    "anime_lofi":    {"lpf": 13500, "bits": 14, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.04},
+    "summer_vibes":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.11, "compress_ratio": 2.0, "vinyl": 0.05},
+    "bedroom_pop":   {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.13, "compress_ratio": 2.2, "vinyl": 0.06},
+    "city_pop":      {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
+    "study_lofi":    {"lpf": 11000, "bits": 12, "room": 0.38,"wet": 0.20, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.09},
     # ── Acoustic / classical ─────────────────────────────────────────────────
-    "piano_lofi":    {"lpf": 14000, "bits": 14, "room": 0.45,"wet": 0.25, "chorus_depth": 0.08, "compress_ratio": 1.8, "vinyl": 0.04},
-    "lofi_classical":{"lpf": 15000, "bits": 15, "room": 0.50,"wet": 0.28, "chorus_depth": 0.06, "compress_ratio": 1.6, "vinyl": 0.03},
+    "piano_lofi":    {"lpf": 14000, "bits": 14, "room": 0.45,"wet": 0.25, "wobble_depth": 0.08, "compress_ratio": 1.8, "vinyl": 0.04},
+    "lofi_classical":{"lpf": 15000, "bits": 15, "room": 0.50,"wet": 0.28, "wobble_depth": 0.06, "compress_ratio": 1.6, "vinyl": 0.03},
 }
 
-_DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "chorus_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.12}
+_DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.12}
 
 # Genres that use real impulse-response reverb when IR files are present.
 # Jazz/piano genres benefit most — acoustic room reflections are more natural than
@@ -150,7 +151,7 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     import soundfile as sf
     from pedalboard import (
         Pedalboard, Bitcrush, Compressor, Reverb,
-        HighpassFilter, LowpassFilter, Chorus, Gain, Resample,
+        HighpassFilter, LowpassFilter, Gain, Resample,
         GSMFullRateCompressor,
     )
 
@@ -161,20 +162,21 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     bits     = preset["bits"]     + random.choice([-1, 0, 0, 1])
     room     = min(0.95, preset["room"]     + random.uniform(-0.05, 0.05))
     wet      = min(0.50, preset["wet"]      + random.uniform(-0.03, 0.03))
-    depth    = min(0.45, preset["chorus_depth"] + random.uniform(-0.03, 0.03))
+    depth    = min(0.45, preset["wobble_depth"] + random.uniform(-0.03, 0.03))
     c_ratio  = preset["compress_ratio"]
     vinyl_vol = preset["vinyl"]   + random.uniform(-0.02, 0.02)
     sr_target = _SR_TARGET.get(sub_genre or "", _SR_DEFAULT)
 
-    # Energy scales chorus depth (more wobble = more energy) and compression
+    # Energy scales wow/flutter depth (more wobble = more energy) and compression
     energy_scale = {"low": 0.65, "medium": 1.0, "high": 1.35}.get(energy, 1.0)
     depth  = round(min(0.45, depth * energy_scale), 3)
     c_ratio = c_ratio * energy_scale
 
-    # BPM-aware chorus rate: faster = tighter wobble
-    chorus_rate = round(0.35 + (bpm - 70) * 0.008, 2)
-
-    board = Pedalboard([
+    # Chain is split around _apply_wow_flutter (a hand-rolled variable-delay
+    # effect, not a Pedalboard plugin — Pedalboard has no wow/flutter unit)
+    # so it sits in the same signal-chain position the old Chorus stage did:
+    # after the bitcrush/resample grit, before the lowpass/reverb tail.
+    board_pre = Pedalboard([
         HighpassFilter(cutoff_frequency_hz=80),
         Compressor(
             threshold_db=-20,
@@ -186,13 +188,8 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
         # Fills the gap vs the ffmpeg chain which always did aresample=22050.
         Resample(target_sample_rate=sr_target),
         Bitcrush(bit_depth=max(6, min(16, bits))),
-        Chorus(
-            rate_hz=chorus_rate,
-            depth=depth,
-            centre_delay_ms=8.0,
-            feedback=0.0,
-            mix=0.40,
-        ),
+    ])
+    board_post = Pedalboard([
         LowpassFilter(cutoff_frequency_hz=max(4000, lpf)),
         Reverb(
             room_size=room,
@@ -208,7 +205,9 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     # Pedalboard expects (channels, samples)
     audio_in = audio.T
 
-    processed = board(audio_in, sr, reset=True)
+    processed = board_pre(audio_in, sr, reset=True)
+    processed = _apply_wow_flutter(processed, sr, depth)
+    processed = board_post(processed, sr, reset=True)
 
     # GSM codec artifacts for dark/phonk/vaporwave — old Nokia phone grit.
     # Mixed at 25% wet so it adds texture without demolishing the stereo image.
@@ -261,6 +260,62 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
         processed = processed * (0.89 / peak)
 
     sf.write(wav_out, processed.T, sr, subtype="PCM_16")
+
+
+# ── Tape wow & flutter ───────────────────────────────────────────────────────
+# Two LFOs modulate a fractional-sample variable-delay line: "wow" is slow
+# drift from uneven reel/capstan rotation (real tape: roughly 0.5-2 Hz),
+# "flutter" is faster jitter from transport mechanics (roughly 4-10 Hz).
+# These are transport-speed artifacts, not tempo-linked, so — unlike the old
+# Chorus stage's bpm-aware rate — there's no bpm dependence here.
+_WOW_HZ_RANGE     = (0.6, 1.4)
+_FLUTTER_HZ_RANGE = (5.0, 9.0)
+_WOW_FLUTTER_MIX  = 0.65   # wow (slow) vs flutter (fast) blend, wow-dominant
+
+
+def _apply_wow_flutter(audio: "np.ndarray", sr: int, depth: float) -> "np.ndarray":
+    """
+    `audio` is (channels, samples). `depth` is the genre preset's
+    wobble_depth value (0-0.45, already energy-scaled by the caller) —
+    mapped to a 0.5-3.5ms modulation depth, the range real tape wow/flutter
+    actually sits at.
+
+    Implementation: offset the read position (in fractional samples) by the
+    wow+flutter LFO blend, then linearly interpolate the signal at that
+    position — a variable-delay line, the standard way to implement this
+    effect. Fully vectorized (no per-sample Python loop) via numpy fancy
+    indexing for the interpolation gather.
+    """
+    import numpy as np
+
+    n_samples = audio.shape[1]
+    if n_samples < 4:
+        return audio
+
+    depth_ms = 0.5 + min(0.45, max(0.0, depth)) * 6.5
+    depth_samples = depth_ms / 1000.0 * sr
+
+    wow_hz     = random.uniform(*_WOW_HZ_RANGE)
+    flutter_hz = random.uniform(*_FLUTTER_HZ_RANGE)
+    t = np.arange(n_samples, dtype=np.float64) / sr
+    wow     = np.sin(2 * np.pi * wow_hz * t + random.uniform(0, 2 * np.pi))
+    flutter = np.sin(2 * np.pi * flutter_hz * t + random.uniform(0, 2 * np.pi))
+    mod = (_WOW_FLUTTER_MIX * wow + (1.0 - _WOW_FLUTTER_MIX) * flutter) * depth_samples
+
+    # Offset into the past (a delay line reads history, never the future) so
+    # the modulation never needs samples that don't exist yet -- shift the
+    # whole curve back by its own max depth so the read index stays
+    # non-negative even at the wow/flutter blend's most negative excursion.
+    read_idx = np.arange(n_samples, dtype=np.float64) - depth_samples - mod
+    read_idx = np.clip(read_idx, 0, n_samples - 1)
+    idx_floor = np.floor(read_idx).astype(np.int64)
+    idx_ceil  = np.minimum(idx_floor + 1, n_samples - 1)
+    frac = (read_idx - idx_floor).astype(np.float32)
+
+    out = np.empty_like(audio)
+    for ch in range(audio.shape[0]):
+        out[ch] = audio[ch, idx_floor] * (1.0 - frac) + audio[ch, idx_ceil] * frac
+    return out.astype(np.float32)
 
 
 def _apply_stereo_width(audio: "np.ndarray", width: float) -> "np.ndarray":

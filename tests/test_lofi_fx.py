@@ -6,12 +6,22 @@ from scripts.lofi_fx import (
     _apply_lufs_mastering,
     _apply_stereo_width,
     _apply_sub_bass_saturation,
+    _apply_wow_flutter,
+    _GENRE_PRESETS,
     _kick_envelope,
     _SIDECHAIN_DUCK_GENRES,
     _TRACK_LUFS_TARGET,
+    apply_lofi_fx,
 )
 
 pyln = pytest.importorskip("pyloudnorm")
+sf = pytest.importorskip("soundfile")
+
+
+def _sine_stereo(freq=220.0, seconds=2, sr=44100, amplitude=0.3):
+    t = np.linspace(0, seconds, int(sr * seconds), endpoint=False)
+    tone = (amplitude * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    return np.stack([tone, tone]), sr
 
 
 def _independent_stereo(n=44100 * 2, sr=44100, seed=0):
@@ -212,3 +222,83 @@ def test_sidechain_duck_gate_genre_membership_is_a_small_opt_in_set():
     assert "lofi_house" in _SIDECHAIN_DUCK_GENRES
     assert "lofi_classical" not in _SIDECHAIN_DUCK_GENRES
     assert "ambient" not in _SIDECHAIN_DUCK_GENRES
+
+
+# ── tape wow & flutter ────────────────────────────────────────────────────────
+
+def test_wow_flutter_shape_dtype_and_no_nan():
+    stereo, sr = _independent_stereo()
+    result = _apply_wow_flutter(stereo, sr, depth=0.2)
+    assert result.shape == stereo.shape
+    assert result.dtype == np.float32
+    assert not np.isnan(result).any()
+
+
+def test_wow_flutter_actually_modulates_a_tone():
+    stereo, sr = _sine_stereo()
+    result = _apply_wow_flutter(stereo, sr, depth=0.3)
+    assert not np.allclose(result, stereo, atol=1e-3)
+
+
+def test_wow_flutter_never_exceeds_input_peak():
+    # Linear interpolation between two real samples is a convex combination
+    # of the two, so the output can never exceed the input's own peak --
+    # this is a delay/interpolation effect, not a gain stage.
+    stereo, sr = _sine_stereo(amplitude=0.5)
+    result = _apply_wow_flutter(stereo, sr, depth=0.45)
+    assert np.max(np.abs(result)) <= np.max(np.abs(stereo)) + 1e-6
+
+
+def test_wow_flutter_silence_is_a_safe_noop():
+    silent = np.zeros((2, 44100 * 2), dtype=np.float32)
+    result = _apply_wow_flutter(silent, 44100, depth=0.3)
+    assert np.max(np.abs(result)) == 0.0
+
+
+def test_wow_flutter_too_short_input_is_a_safe_passthrough():
+    tiny = np.zeros((2, 2), dtype=np.float32)
+    result = _apply_wow_flutter(tiny, 44100, depth=0.3)
+    assert result.shape == tiny.shape
+
+
+# ── end-to-end FX chain ───────────────────────────────────────────────────────
+# Previously untested: README.md's rationale for excluding audio tests
+# ("need FluidSynth/ffmpeg on the actual deploy target") doesn't actually
+# apply to the Pedalboard chain here -- it takes a numpy buffer in and needs
+# no system binary, unlike the FluidSynth-render and ffmpeg-encode steps.
+
+def test_apply_lofi_fx_runs_end_to_end_for_every_genre_preset(tmp_path):
+    stereo, sr = _sine_stereo(seconds=3)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+
+    for sub_genre in list(_GENRE_PRESETS) + [None]:
+        wav_out = tmp_path / f"out_{sub_genre}.wav"
+        apply_lofi_fx(str(wav_in), str(wav_out), sub_genre=sub_genre, bpm=80, energy="medium")
+        assert wav_out.exists()
+        result, _out_sr = sf.read(str(wav_out), dtype="float32", always_2d=True)
+        assert not np.isnan(result).any()
+        assert np.max(np.abs(result)) <= 1.0 + 1e-6
+
+
+def test_apply_lofi_fx_output_is_not_silent(tmp_path):
+    stereo, sr = _sine_stereo(seconds=2, amplitude=0.4)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+    wav_out = tmp_path / "out.wav"
+
+    apply_lofi_fx(str(wav_in), str(wav_out), sub_genre="chillhop", bpm=82, energy="medium")
+    result, _sr = sf.read(str(wav_out), dtype="float32", always_2d=True)
+    assert np.sqrt(np.mean(result ** 2)) > 1e-4
+
+
+def test_apply_lofi_fx_respects_energy_levels(tmp_path):
+    stereo, sr = _sine_stereo(seconds=2)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+
+    for energy in ("low", "medium", "high"):
+        wav_out = tmp_path / f"out_{energy}.wav"
+        apply_lofi_fx(str(wav_in), str(wav_out), sub_genre="dark_lofi", bpm=75, energy=energy)
+        result, _sr = sf.read(str(wav_out), dtype="float32", always_2d=True)
+        assert not np.isnan(result).any()
