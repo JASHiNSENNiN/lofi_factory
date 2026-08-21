@@ -37,12 +37,18 @@ def test_bjorklund_onset_count_matches_k(k, n):
     assert sum(_bjorklund(k, n)) == k
 
 
-def test_bjorklund_copies_agree():
+def test_bjorklund_is_a_single_shared_implementation():
+    # Both generate_music_gemini.py and drum_sampler.py used to carry their
+    # own identical copy of this algorithm; both now import the same
+    # function from scripts/euclidean.py -- assert they're literally the
+    # same object, not just coincidentally-equal outputs (which wouldn't
+    # catch the two drifting apart again).
     soundfile = pytest.importorskip("soundfile")
     from scripts.drum_sampler import _bjorklund as bj2
+    from scripts.euclidean import bjorklund
 
-    for k, n in [(3, 8), (5, 8), (3, 16), (5, 16), (2, 16), (7, 16)]:
-        assert _bjorklund(k, n) == bj2(k, n)
+    assert _bjorklund is bjorklund
+    assert bj2 is bjorklund
 
 
 # ── generate_euclidean_drum_pattern ──────────────────────────────────────────

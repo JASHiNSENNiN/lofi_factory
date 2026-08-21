@@ -36,7 +36,7 @@ from scripts.generate_music_gemini import (  # noqa: E402
     build_pad, build_intro_hats, build_break_hats,
     build_texture, build_counter_melody,
     _SUBGENRE_CONFIG, _SWING_RANGE, _SWING_DEFAULT, _COZY_SUBGENRES,
-    _SUBGENRE_FX, _SUBGENRE_TEXTURE, _SUBGENRE_DRUM_KITS, _DEFAULT_DRUM_KIT_POOL,
+    _SUBGENRE_TEXTURE, _SUBGENRE_DRUM_KITS, _DEFAULT_DRUM_KIT_POOL,
     _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT, generate_song_form,
     maybe_sub_chord, _tension, _apply_tension_to_drums, _chord_pcs_at_bar,
     pick_params, _build_diverse_params,

@@ -179,23 +179,7 @@ _PAT_DUSTY = {
     "h": [0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3, 0.7, 0.3],
 }
 
-def _bjorklund(k: int, n: int) -> list[int]:
-    """Bjorklund's Euclidean-rhythm algorithm E(k,n): distribute k onsets as
-    evenly as possible over n steps. Kept as a standalone local copy (rather
-    than importing from generate_music_gemini.py) so this synthesis module
-    has zero dependency on the MIDI-generation module."""
-    pattern, level = [], 0
-    for _ in range(n):
-        level += k
-        if level >= n:
-            level -= n
-            pattern.append(1)
-        else:
-            pattern.append(0)
-    if 1 in pattern:
-        first = pattern.index(1)
-        pattern = pattern[first:] + pattern[:first]
-    return pattern
+from scripts.euclidean import bjorklund as _bjorklund
 
 
 def generate_euclidean_pat_dict(energy: float) -> dict:

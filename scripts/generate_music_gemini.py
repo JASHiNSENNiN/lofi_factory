@@ -246,39 +246,6 @@ _COZY_SUBGENRES: frozenset[str] = frozenset({
     "lofi_rnb", "lofi_classical", "lofi_house", "chillhop",
 })
 
-# Per-sub-genre FX biasing. NOTE: no longer consumed anywhere (the in-file apply_lofi_fx()
-# that used this was removed in favor of scripts/lofi_fx.py, which has its own separate
-# _GENRE_PRESETS). generate_music_v2.py still imports this name but doesn't use it either.
-# Left in place pending a follow-up dead-import cleanup pass.
-_SUBGENRE_FX = {
-    'chillhop':     {'bits': [11,12,13],  'lpf': (9500,12000),  'vinyl_vol': (0.06,0.12),  'tremolo_d': (0.05,0.10)},
-    'morning_lofi': {'bits': [12,13,14],  'lpf': (10000,13000), 'vinyl_vol': (0.03,0.08),  'tremolo_d': (0.05,0.10)},
-    'hip_hop_lofi': {'bits': [10,11,12],  'lpf': (8500,11000),  'vinyl_vol': (0.08,0.18),  'tremolo_d': (0.04,0.08)},
-    'chill_beats':  {'bits': [12,13,14],  'lpf': (10000,13000), 'vinyl_vol': (0.04,0.10),  'tremolo_d': (0.06,0.11)},
-    'dark_lofi':    {'bits': [8,9,10],    'lpf': (7000,9500),   'vinyl_vol': (0.12,0.22),  'tremolo_d': (0.08,0.13)},
-    'lofi_phonk':   {'bits': [8,9,10],    'lpf': (7000,9000),   'vinyl_vol': (0.15,0.25),  'tremolo_d': (0.09,0.14)},
-    'ambient':      {'bits': [12,13,14],  'lpf': (11000,14000), 'vinyl_vol': (0.03,0.06),  'tremolo_d': (0.04,0.08)},
-    'city_pop':     {'bits': [12,13,14],  'lpf': (10500,13000), 'vinyl_vol': (0.04,0.08),  'tremolo_d': (0.04,0.08)},
-    'nujabes':      {'bits': [10,11,12],  'lpf': (9000,11500),  'vinyl_vol': (0.08,0.16),  'tremolo_d': (0.06,0.11)},
-    'lofi_jazz':    {'bits': [11,12,12],  'lpf': (9500,12000),  'vinyl_vol': (0.06,0.14),  'tremolo_d': (0.06,0.10)},
-    # Cozy / bright — higher LPF, cleaner bits, less crackle = more "air" in the sound
-    'cozy_cafe':    {'bits': [12,13,14],  'lpf': (11000,14000), 'vinyl_vol': (0.03,0.07),  'tremolo_d': (0.04,0.08)},
-    'anime_lofi':   {'bits': [12,13,14],  'lpf': (11000,14500), 'vinyl_vol': (0.02,0.06),  'tremolo_d': (0.04,0.08)},
-    'summer_vibes': {'bits': [12,13,14],  'lpf': (10500,14000), 'vinyl_vol': (0.04,0.09),  'tremolo_d': (0.05,0.09)},
-    'study_lofi':   {'bits': [11,12,13],  'lpf': (9500,12000),  'vinyl_vol': (0.05,0.12),  'tremolo_d': (0.05,0.10)},
-    'jazz_cafe':    {'bits': [11,12,12],  'lpf': (9500,12500),  'vinyl_vol': (0.05,0.12),  'tremolo_d': (0.05,0.09)},
-    'piano_lofi':   {'bits': [13,14,14],  'lpf': (12000,15000), 'vinyl_vol': (0.02,0.05),  'tremolo_d': (0.03,0.07)},
-    'lo_fi_funk':   {'bits': [10,11,12],  'lpf': (9000,11500),  'vinyl_vol': (0.10,0.18),  'tremolo_d': (0.06,0.10)},
-    # Acoustic-instrument genres — cleaner FX preserves natural timbre
-    'bossa_lofi':   {'bits': [13,14,14],  'lpf': (12000,15500), 'vinyl_vol': (0.03,0.08),  'tremolo_d': (0.03,0.07)},
-    'neo_soul':     {'bits': [11,12,13],  'lpf': (10000,13000), 'vinyl_vol': (0.06,0.12),  'tremolo_d': (0.05,0.09)},
-    # New subgenres
-    'vaporwave':    {'bits': [9,10,11],   'lpf': (7500,9500),   'vinyl_vol': (0.07,0.14),  'tremolo_d': (0.08,0.13)},
-    'lofi_house':   {'bits': [12,13,13],  'lpf': (10500,13000), 'vinyl_vol': (0.04,0.09),  'tremolo_d': (0.05,0.09)},
-    'lofi_classical':{'bits': [14,14,15], 'lpf': (13000,16000), 'vinyl_vol': (0.02,0.05),  'tremolo_d': (0.03,0.06)},
-    'bedroom_pop':  {'bits': [12,13,14],  'lpf': (11500,14000), 'vinyl_vol': (0.03,0.07),  'tremolo_d': (0.04,0.08)},
-    'lofi_rnb':     {'bits': [11,12,12],  'lpf': (10000,12500), 'vinyl_vol': (0.05,0.11),  'tremolo_d': (0.05,0.09)},
-}
 
 # GM Drum notes (channel 9)
 KICK  = 36
@@ -577,21 +544,7 @@ def generate_progression(length: int = 4, jazziness: float = 0.5,
 
 # ─── EUCLIDEAN RHYTHM (Bjorklund/Toussaint) ──────────────────────────────────
 
-def _bjorklund(k, n):
-    """Euclidean rhythm E(k,n): distribute k onsets evenly over n steps."""
-    pattern, level = [], 0
-    for _ in range(n):
-        level += k
-        if level >= n:
-            level -= n
-            pattern.append(1)
-        else:
-            pattern.append(0)
-    # Rotate so first onset lands on step 0
-    if 1 in pattern:
-        first = pattern.index(1)
-        pattern = pattern[first:] + pattern[:first]
-    return pattern
+from scripts.euclidean import bjorklund as _bjorklund
 
 # Pre-computed euclidean hi-hat patterns (1 = onset, 0 = rest, 16 steps)
 _EUCL_HATS = {

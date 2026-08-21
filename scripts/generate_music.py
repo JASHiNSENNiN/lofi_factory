@@ -1,25 +1,29 @@
 """
 generate_music.py
 -----------------
-Generates lo-fi music tracks.
+Non-procedural music-track fallbacks -- NOT the main generator (that's
+generate_music_gemini.py / generate_music_v2.py, entirely procedural, no
+neural nets or training corpora; see README.md).
 
-Mode A (LOCAL): Uses audiocraft/MusicGen if GPU available.
-Mode B (COLAB): Prints Colab-ready code + prompts to generate externally, then
+Mode A (COLAB): Prints Colab-ready code + prompts to generate externally, then
                 expects .mp3/.wav files dropped into music/ folder.
-Mode C (MOCK):  Generates a silent/noise placeholder for testing visuals
+Mode B (MOCK):  Generates a silent/noise placeholder for testing visuals
                 without needing a GPU.
+
+A third mode (LOCAL, audiocraft/MusicGen run against a local GPU) used to
+live here but was removed: it contradicted the project's stated no-neural-
+nets design, had zero production run history, and `audiocraft`/`torch` were
+never even in requirements.txt -- it couldn't actually run without an
+undocumented manual `pip install audiocraft` first.
 
 Usage:
     python generate_music.py --mode mock       # test mode, no GPU needed
-    python generate_music.py --mode local      # needs CUDA GPU + audiocraft
     python generate_music.py --mode colab      # prints Colab notebook code
 """
 
 import os
-import sys
 import argparse
 import subprocess
-import random
 
 MUSIC_DIR = os.path.join(os.path.dirname(__file__), "..", "music")
 os.makedirs(MUSIC_DIR, exist_ok=True)
@@ -60,35 +64,6 @@ def generate_mock(count=3, duration_secs=300):
         subprocess.run(cmd, check=True, capture_output=True)
         print(f"  Mock track: {out}")
         paths.append(out)
-    return paths
-
-
-def generate_local(count=5, duration_secs=300):
-    """Generate with MusicGen locally. Requires GPU + audiocraft installed."""
-    try:
-        from audiocraft.models import MusicGen
-        from audiocraft.data.audio import audio_write
-    except ImportError:
-        print("[ERROR] audiocraft not installed. Run: pip install audiocraft")
-        print("        Or use --mode colab / --mode mock")
-        sys.exit(1)
-
-    print("[MUSIC] Local MusicGen mode")
-    model = MusicGen.from_pretrained("facebook/musicgen-medium")
-    model.set_generation_params(duration=duration_secs)
-
-    prompts = random.sample(LOFI_PROMPTS, min(count, len(LOFI_PROMPTS)))
-    paths = []
-    import time
-    ts = int(time.time())
-    for i, prompt in enumerate(prompts):
-        print(f"  Generating track {i+1}/{len(prompts)}: {prompt[:60]}...")
-        wav = model.generate([prompt])
-        out_stem = os.path.join(MUSIC_DIR, f"track_{ts}_{i:02d}")
-        from audiocraft.data.audio import audio_write
-        audio_write(out_stem, wav[0].cpu(), model.sample_rate, strategy="loudness")
-        paths.append(out_stem + ".wav")
-        print(f"  Saved: {out_stem}.wav")
     return paths
 
 
@@ -139,14 +114,12 @@ def list_music_files():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["mock", "local", "colab"], default="mock")
+    parser.add_argument("--mode", choices=["mock", "colab"], default="mock")
     parser.add_argument("--count", type=int, default=3)
     parser.add_argument("--duration", type=int, default=300, help="Track duration in seconds")
     args = parser.parse_args()
 
     if args.mode == "mock":
         generate_mock(args.count, args.duration)
-    elif args.mode == "local":
-        generate_local(args.count, args.duration)
     elif args.mode == "colab":
         print_colab_code(args.count, args.duration)

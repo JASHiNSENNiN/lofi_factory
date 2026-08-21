@@ -138,8 +138,8 @@ def main():
                                  "2 hours", "3 hours", "4 hours", "5 hours",
                                  "8 hours", "10 hours", "all night"])
     parser.add_argument("--music-mode", default="midi",
-                        choices=["mock", "midi", "local", "colab"],
-                        help="midi=MIDI+FluidSynth via Groq (default), mock=placeholder, local=GPU MusicGen, colab=print Colab code")
+                        choices=["mock", "midi", "colab"],
+                        help="midi=MIDI+FluidSynth, entirely procedural (default), mock=placeholder, colab=print Colab code")
     parser.add_argument("--music-v2", action="store_true",
                         help="Use v2 beta music generator (improved voice leading, melody, bass, humanization)")
     parser.add_argument("--music-count", type=int, default=None,
@@ -270,9 +270,6 @@ def main():
         elif args.music_mode == "mock":
             from scripts.generate_music import generate_mock
             generated_tracks = generate_mock(count=music_count, duration_secs=300)
-        elif args.music_mode == "local":
-            from scripts.generate_music import generate_local
-            generated_tracks = generate_local(count=music_count, duration_secs=300)
         elif args.music_mode == "colab":
             from scripts.generate_music import print_colab_code
             print_colab_code(count=10)
