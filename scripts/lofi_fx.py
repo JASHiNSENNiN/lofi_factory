@@ -62,6 +62,10 @@ _GENRE_PRESETS: dict[str, dict] = {
     # ── Acoustic / classical ─────────────────────────────────────────────────
     "piano_lofi":    {"lpf": 14000, "bits": 14, "room": 0.45,"wet": 0.25, "wobble_depth": 0.08, "compress_ratio": 1.8, "vinyl": 0.04},
     "lofi_classical":{"lpf": 15000, "bits": 15, "room": 0.50,"wet": 0.28, "wobble_depth": 0.06, "compress_ratio": 1.6, "vinyl": 0.03},
+    # ── Drill / trap-adjacent ─────────────────────────────────────────────────
+    "lofi_drill":    {"lpf": 7200,  "bits": 8,  "room": 0.35,"wet": 0.20, "wobble_depth": 0.28, "compress_ratio": 4.2, "vinyl": 0.20},
+    # ── World / ethnic-fusion ─────────────────────────────────────────────────
+    "lofi_world":    {"lpf": 10500, "bits": 12, "room": 0.42,"wet": 0.24, "wobble_depth": 0.16, "compress_ratio": 2.6, "vinyl": 0.09},
 }
 
 _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.12}
@@ -80,7 +84,7 @@ _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_
 # dependency (see requirements.txt) — previously imported here but never
 # actually declared, so this path was unreachable even before the files
 # were missing.
-_IR_GENRES = {"lofi_jazz", "jazz_cafe", "piano_lofi", "lofi_classical", "bossa_lofi", "neo_soul"}
+_IR_GENRES = {"lofi_jazz", "jazz_cafe", "piano_lofi", "lofi_classical", "bossa_lofi", "neo_soul", "lofi_world"}
 _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 
 # Genres that want a kick-triggered sidechain "pump" (see
@@ -89,7 +93,7 @@ _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 # do NOT want this, matching the existing _GSM_GENRES/_IR_GENRES pattern of
 # a small opt-in membership set rather than a per-preset flag on all 22
 # entries in _GENRE_PRESETS.
-_SIDECHAIN_DUCK_GENRES = {"lofi_house", "lo_fi_funk", "hip_hop_lofi", "chillhop"}
+_SIDECHAIN_DUCK_GENRES = {"lofi_house", "lo_fi_funk", "hip_hop_lofi", "chillhop", "lofi_drill"}
 
 # Per-track mastering LUFS target (see _apply_lufs_mastering). Deliberately
 # set BELOW assemble_video.py's final video-level loudnorm target of -14
@@ -145,11 +149,11 @@ _SUB_BASS_DRIVE_DB  = 14.0
 _SUB_BASS_MIX       = 0.22
 
 # Genres that benefit from GSM codec degradation (authentic mobile-phone grit)
-_GSM_GENRES = {"dark_lofi", "lofi_phonk", "vaporwave", "ambient"}
+_GSM_GENRES = {"dark_lofi", "lofi_phonk", "vaporwave", "ambient", "lofi_drill"}
 # Sample-rate target per genre group — lower = more vintage aliasing
 _SR_TARGET: dict[str, int] = {
     "dark_lofi": 22050, "lofi_phonk": 22050,
-    "vaporwave": 22050, "hip_hop_lofi": 22050,
+    "vaporwave": 22050, "hip_hop_lofi": 22050, "lofi_drill": 22050,
     "lofi_house": 24000, "chillhop": 24000, "chill_beats": 24000,
     "lo_fi_funk": 24000, "nujabes": 24000,
 }

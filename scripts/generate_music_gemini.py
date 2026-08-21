@@ -81,6 +81,13 @@ GM_MUTED_TRUMPET  = 59   # nujabes, jazz_cafe, lofi_jazz fills
 GM_CELLO          = 42   # dark_lofi, piano_lofi, ambient pad voice
 GM_FLUTE          = 73   # ambient, morning_lofi, bossa_lofi whisper
 
+# GM "Ethnic" family (spec slots 105/108/109, 0-indexed) — lofi_world's lead/
+# counter-melody/texture voices, distinct from every other subgenre's Western
+# instrument palette above.
+GM_SITAR          = 104  # lofi_world lead melody
+GM_KOTO           = 107  # lofi_world counter-melody
+GM_KALIMBA        = 108  # lofi_world texture accent
+
 # ─── SUB-GENRE CONFIG TABLE ───────────────────────────────────────────────────
 # Unified per-sub-genre settings — replaces scattered inline dicts.
 # 'piano'/'melody': GM program. 'scale': biased pool. 'drum_pats': preferred indices.
@@ -188,11 +195,22 @@ _SUBGENRE_CONFIG = {
                      'scale': ['major','lydian','major_pent','harmonic_minor'],
                      'drum_pats': [7,9,13], 'bpm': (58,78), 'energy': 'low',
                      'progs': [16,17,18,22,25,35,46,50]},
+    # ── Drill / trap-adjacent ────────────────────────────────────────────────────
+    'lofi_drill':   {'piano': GM_RHODES,    'melody': GM_ORGAN_ROCK,'cmelo': GM_CELLO,
+                     'scale': ['natural_minor','harmonic_minor','phryg','pent'],
+                     'drum_pats': [15,11,2,9], 'bpm': (72,88), 'energy': 'high',
+                     'progs': [14,15,41,42,43,7,39]},
+    # ── World / ethnic-fusion ────────────────────────────────────────────────────
+    'lofi_world':   {'piano': GM_RHODES,    'melody': GM_SITAR,     'cmelo': GM_KOTO,
+                     'scale': ['dorian','phryg_dom','pent','natural_minor'],
+                     'drum_pats': [12,4,3,9], 'bpm': (70,86), 'energy': None,
+                     'progs': [13,0,7,3,38,10,32,39]},
 }
 
 # Per-genre swing ranges. Heavy hip-hop swings hard (0.72); bossa/classical nearly
-# straight (0.52). This alone creates huge perceived variety across the 24 genres.
+# straight (0.52). This alone creates huge perceived variety across the 26 genres.
 _SWING_RANGE: dict[str, tuple[float, float]] = {
+    'lofi_drill':    (0.63, 0.74),   # heaviest swing tier — drill bounce
     'lofi_phonk':    (0.62, 0.73),   # massive trap swing
     'dark_lofi':     (0.62, 0.71),   # heavy laid-back pocket
     'nujabes':       (0.61, 0.69),   # j-dilla-ish moderate-heavy
@@ -217,6 +235,7 @@ _SWING_RANGE: dict[str, tuple[float, float]] = {
     'lofi_classical':(0.50, 0.57),   # classical straight
     'ambient':       (0.50, 0.60),   # minimal swing
     'vaporwave':     (0.50, 0.60),   # electronic, straight
+    'lofi_world':    (0.58, 0.68),   # organic percussive feel, not stiff-straight
 }
 _SWING_DEFAULT = (0.58, 0.68)
 
@@ -871,6 +890,14 @@ DRUM_PATTERNS = [
      CHH:  [68,0,58,62,0,55,0,60,65,0,55,0,60,58,0,52],
      OHH:  [0,0,0,0,  72,0,0,0,  0,0,0,0,  68,0,0,0],
      RIM:  [0]*16},
+    # P: Drill bounce — offbeat/syncopated kick (808-slide feel, not just beat 1),
+    # snare on 3 with a ghost, hat roll that builds density across the back half
+    # of the bar rather than staying uniform like L's steady trap hats.
+    {KICK: [95,0,0,0,  0,0,78,0,  0,0,85,0,  0,72,0,0],
+     SNARE:[0,0,0,0,  0,0,0,0,  92,0,0,0,  0,0,40,0],
+     CHH:  [58,0,55,0,58,0,55,0,62,60,65,62,68,65,70,72],
+     OHH:  [0,0,0,0,  0,0,0,0,  0,0,0,0,  0,0,0,60],
+     RIM:  [0]*16},
 ]
 
 # Drum fills (1 bar of 16 steps — fire at last bar of a section)
@@ -936,6 +963,20 @@ def get_phrygian(root):
     for oct_off in range(3):
         for i in [0,1,3,5,7,8,10]:
             n = root + i + oct_off*12
+            if 53 <= n <= 86:
+                notes.append(n)
+    return sorted(set(notes))
+
+def get_phrygian_dominant(root):
+    """Phrygian dominant (5th mode of harmonic minor) — b2 and b6 like
+    Phrygian, but a major 3rd instead of minor: the maqam-Hijaz/flamenco
+    "Spanish" color, distinct from get_phrygian's all-minor Mediterranean
+    darkness. Used by the lofi_world sub-genre for a genuinely different
+    exotic-scale flavor rather than reusing plain Phrygian."""
+    notes = []
+    for oct_off in range(3):
+        for i in [0, 1, 4, 5, 7, 8, 10]:
+            n = root + i + oct_off * 12
             if 53 <= n <= 86:
                 notes.append(n)
     return sorted(set(notes))
@@ -1418,6 +1459,8 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
         notes_scale = get_dorian(key_root)
     elif scale == 'phryg':
         notes_scale = get_phrygian(key_root)
+    elif scale == 'phryg_dom':
+        notes_scale = get_phrygian_dominant(key_root)
     elif scale == 'major_pent':
         notes_scale = [n for oct_off in range(3)
                        for i in [0, 2, 4, 7, 9]
@@ -2307,6 +2350,8 @@ _SUBGENRE_TEXTURE = {
     'summer_vibes':   (GM_MARIMBA,      'pop'),
     'city_pop':       (GM_MARIMBA,      'pop'),
     'nujabes':        (GM_MUTED_TRUMPET,'fill'),
+    'lofi_drill':     (GM_ORGAN_ROCK,   'stab'),
+    'lofi_world':     (GM_KALIMBA,      'pop'),
 }
 
 
@@ -2546,6 +2591,8 @@ def build_midi(params, output_path):
         _motif_scale = get_dorian(key_root)
     elif scale == 'phryg':
         _motif_scale = get_phrygian(key_root)
+    elif scale == 'phryg_dom':
+        _motif_scale = get_phrygian_dominant(key_root)
     elif scale == 'major':
         _motif_scale = get_major(key_root)
     elif scale == 'lydian':

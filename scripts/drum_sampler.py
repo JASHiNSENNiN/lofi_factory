@@ -235,7 +235,7 @@ _ALL_PATS = [_PAT_STANDARD, _PAT_BOOM_BAP, _PAT_808_TRAP, _PAT_JAZZ, _PAT_DUSTY]
 _SUBGENRE_PAT: dict[str, dict] = {
     "hip_hop_lofi": _PAT_BOOM_BAP, "nujabes": _PAT_BOOM_BAP, "dark_lofi": _PAT_BOOM_BAP,
     "chillhop": _PAT_DUSTY,        "study_lofi": _PAT_DUSTY,
-    "lofi_phonk": _PAT_808_TRAP,   "vaporwave": _PAT_808_TRAP,
+    "lofi_phonk": _PAT_808_TRAP,   "vaporwave": _PAT_808_TRAP,   "lofi_drill": _PAT_808_TRAP,
     "lofi_jazz": _PAT_JAZZ,        "jazz_cafe": _PAT_JAZZ,
     "bossa_lofi": _PAT_JAZZ,       "ambient": _PAT_JAZZ,
     "piano_lofi": _PAT_JAZZ,       "lofi_classical": _PAT_JAZZ,
@@ -267,7 +267,7 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
     # Synthesis style selection (used only when real samples unavailable)
     if sub_genre in ("hip_hop_lofi", "nujabes", "dark_lofi"):
         kick_style, snare_style = "tight", "snappy"
-    elif sub_genre in ("lofi_phonk", "vaporwave"):
+    elif sub_genre in ("lofi_phonk", "vaporwave", "lofi_drill"):
         kick_style, snare_style = "808", "tight"
     elif sub_genre in ("lofi_jazz", "jazz_cafe", "bossa_lofi", "ambient",
                        "piano_lofi", "lofi_classical"):
