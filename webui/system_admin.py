@@ -13,6 +13,7 @@ pattern). Nothing in this module touches ``nicegui.ui``.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import shutil
@@ -319,3 +320,60 @@ def delete_backup(name: str) -> bool:
     shutil.rmtree(path, ignore_errors=True)
     audit_log("config_backup_delete", {"name": name})
     return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orphaned scratch-file cleanup — music/visuals leftovers from a killed/failed
+# run that never got assembled into an output/ video. Confirmed 2026-08-16: a
+# run wedged in mem_cgroup_handle_over_high for 23+ hours left ~3.85GB of
+# per-track .wav files across several past failed runs sitting in music/ with
+# nothing referencing them, cleaned up by hand once -- this gives that same
+# cleanup a repeatable button instead of a manual SSH session next time.
+# ─────────────────────────────────────────────────────────────────────────────
+# The only files in music/ and visuals/ that are actual scratch (per-run
+# generation intermediates); everything else in those two directories is a
+# persistent cross-run learning log (recipe/melody/params/audio-quality
+# history) that must never be swept up by this.
+_SCRATCH_PATTERNS = {
+    "music": (config.MUSIC_DIR, ("track_*.wav", "track_*.wav.meta.json")),
+    "visuals": (config.VISUALS_DIR, ("bg_*.mp4",)),
+}
+
+
+def orphaned_scratch_files() -> list[dict]:
+    """{"path", "size_bytes", "mtime"} for every scratch file currently in
+    music/ or visuals/. Caller must confirm nothing is rendering first (see
+    clean_orphaned_scratch's docstring) -- otherwise this lists files an
+    in-progress run is actively writing, not just true leftovers."""
+    out = []
+    for _label, (directory, patterns) in _SCRATCH_PATTERNS.items():
+        if not os.path.isdir(directory):
+            continue
+        for pattern in patterns:
+            for path in glob.glob(os.path.join(directory, pattern)):
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                out.append({"path": path, "size_bytes": st.st_size, "mtime": st.st_mtime})
+    return out
+
+
+def clean_orphaned_scratch() -> dict:
+    """Delete every file orphaned_scratch_files() finds. Caller MUST verify
+    nothing is currently rendering first (webui/jobs.py's JobManager.is_busy()
+    and the lofi-auto systemd unit both need checking) -- this module doesn't
+    import either to avoid a dependency cycle, so that safety check lives at
+    the call site, same pattern as app.py's _confirm_delete_render guard."""
+    files = orphaned_scratch_files()
+    freed = 0
+    deleted = 0
+    for f in files:
+        try:
+            os.remove(f["path"])
+            freed += f["size_bytes"]
+            deleted += 1
+        except OSError:
+            continue
+    audit_log("clean_orphaned_scratch", {"deleted": deleted, "freed_bytes": freed})
+    return {"deleted": deleted, "freed_bytes": freed}

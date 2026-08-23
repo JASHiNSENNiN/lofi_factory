@@ -63,6 +63,9 @@ say "lofi-webui status: $(systemctl --user is-active lofi-webui.service)"
 say "Installing lofi-auto timer + service ..."
 cp "$ROOT/deploy/lofi-auto.service" "$UNIT_DIR/lofi-auto.service"
 cp "$ROOT/deploy/lofi-auto.timer" "$UNIT_DIR/lofi-auto.timer"
+# Triggered via lofi-auto.service's OnFailure= -- never enabled/started
+# directly, systemd just needs to be able to find it when that fires.
+cp "$ROOT/deploy/lofi-auto-notify-failure.service" "$UNIT_DIR/lofi-auto-notify-failure.service"
 systemctl --user daemon-reload
 systemctl --user enable --now lofi-auto.timer
 say "lofi-auto.timer status: $(systemctl --user is-active lofi-auto.timer)"

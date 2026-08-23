@@ -17,6 +17,9 @@ from unittest.mock import patch
 from webui import alerts
 from webui.jobs import Job, QueueItem
 
+# _ALERT_LOG isolation for every test in this file comes from the global
+# autouse fixture in tests/conftest.py, not a local one here.
+
 
 # ── env parsing ──────────────────────────────────────────────────────────────
 def test_urls_from_env_empty_when_unset():

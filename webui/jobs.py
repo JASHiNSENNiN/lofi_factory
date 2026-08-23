@@ -42,6 +42,14 @@ class Job:
     returncode: int | None = None
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
+    # Last non-empty output line at the moment the job finished -- the only
+    # failure detail that survives into history (see _PERSIST_FIELDS below).
+    # `lines` itself is deliberately NOT persisted (see its own comment), so
+    # without this a failed job in history/Recent-runs was previously just a
+    # red "failed" pill with zero indication of why -- confirmed 2026-08-16
+    # when a lock-contention failure (two pipeline runs racing) gave the user
+    # no way to tell that from an actual generation bug after the fact.
+    error: str = ""
     lines: deque[str] = field(default_factory=lambda: deque(maxlen=_MAX_LINES))
     # Exact artifact paths this run produced (video/thumb/thumb_alt/seo), parsed
     # from run.py's `[RESULT] {...}` summary line on success -- see _pump().
@@ -100,7 +108,7 @@ _MAX_HISTORY = 20
 # Only these fields are persisted -- notably not `lines` (the full log ring
 # buffer) or the subscriber sets, which are live-session-only concerns.
 _PERSIST_FIELDS = ("id", "name", "cmd", "status", "slot", "returncode",
-                    "started_at", "finished_at", "artifacts")
+                    "started_at", "finished_at", "artifacts", "error")
 
 
 def _job_to_record(job: "Job") -> dict:
@@ -120,6 +128,7 @@ def _record_to_job(rec: dict) -> "Job":
     job.started_at = rec.get("started_at") or 0.0
     job.finished_at = rec.get("finished_at")
     job.artifacts = rec.get("artifacts") or {}
+    job.error = rec.get("error", "")
     return job
 
 
@@ -132,6 +141,52 @@ def _append_history_file(job: "Job", path: str) -> None:
             f.write(json.dumps(_job_to_record(job)) + "\n")
     except Exception:
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Full per-job log persistence — separate from job_history.jsonl (which
+# deliberately excludes `lines`, see _record_to_job's docstring). Confirmed
+# 2026-08-17: a historical job only ever showed its last output *line* (the
+# `error` field) with no way to see the full run leading up to a failure
+# once the live session's in-memory ring buffer was gone. This writes the
+# complete transcript to its own file per job, read on demand by the job-
+# details dialog instead of always carrying full logs in memory/JSONL.
+# ─────────────────────────────────────────────────────────────────────────────
+JOB_LOGS_DIR = os.path.join(config.ASSETS_DIR, "job_logs")
+
+
+def _write_job_log(job: "Job", *, history_path: str, job_logs_dir: str) -> None:
+    """Best-effort: write this job's complete captured output to its own
+    file, then prune log files for jobs no longer in the retained history
+    (keeps this directory bounded the same way job_history.jsonl already
+    bounds itself to _MAX_HISTORY entries)."""
+    try:
+        os.makedirs(job_logs_dir, exist_ok=True)
+        with open(os.path.join(job_logs_dir, f"{job.id}.log"), "w") as f:
+            f.write("\n".join(job.lines))
+    except Exception:
+        return
+    try:
+        keep = {rec.get("id") for rec in
+                (json.loads(l) for l in open(history_path) if l.strip())} if \
+            os.path.exists(history_path) else set()
+        for name in os.listdir(job_logs_dir):
+            if name.endswith(".log") and name[:-4] not in keep:
+                os.remove(os.path.join(job_logs_dir, name))
+    except Exception:
+        pass
+
+
+def read_job_log(job_id: str, *, job_logs_dir: str = JOB_LOGS_DIR) -> str | None:
+    """Full persisted transcript for one historical job, or None if it was
+    never written (e.g. a job still only in job_history.jsonl from before
+    this feature existed)."""
+    path = os.path.join(job_logs_dir, f"{job_id}.log")
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def _load_history_file(path: str, limit: int = _MAX_HISTORY) -> list["Job"]:
@@ -159,12 +214,23 @@ def _load_history_file(path: str, limit: int = _MAX_HISTORY) -> list["Job"]:
 class JobManager:
     """Owns the single active job and recent history. One heavy job at a time."""
 
-    def __init__(self, *, history_path: str | None = None) -> None:
+    def __init__(self, *, history_path: str | None = None,
+                 job_logs_dir: str | None = None) -> None:
         self.current: Job | None = None
-        # history_path is overridable (tests pass a tmp_path file) so a fresh
-        # JobManager() in production picks up assets/job_history.jsonl but a
-        # test never touches the real repo's file.
+        # history_path is overridable (tests pass a tmp_path file) so a
+        # fresh JobManager() in production picks up assets/job_history.jsonl
+        # but a test never touches the real repo's file. job_logs_dir
+        # defaults to a sibling "job_logs" dir next to WHATEVER history_path
+        # resolved to, not a separately-overridable path -- every existing
+        # test already scopes history_path to tmp_path, so this piggybacks
+        # on that instead of requiring every call site to also learn a
+        # second parameter (confirmed 2026-08-17: adding job_logs_dir as its
+        # own independently-defaulted param left ~14 existing test call
+        # sites still writing real .log files into this repo's assets/,
+        # the same class of leak alerts.py's log had before its own fix).
         self._history_path = history_path or HISTORY_FILE
+        self._job_logs_dir = job_logs_dir or os.path.join(
+            os.path.dirname(self._history_path) or ".", "job_logs")
         self.history: list[Job] = _load_history_file(self._history_path)
         # The live-stream job is tracked separately so a generation run and an
         # active broadcast can coexist.
@@ -229,7 +295,10 @@ class JobManager:
             job.status = "failed"
         finally:
             job.finished_at = time.time()
+            if job.status == "failed":
+                job.error = next((l for l in reversed(job.lines) if l.strip()), "")[:300]
             _append_history_file(job, self._history_path)
+            _write_job_log(job, history_path=self._history_path, job_logs_dir=self._job_logs_dir)
             if job.status == "failed":
                 try:
                     await alerts.send_job_failure(job)

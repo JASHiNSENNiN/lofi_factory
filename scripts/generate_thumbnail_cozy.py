@@ -13,6 +13,8 @@ Output: assets/thumb_{theme}_{timestamp}.jpg  (1280×720, JPEG q95)
 import os
 import re
 import sys
+import time
+import math
 import datetime
 
 import numpy as np
@@ -162,7 +164,16 @@ _EMOJI_RE   = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]+"
 )
 _TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\))\s*$")
-_SHORT_TITLE_MAX_CHARS = 28
+# Researched 2026-08-16 (YouTube thumbnail CTR guides, consistent across
+# sources): high-CTR thumbnails run 0-3 "high-impact" words, not a full
+# clause -- 28 chars was landing 5-6 words ("3 hours in. remote work"),
+# forcing _fit_title_font to shrink hard to make it fit any reasonable card
+# width. Cut closer to that target while still allowing a short real phrase
+# (this app's concept-driven design deliberately avoids generic clickbait
+# templates, so keep deriving from the real title rather than gutting to a
+# bare 3-word cap) -- word-boundary trimming in _derive_short_title below
+# still applies at this new budget.
+_SHORT_TITLE_MAX_CHARS = 20
 
 
 def _derive_short_title(full_title: str) -> str | None:
@@ -207,9 +218,17 @@ def _derive_short_title(full_title: str) -> str | None:
 # ── Font management ────────────────────────────────────────────────────────────
 
 _BEBAS_PATH = os.path.join(FONTS_DIR, "BebasNeue-Regular.ttf")
+# Fixed 2026-08-16: the old dharmatype path 404'd (repo reorganized -- author
+# folder renamed "_by_Ryoichi_Tsunekawa" -> "ByDhamraType", moved under a
+# ttf/ subdir). Confirmed dead silently for who knows how long: every single
+# thumbnail generated on this box fell all the way through to
+# ImageFont.load_default() (a tiny fixed-size bitmap font that ignores the
+# `size` argument entirely) because _resolve_title_font's other fallback
+# paths (/usr/share/fonts/TTF/...) are Arch/Manjaro-convention paths that
+# don't exist on this Debian box either -- see the real paths below.
 _BEBAS_URL  = (
-    "https://github.com/dharmatype/Bebas-Neue/raw/master/"
-    "fonts/BebasNeue(2018)_by_Ryoichi_Tsunekawa/BebasNeue-Regular.ttf"
+    "https://raw.githubusercontent.com/dharmatype/Bebas-Neue/master/"
+    "fonts/BebasNeue(2018)ByDhamraType/ttf/BebasNeue-Regular.ttf"
 )
 _TITLE_FONT_PATH: str | None = None
 
@@ -221,6 +240,7 @@ def _ensure_bebas() -> str | None:
         import requests
         resp = requests.get(_BEBAS_URL, timeout=15)
         if resp.status_code == 200 and len(resp.content) > 10_000:
+            os.makedirs(FONTS_DIR, exist_ok=True)
             with open(_BEBAS_PATH, "wb") as f:
                 f.write(resp.content)
             print(f"  [THUMB] Downloaded BebasNeue → {_BEBAS_PATH}")
@@ -236,11 +256,17 @@ def _resolve_title_font() -> str:
         return _TITLE_FONT_PATH
     candidates = [
         _ensure_bebas(),
-        "/usr/share/fonts/TTF/FiraSansCompressed-Heavy.ttf",
-        "/usr/share/fonts/TTF/FiraSansCompressed-ExtraBold.ttf",
-        "/usr/share/fonts/TTF/FiraSansCondensed-Heavy.ttf",
-        "/usr/share/fonts/TTF/OpenSans-CondensedExtraBold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansCondensed-Bold.ttf",
+        # Real paths on THIS box (confirmed via `find /usr/share/fonts`) --
+        # the old list here was entirely Arch/Manjaro-convention
+        # (/usr/share/fonts/TTF/...), which doesn't exist on Debian/Ubuntu,
+        # so every single one of these silently missed and every thumbnail
+        # fell through to PIL's tiny fixed-size default bitmap font. Ordered
+        # condensed-and-bold first (fits more chars at a given width, same
+        # intent as the old list) down to universally-present plain bold.
+        "/usr/share/fonts/opentype/urw-base35/NimbusSansNarrow-Bold.otf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
     ]
     for p in candidates:
         if p and os.path.exists(p):
@@ -335,6 +361,26 @@ def _build_bg(theme: str, seed: int) -> Image.Image:
     return img
 
 
+# ── Bloom ──────────────────────────────────────────────────────────────────────
+
+def _apply_bloom(img: Image.Image, threshold: int = 130,
+                  blur_radius: int = 18, strength: float = 0.55) -> Image.Image:
+    """
+    Cheap bloom: isolate the brightest pixels (the glow orbs), Gaussian-blur
+    just that layer, and screen-composite it back over the original. Gives
+    the glow a real soft halo instead of the flat radial falloff the orb math
+    alone produces -- standard procedural-graphics trick, PIL/numpy only.
+    """
+    arr  = np.asarray(img, dtype=np.float32)
+    luma = arr[:, :, 0] * 0.299 + arr[:, :, 1] * 0.587 + arr[:, :, 2] * 0.114
+    mask = np.clip((luma - threshold) / max(1, 255 - threshold), 0, 1)[:, :, None]
+    bright = Image.fromarray((arr * mask).astype(np.uint8))
+    bloom_arr = np.asarray(bright.filter(ImageFilter.GaussianBlur(blur_radius)),
+                            dtype=np.float32)
+    out = 255.0 - (255.0 - arr) * (255.0 - bloom_arr * strength) / 255.0
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
 # ── Theme-specific atmosphere FX ───────────────────────────────────────────────
 
 def _add_theme_fx(img: Image.Image, theme: str, rng: np.random.Generator) -> Image.Image:
@@ -412,6 +458,18 @@ def _apply_vignette(img: Image.Image, strength: float = 0.45) -> Image.Image:
     return Image.fromarray(np.clip(arr * vig[:, :, np.newaxis], 0, 255).astype(np.uint8))
 
 
+# ── Film grain ────────────────────────────────────────────────────────────────
+
+def _apply_film_grain(img: Image.Image, seed: int, strength: float = 10.0) -> Image.Image:
+    """Low-opacity luminance noise so flat gradient bands read as filmic
+    texture instead of flat-digital -- seeded off the same per-render seed as
+    everything else, so a given (theme, variant) always renders identically."""
+    rng   = np.random.default_rng(seed + 90210)
+    arr   = np.asarray(img, dtype=np.float32)
+    noise = rng.normal(0, strength, size=(TH, TW, 1)).astype(np.float32)
+    return Image.fromarray(np.clip(arr + noise, 0, 255).astype(np.uint8))
+
+
 # ── Duration badge ─────────────────────────────────────────────────────────────
 
 def _draw_duration_badge(img: Image.Image, theme: str, duration: str) -> Image.Image:
@@ -487,7 +545,15 @@ def _select_side(theme_name: str, variant: int) -> str:
     return "left" if idx == 0 else "right"
 
 
-_TITLE_FONT_SIZES = (78, 68, 60, 52, 46)
+# Raised 2026-08-16: research is consistent that thumbnail titles need
+# 60-80pt+ at native 1280x720 canvas resolution to read as "dominant," not
+# just technically legible -- the old (78..46) range's smallest steps were
+# routinely what got hit once a real (non-trivial) title needed to fit the
+# card, landing well under that floor. Paired with the shorter
+# _SHORT_TITLE_MAX_CHARS and wider _max_card_width below so the bigger
+# sizes actually get room to be used instead of immediately shrinking back
+# down to fit an unchanged card width.
+_TITLE_FONT_SIZES = (108, 94, 82, 72, 64)
 
 
 def _fit_title_font(draw: ImageDraw.ImageDraw, text: str, font_path: str, max_text_w: int):
@@ -522,14 +588,342 @@ def _card_position(layout: str, side: str, card_w: int, card_h: int) -> tuple[in
 
 
 def _max_card_width(layout: str) -> int:
+    # Widened 2026-08-16 alongside the bigger _TITLE_FONT_SIZES -- the old,
+    # narrower caps (0.44/0.62) were the actual reason titles kept landing on
+    # the smallest font-size step regardless of how big the range went.
     if layout == "thirds":
-        return int(TW * 0.44)
+        return int(TW * 0.56)
     if layout == "edge":
-        return int(TW * 0.62)
-    return TW - 80   # centered
+        return int(TW * 0.74)
+    return TW - 64   # centered
+
+
+# ── Scene silhouette ────────────────────────────────────────────────────────────
+#
+# The single biggest gap versus competing lofi-channel thumbnails: this
+# generator was pure abstract gradient + text, with no focal subject. Nearly
+# every high-CTR lofi thumbnail (Lofi Girl etc.) leads with a recognizable
+# illustrated scene. Added here as flat, single-tone silhouette shapes built
+# from plain PIL polygon/ellipse primitives -- no external art assets, no AI
+# image generation, same toolkit already used for the rain streaks / neon
+# grid / petals in `_add_theme_fx`.
+
+def _scene_colors(theme: str) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    """(fill, rim) colors for a scene silhouette: a near-black fill (reads as
+    a silhouette regardless of theme tint) and an accent-colored rim used
+    sparingly for backlit edge details (headphone band, steam, vinyl grooves)."""
+    c = THEMES[theme]
+    fill = (
+        max(0, c["bg_top"][0] // 3),
+        max(0, c["bg_top"][1] // 3),
+        max(0, c["bg_top"][2] // 3),
+        235,
+    )
+    rim = (*c["accent"], 100)
+    return fill, rim
+
+
+def _silhouette_listener(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
+    """Person-at-desk-with-headphones bust -- universal fallback subject."""
+    scale = min(w, h)
+    head_r = scale * 0.17
+    head_cy = cy - scale * 0.18
+    shoulder_w = scale * 0.55
+    shoulder_top = head_cy + head_r * 0.7
+    shoulder_bot = cy + scale * 0.42
+    draw.polygon([
+        (cx - shoulder_w * 0.35, shoulder_top),
+        (cx + shoulder_w * 0.35, shoulder_top),
+        (cx + shoulder_w * 0.5, shoulder_bot),
+        (cx - shoulder_w * 0.5, shoulder_bot),
+    ], fill=fill)
+    draw.ellipse([cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r], fill=fill)
+    band_r = head_r * 1.25
+    draw.arc(
+        [cx - band_r, head_cy - band_r * 1.1, cx + band_r, head_cy + band_r * 0.9],
+        200, 340, fill=rim, width=max(2, int(scale * 0.02)),
+    )
+    cup_r = head_r * 0.42
+    draw.ellipse([cx - band_r - cup_r * 0.3, head_cy - cup_r,
+                  cx - band_r + cup_r * 1.1, head_cy + cup_r], fill=fill, outline=rim, width=2)
+    draw.ellipse([cx + band_r - cup_r * 1.1, head_cy - cup_r,
+                  cx + band_r + cup_r * 0.3, head_cy + cup_r], fill=fill, outline=rim, width=2)
+    x0 = cx - shoulder_w * 0.5 - cup_r
+    x1 = cx + shoulder_w * 0.5 + cup_r
+    y0 = head_cy - band_r * 1.1
+    y1 = shoulder_bot
+    return (x0, y0, x1, y1)
+
+
+def _silhouette_cat(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
+    """Sitting cat, side profile, with a curved tail."""
+    scale = min(w, h)
+    body_w, body_h = scale * 0.5, scale * 0.6
+    body_box = [cx - body_w * 0.5, cy - body_h * 0.2, cx + body_w * 0.5, cy + body_h * 0.8]
+    draw.ellipse(body_box, fill=fill)
+    head_r = scale * 0.18
+    head_cx, head_cy = cx + body_w * 0.15, cy - body_h * 0.25
+    draw.ellipse([head_cx - head_r, head_cy - head_r, head_cx + head_r, head_cy + head_r], fill=fill)
+    draw.polygon([
+        (head_cx - head_r * 0.7, head_cy - head_r * 0.6),
+        (head_cx - head_r * 0.2, head_cy - head_r * 1.5),
+        (head_cx + head_r * 0.1, head_cy - head_r * 0.7),
+    ], fill=fill)
+    draw.polygon([
+        (head_cx + head_r * 0.2, head_cy - head_r * 0.7),
+        (head_cx + head_r * 0.6, head_cy - head_r * 1.4),
+        (head_cx + head_r * 0.8, head_cy - head_r * 0.5),
+    ], fill=fill)
+    tail_pts = []
+    for t in range(9):
+        f = t / 8
+        tx = cx - body_w * 0.45 - scale * 0.28 * f
+        ty = cy + body_h * 0.5 - scale * 0.35 * math.sin(f * math.pi * 0.9)
+        tail_pts.append((tx, ty))
+    draw.line(tail_pts, fill=fill, width=max(3, int(scale * 0.045)), joint="curve")
+    xs = [p[0] for p in tail_pts] + [body_box[0], body_box[2]]
+    ys = [p[1] for p in tail_pts] + [body_box[1], head_cy - head_r * 1.5]
+    return (min(xs), min(ys), max(xs), body_box[3])
+
+
+def _silhouette_plant(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
+    """Potted plant, a small fan of leaves radiating up from a pot."""
+    scale = min(w, h)
+    pot_w, pot_h = scale * 0.34, scale * 0.22
+    pot_top = cy + scale * 0.12
+    draw.polygon([
+        (cx - pot_w * 0.5, pot_top), (cx + pot_w * 0.5, pot_top),
+        (cx + pot_w * 0.38, pot_top + pot_h), (cx - pot_w * 0.38, pot_top + pot_h),
+    ], fill=fill)
+    n_leaves = 5
+    leaf_len = scale * 0.42
+    for i in range(n_leaves):
+        ang = math.radians(-90 + (i - (n_leaves - 1) / 2) * 22)
+        tipx = cx + leaf_len * math.sin(ang)
+        tipy = pot_top - leaf_len * math.cos(ang)
+        midx = cx + leaf_len * 0.5 * math.sin(ang) + leaf_len * 0.14 * math.cos(ang)
+        midy = pot_top - leaf_len * 0.5 * math.cos(ang) + leaf_len * 0.14 * math.sin(ang)
+        draw.polygon([(cx, pot_top), (midx, midy), (tipx, tipy)], fill=fill)
+    x0 = cx - leaf_len
+    x1 = cx + leaf_len
+    y0 = pot_top - leaf_len * 1.05
+    y1 = pot_top + pot_h
+    return (x0, y0, x1, y1)
+
+
+def _silhouette_coffee_cup(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
+    """Cup with a handle and bezier-ish curling steam."""
+    scale = min(w, h)
+    cup_w, cup_h = scale * 0.34, scale * 0.28
+    cup_top = cy
+    draw.rounded_rectangle(
+        [cx - cup_w * 0.5, cup_top, cx + cup_w * 0.5, cup_top + cup_h],
+        radius=cup_h * 0.15, fill=fill,
+    )
+    handle_r = cup_h * 0.28
+    draw.ellipse(
+        [cx + cup_w * 0.5 - handle_r * 0.4, cup_top + cup_h * 0.25,
+         cx + cup_w * 0.5 + handle_r * 1.3, cup_top + cup_h * 0.85],
+        outline=fill, width=max(3, int(scale * 0.03)),
+    )
+    steam_top = cup_top - scale * 0.06
+    for i, dx in enumerate((-0.18, 0.0, 0.18)):
+        pts = []
+        for t in range(10):
+            f = t / 9
+            sx = cx + cup_w * dx + math.sin(f * math.pi * 2.2 + i) * scale * 0.03
+            sy = steam_top - f * scale * 0.34
+            pts.append((sx, sy))
+        draw.line(pts, fill=rim, width=max(2, int(scale * 0.012)), joint="curve")
+    x0 = cx - cup_w * 0.5 - handle_r * 0.3
+    x1 = cx + cup_w * 0.5 + handle_r * 1.3
+    y0 = steam_top - scale * 0.34
+    y1 = cup_top + cup_h
+    return (x0, y0, x1, y1)
+
+
+def _silhouette_vinyl_cassette(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
+    """Spinning vinyl record: disc + concentric grooves + label."""
+    scale = min(w, h)
+    r = scale * 0.4
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
+    for frac in (0.78, 0.6, 0.42):
+        draw.ellipse([cx - r * frac, cy - r * frac, cx + r * frac, cy + r * frac],
+                      outline=rim, width=1)
+    label_r = r * 0.28
+    draw.ellipse([cx - label_r, cy - label_r, cx + label_r, cy + label_r], fill=rim)
+    hole_r = r * 0.04
+    draw.ellipse([cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r], fill=fill)
+    return (cx - r, cy - r, cx + r, cy + r)
+
+
+def _silhouette_window_scene(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
+    """Window frame with a small skyline glimpsed through the lower pane."""
+    scale = min(w, h)
+    fw, fh = scale * 0.6, scale * 0.82
+    x0, y0, x1, y1 = cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2
+    frame_w = max(4, int(scale * 0.035))
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=scale * 0.03, outline=fill, width=frame_w)
+    draw.line([(cx, y0), (cx, y1)], fill=fill, width=frame_w)
+    my = y0 + (y1 - y0) * 0.55
+    draw.line([(x0, my), (x1, my)], fill=fill, width=frame_w)
+    n = 4
+    pane_w = (x1 - x0) / n
+    for i in range(n):
+        bx0 = x0 + pane_w * i + 3
+        bx1 = x0 + pane_w * (i + 1) - 3
+        bh  = (fh * 0.5) * rng.uniform(0.25, 0.55)
+        draw.rectangle([bx0, y1 - bh, bx1, y1 - 2], fill=fill)
+    return (x0, y0, x1, y1)
+
+
+# Per-theme scene pools -- deterministic index picks a scene that fits the
+# theme's setting (rain -> window, house/vaporwave -> vinyl, cozy themes ->
+# cat/plant/coffee), same "pick from a themed pool via stable hash" pattern
+# TITLE_TEMPLATES already uses.
+SCENE_POOL = {
+    "cozy_rain":      ("window_scene", "listener", "coffee_cup"),
+    "midnight_cafe":  ("coffee_cup", "listener", "vinyl_cassette"),
+    "purple_dusk":    ("listener", "vinyl_cassette", "plant"),
+    "amber_night":    ("coffee_cup", "plant", "listener"),
+    "winter_snow":    ("window_scene", "cat", "listener"),
+    "autumn_study":   ("plant", "cat", "coffee_cup"),
+    "spring_dawn":    ("plant", "cat", "listener"),
+    "neon_tokyo":     ("window_scene", "vinyl_cassette", "listener"),
+    "summer_lofi":    ("plant", "listener", "vinyl_cassette"),
+    "blue_hour":      ("listener", "window_scene", "vinyl_cassette"),
+    "forest_rain":    ("window_scene", "cat", "plant"),
+    "sakura_night":   ("plant", "listener", "cat"),
+    "vaporwave":      ("vinyl_cassette", "listener", "window_scene"),
+    "lofi_house":     ("vinyl_cassette", "listener", "coffee_cup"),
+    "lofi_classical": ("vinyl_cassette", "listener", "plant"),
+    "bedroom_pop":    ("listener", "vinyl_cassette", "plant"),
+    "lofi_rnb":       ("vinyl_cassette", "coffee_cup", "listener"),
+}
+
+_SCENE_FUNCS = {
+    "listener":      _silhouette_listener,
+    "cat":           _silhouette_cat,
+    "plant":         _silhouette_plant,
+    "coffee_cup":    _silhouette_coffee_cup,
+    "vinyl_cassette": _silhouette_vinyl_cassette,
+    "window_scene":  _silhouette_window_scene,
+}
+
+
+def _select_scene(theme_name: str, variant: int) -> str:
+    """Deterministically pick a scene from (theme_name, variant), same
+    reproducibility guarantee as `_select_layout`/`_select_side`."""
+    pool = SCENE_POOL.get(theme_name, ("listener", "vinyl_cassette", "plant"))
+    idx = (_stable_int(theme_name + "|scene") + variant) % len(pool)
+    return pool[idx]
+
+
+def _scene_slot(layout: str, side: str) -> tuple[int, int, int, int]:
+    """Region (cx, cy, max_w, max_h) on the side opposite the text card where
+    a scene silhouette can be drawn without touching it."""
+    opp = "right" if side == "left" else "left"
+    if layout == "thirds":
+        cx = int(TW * (0.76 if opp == "right" else 0.24))
+        return cx, int(TH * 0.46), int(TW * 0.30), int(TH * 0.62)
+    if layout == "edge":
+        cx = int(TW * (0.82 if opp == "right" else 0.18))
+        return cx, int(TH * 0.36), int(TW * 0.30), int(TH * 0.56)
+    # centered: the card spans nearly the full width mid-frame, so there's
+    # only room for a corner accent -- tucked bottom-right, clear of both the
+    # top-left duration badge and the mid-frame card. Pulled in from the
+    # extreme corner (and sized up a bit) so it doesn't disappear into the
+    # heaviest vignette falloff -- a corner accent nobody can see isn't
+    # earning its keep.
+    return int(TW * 0.86), int(TH * 0.80), int(TW * 0.20), int(TH * 0.26)
+
+
+def _check_scene_card_collision(scene_bbox, card_bbox) -> bool:
+    """True if the two axis-aligned boxes overlap."""
+    if scene_bbox is None:
+        return False
+    sx0, sy0, sx1, sy1 = scene_bbox
+    cx0, cy0, cx1, cy1 = card_bbox
+    return sx0 < cx1 and sx1 > cx0 and sy0 < cy1 and sy1 > cy0
+
+
+def _draw_scene_silhouette(
+    img: Image.Image,
+    theme: str,
+    layout: str,
+    side: str,
+    variant: int,
+    rng: np.random.Generator,
+    avoid_bbox: tuple[int, int, int, int],
+) -> tuple[Image.Image, tuple[float, float, float, float] | None]:
+    """
+    Draw a themed silhouette scene into the slot opposite the text card. The
+    collision check runs against the *reserved slot box* before any pixels
+    are drawn (rather than drawing then undoing), shrinking once and finally
+    skipping the scene entirely rather than ever drawing over the card.
+    Returns (img, scene_bbox); scene_bbox is None if nothing was drawn.
+    """
+    scene_name = _select_scene(theme, variant)
+    fn = _SCENE_FUNCS[scene_name]
+    fill, rim = _scene_colors(theme)
+    cx, cy, max_w, max_h = _scene_slot(layout, side)
+
+    for scale_mult in (1.0, 0.65):
+        w, h = int(max_w * scale_mult), int(max_h * scale_mult)
+        reserved = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+        if not _check_scene_card_collision(reserved, avoid_bbox):
+            draw = ImageDraw.Draw(img, "RGBA")
+            bbox = fn(draw, cx, cy, w, h, fill, rim, rng)
+            return img, bbox
+    return img, None
 
 
 # ── Elegant frosted-glass text card ───────────────────────────────────────────
+
+def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
+                    duration: str, layout: str, side: str) -> dict:
+    """
+    Compute the text card's fonts/sizes/position without drawing anything.
+    Font metrics don't depend on image content, so this is deterministic
+    given the same inputs -- callers that need to know the card's real
+    footprint *before* it's drawn (scene silhouette placement) can call this
+    directly and get exactly the geometry `_draw_text_card` will later use.
+    """
+    font_path = _resolve_title_font()
+
+    # Mixed case title — much more elegant than ALL CAPS
+    title_text = short_title.title()
+    sub_text   = f"lofi  ·  {duration}"
+    deco_text  = "*"
+
+    pad_x    = 44
+    pad_top  = 18
+    pad_bot  = 22
+    rule_gap = 10    # gap above and below the accent rule
+
+    max_card_w = _max_card_width(layout)
+    title_font, tw_t, th_t = _fit_title_font(draw, title_text, font_path, max_card_w - pad_x * 2)
+    sub_font   = _load_font(font_path, 30)
+    deco_font  = _load_font(font_path, 26)
+
+    tw_s, th_s = _text_size(draw, sub_text,  sub_font)
+    tw_d, th_d = _text_size(draw, deco_text, deco_font)
+
+    # Card dimensions: pad around the widest element
+    inner_w  = max(tw_t, tw_s, tw_d)
+    card_w   = min(inner_w + pad_x * 2, max_card_w)
+    card_h   = pad_top + th_d + 10 + th_t + rule_gap + 2 + rule_gap + th_s + pad_bot
+
+    card_x, card_y = _card_position(layout, side, card_w, card_h)
+
+    return dict(
+        title_text=title_text, sub_text=sub_text, deco_text=deco_text,
+        title_font=title_font, sub_font=sub_font, deco_font=deco_font,
+        tw_t=tw_t, th_t=th_t, tw_s=tw_s, th_s=th_s, tw_d=tw_d, th_d=th_d,
+        pad_x=pad_x, pad_top=pad_top, pad_bot=pad_bot, rule_gap=rule_gap,
+        card_x=card_x, card_y=card_y, card_w=card_w, card_h=card_h,
+    )
+
 
 def _draw_text_card(
     img: Image.Image,
@@ -552,35 +946,17 @@ def _draw_text_card(
     pixel coordinates, so callers can run a legibility check against exactly
     the region that was drawn.
     """
-    c         = THEMES[theme]
-    font_path = _resolve_title_font()
-
-    # Mixed case title — much more elegant than ALL CAPS
-    title_text = short_title.title()
-    sub_text   = f"lofi  ·  {duration}"
-    deco_text  = "*"
-
+    c    = THEMES[theme]
     draw = ImageDraw.Draw(img, "RGBA")
 
-    pad_x    = 44
-    pad_top  = 18
-    pad_bot  = 22
-    rule_gap = 10    # gap above and below the accent rule
-
-    max_card_w = _max_card_width(layout)
-    title_font, tw_t, th_t = _fit_title_font(draw, title_text, font_path, max_card_w - pad_x * 2)
-    sub_font   = _load_font(font_path, 30)
-    deco_font  = _load_font(font_path, 26)
-
-    tw_s, th_s = _text_size(draw, sub_text,  sub_font)
-    tw_d, th_d = _text_size(draw, deco_text, deco_font)
-
-    # Card dimensions: pad around the widest element
-    inner_w  = max(tw_t, tw_s, tw_d)
-    card_w   = min(inner_w + pad_x * 2, max_card_w)
-    card_h   = pad_top + th_d + 10 + th_t + rule_gap + 2 + rule_gap + th_s + pad_bot
-
-    card_x, card_y = _card_position(layout, side, card_w, card_h)
+    g = _card_geometry(draw, theme, short_title, duration, layout, side)
+    title_text, sub_text, deco_text = g["title_text"], g["sub_text"], g["deco_text"]
+    title_font, sub_font, deco_font = g["title_font"], g["sub_font"], g["deco_font"]
+    tw_t, th_t = g["tw_t"], g["th_t"]
+    tw_s, th_s = g["tw_s"], g["th_s"]
+    tw_d, th_d = g["tw_d"], g["th_d"]
+    pad_x, pad_top, rule_gap = g["pad_x"], g["pad_top"], g["rule_gap"]
+    card_x, card_y, card_w, card_h = g["card_x"], g["card_y"], g["card_w"], g["card_h"]
 
     # Frosted glass: dark semi-transparent rounded rect. `force_solid_dark`
     # ignores the theme's tinted overlay color in favor of a near-black
@@ -607,11 +983,16 @@ def _draw_text_card(
     cur_y += th_d + 10
 
     # ── Title ──
+    # Real stroke_width outline (native since Pillow 6.2, not a hand-rolled
+    # offset-shadow hack) -- researched 2026-08-16: a solid outline is what
+    # every YouTube-thumbnail CTR guide converges on for keeping text
+    # readable at the ~120px-wide grid preview size regardless of what's
+    # behind it, since a soft drop-shadow alone still washes into a busy/
+    # similarly-toned background once downsampled that small.
     tx = card_x + (card_w - tw_t) // 2
-    draw.text((tx + 2, cur_y + 2), title_text, font=title_font,
-              fill=(0, 0, 0, 70))   # shadow
-    draw.text((tx,     cur_y),     title_text, font=title_font,
-              fill=(*c["text_main"], 255))
+    draw.text((tx, cur_y), title_text, font=title_font,
+              fill=(*c["text_main"], 255),
+              stroke_width=max(3, title_font.size // 16), stroke_fill=(0, 0, 0, 235))
     cur_y += th_t + rule_gap
 
     # ── Accent rule ──
@@ -636,7 +1017,14 @@ def _draw_text_card(
 # ML involved -- just numpy on pixel values.
 
 _PREVIEW_W, _PREVIEW_H = 120, 90     # ~ a YouTube grid thumbnail preview
-_MIN_CONTRAST_RATIO    = 3.0         # WCAG AA "large text" threshold
+# Raised 2026-08-16 from 3.0 (bare WCAG AA "large text" minimum, meant for
+# comfortable normal-size reading) to 4.5: every YouTube-thumbnail CTR guide
+# researched converges on ~4.5:1 measured AT the ~120px-wide grid-preview
+# size specifically, a meaningfully higher bar than "technically passes
+# accessibility contrast" -- now that the title also gets a real black
+# stroke_width outline (see _draw_text_card), this should be comfortably
+# hit more often instead of routinely tripping the force_solid_dark fallback.
+_MIN_CONTRAST_RATIO    = 4.5
 
 
 def _relative_luminance(rgb) -> float:
@@ -685,6 +1073,37 @@ def _check_card_legibility(
     return ratio >= min_ratio, ratio
 
 
+# ── Whole-frame brightness check ────────────────────────────────────────────────
+#
+# Same WCAG-luminance math as `_relative_luminance`, applied to the entire
+# frame instead of one text/background pair -- catches the frame as a whole
+# rendering too dark to read in the YouTube grid (or, less likely with this
+# palette style, blown out), independent of whether the text card itself
+# passes its own contrast check.
+
+# Calibrated 2026-08-19 against real output across all 17 themes (measured
+# range ~3.5-9.0 on this WCAG-luma 0-255 scale) rather than guessed -- the
+# whole-frame mean is dominated by the deliberately near-black night-sky
+# background (only the small text card is bright), so a "normal reading
+# room" luma floor like 28 would trip on every single legitimate render.
+# These bounds exist to catch an actual bug (e.g. an all-black frame from a
+# broken draw call, or a blown-out one), not to police this art style's
+# intentional moodiness.
+_MIN_MEAN_LUMA = 1.5
+_MAX_MEAN_LUMA = 200.0
+
+
+def _check_brightness(img: Image.Image,
+                       min_luma: float = _MIN_MEAN_LUMA,
+                       max_luma: float = _MAX_MEAN_LUMA) -> tuple[bool, float]:
+    """Mean WCAG luma (0-255 scale) of the final frame. Returns (passes, mean_luma)."""
+    arr  = np.asarray(img.convert("RGB"), dtype=np.float64) / 255.0
+    lin  = np.where(arr <= 0.03928, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
+    luma = 0.2126 * lin[:, :, 0] + 0.7152 * lin[:, :, 1] + 0.0722 * lin[:, :, 2]
+    mean_luma = float(luma.mean()) * 255.0
+    return (min_luma <= mean_luma <= max_luma), mean_luma
+
+
 # ── Watermark ─────────────────────────────────────────────────────────────────
 
 _WATERMARK_OV = None
@@ -701,8 +1120,21 @@ def _draw_watermark(img: Image.Image) -> Image.Image:
             else _resolve_title_font(),
             20,
         )
+        # Small soundwave glyph mark ahead of the wordmark -- gives the
+        # watermark a consistent recognizable *shape* (not just a text
+        # string) across every theme, for channel recognition at a glance.
+        gx, gy = 32, TH - 58
+        bar_w  = 3
+        heights = (7, 13, 9, 16, 6)
+        for i, bh in enumerate(heights):
+            bx = gx + i * (bar_w + 3)
+            d.rounded_rectangle(
+                [bx, gy + (16 - bh), bx + bar_w, gy + 16],
+                radius=1, fill=(210, 210, 210, 130),
+            )
+
         text = "lofi factory"
-        x, y = 32, TH - 38
+        x, y = gx + len(heights) * (bar_w + 3) + 6, TH - 38
         d.text((x + 1, y + 1), text, fill=(0, 0, 0, 80), font=font)
         d.text((x, y),         text, fill=(210, 210, 210, 100), font=font)
         _WATERMARK_OV = np.array(ov)
@@ -753,12 +1185,31 @@ def generate_thumbnail(
 
     ts       = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
     out_path = os.path.join(ASSETS_DIR, f"thumb_{theme_name}_{ts}.jpg")
+    # run.py calls this twice back-to-back for the main/alt A/B pair
+    # (confirmed 2026-08-16), and each call comfortably finishes well under a
+    # second -- with only second resolution, the alt call's output silently
+    # overwrote the main call's file on disk whenever both landed in the same
+    # wall-clock second (the common case), while run.py kept two Python path
+    # strings that had actually collapsed to one real file, quietly breaking
+    # the A/B thumbnail feature. Waiting out the collision (rather than
+    # adding sub-second precision to the filename) keeps this format exactly
+    # as every other consumer's regex across the codebase expects it
+    # (webui/stats.py's _THUMB_RE, webui/data.py, scripts/assemble_video.py,
+    # generate_seo.py all parse/generate this same `\d{8}_\d{6}` shape) --
+    # not worth touching all of those just to shave off what's normally a
+    # sub-second wait here.
+    while os.path.exists(out_path):
+        time.sleep(0.05)
+        ts       = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(ASSETS_DIR, f"thumb_{theme_name}_{ts}.jpg")
 
     print(f"[THUMB] {theme_name} | '{short_title}' | {duration} | layout={layout}/{side}")
 
     base_img = _build_bg(theme_name, seed)
+    base_img = _apply_bloom(base_img)
     base_img = _add_theme_fx(base_img, theme_name, rng)
     base_img = _apply_vignette(base_img, strength=0.44)
+    base_img = _apply_film_grain(base_img, seed)
     base_img = _draw_duration_badge(base_img, theme_name, duration)
 
     c = THEMES[theme_name]
@@ -767,7 +1218,11 @@ def generate_thumbnail(
     # card-background opacity; if it still fails the small-preview contrast
     # check, fall back to the centered layout with a forced near-black
     # (highest-contrast) card background rather than silently shipping an
-    # unreadable thumbnail.
+    # unreadable thumbnail. The scene silhouette is placed first each attempt,
+    # into the slot opposite whichever (layout, side) that attempt uses, and
+    # is checked against that attempt's real card geometry (via
+    # `_card_geometry`) before a single scene pixel is drawn -- so it can
+    # never end up behind/under the text card.
     attempts = [
         (layout,     side, 155, False),
         (layout,     side, 205, False),
@@ -777,6 +1232,15 @@ def generate_thumbnail(
     img = None
     for i, (lyt, sd, alpha, solid_dark) in enumerate(attempts):
         candidate = base_img.copy()
+        measure_draw = ImageDraw.Draw(candidate, "RGBA")
+        geom = _card_geometry(measure_draw, theme_name, short_title, duration, lyt, sd)
+        pending_card_bbox = (
+            geom["card_x"], geom["card_y"],
+            geom["card_x"] + geom["card_w"], geom["card_y"] + geom["card_h"],
+        )
+        candidate, _scene_bbox = _draw_scene_silhouette(
+            candidate, theme_name, lyt, sd, variant, rng, avoid_bbox=pending_card_bbox,
+        )
         candidate, card_bbox = _draw_text_card(
             candidate, theme_name, short_title, duration,
             layout=lyt, side=sd, glass_alpha=alpha, force_solid_dark=solid_dark,
@@ -792,6 +1256,11 @@ def generate_thumbnail(
             break
 
     img = _draw_watermark(img)
+
+    bright_ok, mean_luma = _check_brightness(img)
+    if not bright_ok:
+        print(f"[THUMB] brightness check out of band (mean_luma={mean_luma:.1f}, "
+              f"expected {_MIN_MEAN_LUMA}-{_MAX_MEAN_LUMA}) -- shipping best effort")
 
     img.save(out_path, "JPEG", quality=95, optimize=True, progressive=True)
     size_kb = os.path.getsize(out_path) // 1024

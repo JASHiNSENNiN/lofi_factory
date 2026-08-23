@@ -10,6 +10,7 @@ Output: output/lofi_TIMESTAMP.mp4
 import os
 import re
 import sys
+import json
 import subprocess
 import glob
 import random
@@ -310,7 +311,88 @@ class _HardTimeout(Exception):
 
 
 _TIME_RE = re.compile(r"time=(\d+):(\d+):(\d+\.?\d*)")
+_SPEED_RE = re.compile(r"speed=\s*([\d.]+)x")
 _STALL_SECS = 600  # kill + report if encode progress hasn't advanced in this long
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dynamic encode-speed tracking — replaces a hardcoded "this box does 0.56x"
+# assumption with a real, self-updating measurement. Confirmed 2026-08-16/17:
+# a code comment near the VAAPI probe below claimed "4.1x realtime hw vs
+# 0.56x sw, measured on this box" but a real production run only achieved
+# ~0.57x with VAAPI actually engaged -- that number was either stale (the EQ-
+# visualizer filter chain got heavier since it was measured) or simply
+# wrong for this exact filter graph. Either way, trusting a hardcoded
+# constant anywhere in this pipeline is how publish.py's AUTO_DURATION_POOL
+# ended up sized for a speed this box doesn't actually deliver. This file is
+# the one place that knows the REAL number, every time, for whatever
+# filter-chain complexity is actually active -- so it's the one place that
+# should own recording it. publish.py reads this to size unattended-mode
+# duration picks dynamically instead of guessing.
+# ─────────────────────────────────────────────────────────────────────────────
+_SPEED_HISTORY_FILE = os.path.join(os.path.dirname(__file__), "..", "assets",
+                                    ".encode_speed_history.json")
+_SPEED_HISTORY_MAX = 8
+
+
+def _tail_speed(log_path: str) -> float | None:
+    """Latest ffmpeg `speed=N.NNx` marker from the tail of the log -- same
+    read pattern as _tail_progress_secs."""
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode(errors="replace")
+    except Exception:
+        return None
+    matches = _SPEED_RE.findall(tail.replace("\r", "\n"))
+    return float(matches[-1]) if matches else None
+
+
+def record_encode_speed_sample(log_path: str, *, used_vaapi: bool) -> None:
+    """Best-effort: append the last observed encode speed from this run
+    (success, stall-kill, or hard-timeout -- whatever's in the log at the
+    moment this is called is a real sample either way) to a small rolling
+    history file, keyed by encoder path since VAAPI/software speeds aren't
+    comparable. Never raises -- a failure here must never affect the render
+    it's measuring."""
+    speed = _tail_speed(log_path)
+    if speed is None or speed <= 0:
+        return
+    try:
+        os.makedirs(os.path.dirname(_SPEED_HISTORY_FILE), exist_ok=True)
+        try:
+            with open(_SPEED_HISTORY_FILE) as f:
+                history = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            history = {}
+        key = "vaapi" if used_vaapi else "software"
+        samples = history.get(key, [])
+        samples.append(speed)
+        history[key] = samples[-_SPEED_HISTORY_MAX:]
+        with open(_SPEED_HISTORY_FILE, "w") as f:
+            json.dump(history, f)
+    except Exception:
+        pass
+
+
+def estimated_encode_speed(*, used_vaapi: bool, default: float = 0.35) -> float:
+    """Median of recent real measurements for this encoder path, or a
+    conservative default if nothing's been measured yet (first-ever run on
+    a fresh box). Median, not mean -- one anomalous sample (box under heavy
+    unrelated load) shouldn't skew the estimate as much as a repeated real
+    trend would."""
+    try:
+        with open(_SPEED_HISTORY_FILE) as f:
+            history = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default
+    samples = history.get("vaapi" if used_vaapi else "software", [])
+    if not samples:
+        return default
+    ordered = sorted(samples)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
 
 
 def _tail_progress_secs(log_path: str) -> float | None:
@@ -330,14 +412,56 @@ def _tail_progress_secs(log_path: str) -> float | None:
     return int(hh) * 3600 + int(mm) * 60 + float(ss)
 
 
+def _graceful_kill(proc: subprocess.Popen, grace_secs: float = 20) -> None:
+    """SIGTERM first, give ffmpeg a real chance to flush and close the
+    output container cleanly, THEN SIGKILL if it still hasn't exited.
+    Confirmed real 2026-08-18: the stall this watchdog catches happens with
+    the encode already at 43195-43196/43200 frames (99.99% done, target
+    duration already reached per -stats `time=`) -- not stuck partway
+    through, stuck AT THE FINISH LINE. A bare proc.kill() (SIGKILL, no
+    chance to clean up) on that state guarantees a truncated file with no
+    moov atom (verified via ffprobe: "moov atom not found", completely
+    unusable) even though the actual encoded content is already almost
+    entirely there. SIGTERM asks ffmpeg to stop NOW and finalize -- which,
+    for a stream that's already essentially finished, is normally fast."""
+    proc.terminate()
+    deadline = _time.time() + grace_secs
+    while _time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        _time.sleep(0.5)
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+
+
+def _output_is_valid(output_video: str) -> bool:
+    """True if ffprobe can actually read a duration out of the file --
+    cheap, real validity check (catches the "moov atom not found" truncated-
+    file case) rather than just checking the file exists/has nonzero size."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", output_video],
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.returncode == 0 and bool(result.stdout.strip())
+    except Exception:
+        return False
+
+
 def _wait_with_stall_watchdog(proc: subprocess.Popen, log_path: str, target_secs: int,
+                               output_video: str | None = None,
                                *, stall_secs: int = _STALL_SECS, poll_interval: float = 15,
                                hard_timeout_secs: int | None = None) -> int:
     """
     Poll an ffmpeg subprocess for real encode progress instead of only enforcing a
-    single total timeout. Kills + raises early if progress genuinely stalls (an
-    encoder-thread deadlock has been observed in practice -- see apply_vhs_grade's
-    comment), rather than waiting out the full hard cap doing nothing.
+    single total timeout. On a genuine stall, tries a graceful shutdown + validity
+    check first -- a stall with an already-valid output means the encode actually
+    finished and this was just ffmpeg failing to exit cleanly, not a real failure
+    (see _graceful_kill's docstring) -- and only raises _StallTimeout if that
+    doesn't recover a usable file. hard_timeout_secs stays a hard proc.kill(): a
+    stall this late/long isn't the "basically done" case this recovery targets.
 
     stall_secs/poll_interval/hard_timeout_secs are overridable for testing; production
     callers should rely on the defaults.
@@ -363,8 +487,12 @@ def _wait_with_stall_watchdog(proc: subprocess.Popen, log_path: str, target_secs
             last_progress = cur
             last_progress_at = now
         elif now - last_progress_at > stall_secs:
-            proc.kill()
-            proc.wait()
+            _graceful_kill(proc)
+            if output_video and _output_is_valid(output_video):
+                print(f"  [ASSEMBLE] Encode stalled at {last_progress:.0f}/{target_secs}s but "
+                      "the output is actually valid (finished, just didn't exit cleanly) -- "
+                      "treating this as a completed encode, not a failure.")
+                return 0
             raise _StallTimeout(last_progress)
 
         _time.sleep(poll_interval)
@@ -374,19 +502,64 @@ _VAAPI_DEVICE = "/dev/dri/renderD128"
 _vaapi_checked: bool | None = None  # cached per-process; probing costs ~1s
 
 
+_VAAPI_STATUS_FILE = os.path.join(os.path.dirname(__file__), "..", "assets", ".vaapi_status.json")
+
+
+def disable_vaapi(reason: str) -> None:
+    """Persist a real, evidence-based decision to stop using VAAPI on this
+    box -- called from apply_vhs_grade's _StallTimeout handler below.
+    Confirmed 2026-08-18: a VAAPI encode on this box reached 43196/43200
+    frames (99.99% done, the -stats `time=` counter already at the full
+    target) and then froze completely for 600s+ until the stall-watchdog
+    killed it -- a finalization deadlock, not slowness. Three independent
+    real-run measurements this session (0.568x, 0.527x, 0.484x) also never
+    once beat this same file's own "software" baseline number (0.56x) in
+    the comment this replaced, meaning the claimed ~7x VAAPI speedup was
+    never actually materializing here anyway (the CPU-bound EQ-visualizer/
+    blur/blend filter chain dominates regardless of which encoder does the
+    final H.264 step) -- so there's no upside being traded away, only a
+    real hang being removed. Not per-process/in-memory: this must survive
+    across the many separate `python run.py`/`publish.py auto` invocations
+    that each start a fresh process and re-probe from scratch."""
+    global _vaapi_checked
+    _vaapi_checked = False
+    try:
+        os.makedirs(os.path.dirname(_VAAPI_STATUS_FILE), exist_ok=True)
+        with open(_VAAPI_STATUS_FILE, "w") as f:
+            json.dump({"disabled": True, "reason": reason,
+                       "at": datetime.datetime.now(datetime.timezone.utc).isoformat()}, f)
+    except Exception:
+        pass
+
+
+def _vaapi_disabled_reason() -> str | None:
+    try:
+        with open(_VAAPI_STATUS_FILE) as f:
+            state = json.load(f)
+        return state.get("reason") if state.get("disabled") else None
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
 def _vaapi_available() -> bool:
     """
     Real capability probe (not just checking the device file exists) for
-    Intel/AMD VAAPI H.264 hardware encoding. Measured ~7x faster than the
-    software libx264 path on this box's Intel Quick Sync (4.1x realtime vs
-    0.56x). Cached after the first call. Must fail closed (return False) on
-    any error -- missing device, missing driver, no permission, or a VPS
-    with no GPU passthrough at all are all normal and should silently fall
-    back to the software path, not break the render.
+    Intel/AMD VAAPI H.264 hardware encoding. Cached after the first call
+    per-process; also checks the persisted disable_vaapi() flag first,
+    which -- unlike this cache -- survives across separate process
+    invocations. Must fail closed (return False) on any error -- missing
+    device, missing driver, no permission, a VPS with no GPU passthrough,
+    or a previously-confirmed hang on THIS box are all reasons to silently
+    fall back to the software path, not break the render.
     """
     global _vaapi_checked
     if _vaapi_checked is not None:
         return _vaapi_checked
+    reason = _vaapi_disabled_reason()
+    if reason:
+        print(f"  [VAAPI] Disabled ({reason}) — using software encode.")
+        _vaapi_checked = False
+        return False
     if not os.path.exists(_VAAPI_DEVICE):
         _vaapi_checked = False
         return False
@@ -537,7 +710,11 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
                 "-stats",
                 output_video,
             ], stdout=log_fh, stderr=log_fh)
-            returncode = _wait_with_stall_watchdog(proc, log_path, target_secs)
+            returncode = _wait_with_stall_watchdog(proc, log_path, target_secs, output_video)
+        # Record whatever real speed was achieved regardless of outcome --
+        # even a failed/killed run's last progress line is real data about
+        # what this box can actually do with this filter chain right now.
+        record_encode_speed_sample(log_path, used_vaapi=use_vaapi)
         if returncode != 0:
             print(f"[ASSEMBLE] ffmpeg failed (exit {returncode}) — last lines of {log_path}:")
             try:
@@ -552,6 +729,15 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
         except Exception:
             pass
     except _StallTimeout as e:
+        record_encode_speed_sample(log_path, used_vaapi=use_vaapi)
+        if use_vaapi:
+            # Confirmed real 2026-08-18: a VAAPI encode stalling essentially
+            # AT completion (e.last_progress landing at/near target_secs, as
+            # opposed to stalling partway through) is a finalization
+            # deadlock signature specific to the hardware path, not generic
+            # slowness -- stop trying VAAPI on this box going forward
+            # instead of hanging the same way on every future run.
+            disable_vaapi(f"stalled at {e.last_progress:.0f}/{target_secs}s on {datetime.datetime.now(datetime.timezone.utc).date()}")
         raise RuntimeError(
             f"[ASSEMBLE] Video grade stalled — no encode progress for {_STALL_SECS}s "
             f"(stuck at {e.last_progress:.0f}/{target_secs}s, process killed). This is a "
@@ -560,6 +746,7 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
             "rerun with a fresh temp dir."
         ) from None
     except _HardTimeout:
+        record_encode_speed_sample(log_path, used_vaapi=use_vaapi)
         raise RuntimeError(
             f"[ASSEMBLE] Video grade timed out after {target_secs * 12}s — "
             "input video may be corrupt or hardware is too slow."

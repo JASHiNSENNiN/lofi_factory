@@ -10,7 +10,21 @@ down the fail-closed behavior, which is what protects every deployment
 target that *doesn't* have a usable GPU (the common case per DEPLOYMENT.md's
 generic-VPS target) from ever being broken by this feature.
 """
+import pytest
+
 from scripts import assemble_video as av
+
+
+@pytest.fixture(autouse=True)
+def _isolate_vaapi_status(tmp_path, monkeypatch):
+    """assemble_video.py now persists a disable_vaapi() flag to
+    assets/.vaapi_status.json (confirmed real on this box 2026-08-18: a
+    VAAPI encode deadlocked at 99.99% done, so this box's real flag is now
+    permanently set) -- point every test in this file at a scratch path
+    that doesn't exist, so they exercise the probe/cache behavior these
+    tests are actually about, independent of this box's real persisted
+    state."""
+    monkeypatch.setattr(av, "_VAAPI_STATUS_FILE", str(tmp_path / ".vaapi_status.json"))
 
 
 def test_vaapi_unavailable_when_device_missing(monkeypatch):

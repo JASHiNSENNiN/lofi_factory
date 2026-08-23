@@ -59,12 +59,16 @@ def test_generate_scale_low_steps_are_darker_than_high_steps():
 
 
 def test_generate_scale_preserves_hue_family():
-    # amber's scale should stay in the red/orange family (not drift to e.g. blue)
-    scale = theme.generate_scale(theme.PRIMARY)
-    for step in (5, 7, 9, 11):
-        h = scale[step].lstrip("#")
-        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
-        assert r >= g >= b  # warm amber: red channel dominant, blue weakest
+    # Every step's hue should stay close to the base hue (not drift to an
+    # unrelated color) -- hue-agnostic so it holds for whatever PRIMARY/etc.
+    # currently is, rather than hardcoding one palette's RGB channel order.
+    for base in (theme.PRIMARY, theme.SECONDARY, theme.TEAL, theme.ROSE, theme.INFO):
+        base_hue, _, _ = theme._hex_to_hsl(base)
+        scale = theme.generate_scale(base)
+        for step in (5, 7, 9, 11):
+            step_hue, _, _ = theme._hex_to_hsl(scale[step])
+            delta = min(abs(step_hue - base_hue), 1 - abs(step_hue - base_hue))
+            assert delta < 0.03, f"{base} step {step} hue drifted: {base_hue} -> {step_hue}"
 
 
 def test_scale_lookup_matches_generated_dict():

@@ -27,14 +27,70 @@ real production incident that pattern is there to avoid).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from datetime import datetime, timezone
 
 import apprise
+
+from . import config
 
 logger = logging.getLogger(__name__)
 
 ALERT_ENV_KEY = "LOFI_STREAM_ALERT_WEBHOOK"
+
+# Persistent record of every alert attempt (sent or not), independent of
+# whether a webhook is even configured -- confirmed 2026-08-17: this app's
+# alert system could fail (or simply have nothing configured) completely
+# silently, with zero trace anywhere in the web UI itself. This is that
+# trace: view_logs' Alerts card reads it, so "did anything even try to
+# alert me" is answerable from the site itself, not just by trusting an
+# external Slack/Discord channel actually received something.
+_ALERT_LOG = os.path.join(config.ASSETS_DIR, "alerts_log.jsonl")
+_MAX_LOG_LINES = 200
+
+
+def _log_alert(title: str, body: str, *, sent: bool, configured_: bool) -> None:
+    """Best-effort append -- logging an alert must never be why the alert
+    itself fails to send, so this is called after the real send attempt and
+    swallows its own errors."""
+    try:
+        os.makedirs(config.ASSETS_DIR, exist_ok=True)
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "title": title,
+            "body": body[:2000],
+            "sent": sent,
+            "configured": configured_,
+        }
+        with open(_ALERT_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        logger.exception("alerts: failed to append to alert log")
+
+
+def recent(n: int = 50) -> list[dict]:
+    """Most-recent-first alert history for the Logs page. Best-effort: a
+    missing/corrupt log file just means no history yet, not an error."""
+    if not os.path.exists(_ALERT_LOG):
+        return []
+    try:
+        with open(_ALERT_LOG) as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines[-max(n, _MAX_LOG_LINES):]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    out.reverse()
+    return out[:n]
 
 # How many trailing log lines to include in a job-failure notification body —
 # enough to see the actual error, not so much it blows past most providers'
@@ -74,16 +130,18 @@ def send_sync(title: str, body: str, *, urls: list[str] | None = None) -> bool:
     notification, False if nothing is configured or every send failed.
     Never raises — alerting failures must never take down the caller."""
     urls = _urls_from_env() if urls is None else urls
-    if not urls:
-        return False
-    ap = _build(urls)
-    if ap is None:
-        return False
+    configured_ = bool(urls)
+    sent = False
     try:
-        return bool(ap.notify(title=title, body=body))
+        if urls:
+            ap = _build(urls)
+            if ap is not None:
+                sent = bool(ap.notify(title=title, body=body))
     except Exception:
         logger.exception("alerts: apprise notify() raised")
-        return False
+    finally:
+        _log_alert(title, body, sent=sent, configured_=configured_)
+    return sent
 
 
 async def send(title: str, body: str, *, urls: list[str] | None = None) -> bool:

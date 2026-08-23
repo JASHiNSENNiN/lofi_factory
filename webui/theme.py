@@ -1,13 +1,15 @@
 """
-theme.py — "Lofi Studio" design system for the Lo-fi Factory panel.
+theme.py — design system for the Lo-fi Factory control panel.
 
-A warm, cozy creator-studio look: deep plum-charcoal background with an amber
-glow, cream text, a persistent left sidebar, a "Now Rendering" hero, glass-warm
-stat + library cards, and an animated waveform. Call ``apply()`` per page.
+A dense, flat, technical look: near-black background, monospace throughout,
+thin 1px borders, sharp corners, no blur/glow/gradients. This is an ops
+console for a pipeline (job status, systemd health, upload analytics) --
+viewers of the actual YouTube output never see this UI, so it's built to
+read as a monitoring tool, not a branded consumer app.
 
 Design tokens live here so app.py never has to know a raw hex code, a magic
 pixel value, or reinvent a card/row/nav pattern -- it only ever reaches for a
-named class or a helper function. See DESIGN.md for the full spec.
+named class or a helper function.
 """
 from __future__ import annotations
 
@@ -22,14 +24,16 @@ from nicegui import ui
 # constants stay around as the "step 9 / solid" shade for call sites that just
 # want *the* brand color (e.g. an echarts series color, which can't reach into
 # CSS custom properties).
-PRIMARY = "#e8a45c"    # warm amber — primary CTAs
-SECONDARY = "#b6a6e0"  # dusty lavender — secondary
-TEAL = "#6fcaa8"       # positive / healthy / live-good
-ROSE = "#e8849a"       # negative / stop
-INFO = "#8fb8e8"
-MUTED = "#a89db5"      # de-emphasized text (chart axes, timestamps, hints)
-BG = "#15121c"
-SURFACE = "#211b2b"
+# Functional, not decorative: a cool technical blue for actions, desaturated
+# slate for secondary, and clear/legible status colors -- no warm/"cozy" hues.
+PRIMARY = "#3b9eff"    # technical blue — primary CTAs
+SECONDARY = "#7c8797"  # slate — secondary
+TEAL = "#3ecf8e"       # positive / healthy / live-good
+ROSE = "#e5484d"       # negative / stop
+INFO = "#22b8cf"
+MUTED = "#7a7a85"      # de-emphasized text (chart axes, timestamps, hints)
+BG = "#0a0a0c"
+SURFACE = "#131316"
 
 CARD = "studio-card w-full"
 H = "studio-h"
@@ -136,33 +140,30 @@ _ROOT_SCALE_VARS, _SCALE_UTILS = _generate_css()
 
 _CSS = """
 :root{
-  --bg:#15121c; --bg2:#1b1626; --sidebar:#100d16;
-  --surface:rgba(40,32,54,0.66); --surface2:rgba(54,44,72,0.7);
-  --border:rgba(232,164,92,0.16); --border2:rgba(182,166,224,0.18);
-  --amber-wash:rgba(232,164,92,0.08);
-  --text:#f3ede2; --muted:#a89db5;
-  --amber:#e8a45c; --lav:#b6a6e0; --teal:#6fcaa8; --rose:#e8849a; --info:#8fb8e8;
+  --bg:#0a0a0c; --bg2:#0d0d10; --sidebar:#08080a;
+  --surface:#131316; --surface2:#1a1a1e;
+  --border:#26262b; --border2:#2c2c32;
+  --amber-wash:rgba(59,158,255,0.08);
+  --text:#e4e4e7; --muted:#7a7a85;
+  --amber:#3b9eff; --lav:#7c8797; --teal:#3ecf8e; --rose:#e5484d; --info:#22b8cf;
 
-  /* ── 4/8pt spacing scale, sized around this app's real hardcoded paddings
-     (card 20/22, hero 22/24, stat 16/18) so tokens replace values already in
-     use rather than inventing new ones. ── */
-  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
-  --space-5:20px; --space-6:24px; --space-7:32px; --space-8:40px;
+  /* ── Tight spacing scale -- dense/technical over spacious/"cozy": every
+     card/hero/stat rule below reads its padding straight from these, so
+     halving them here tightens the whole app without touching app.py. ── */
+  --space-1:2px; --space-2:4px; --space-3:6px; --space-4:8px;
+  --space-5:10px; --space-6:12px; --space-7:16px; --space-8:20px;
 
 """ + _ROOT_SCALE_VARS + """
 }
 body,.q-page,.nicegui-content,.q-tab__label,.q-btn__content,.q-field,.q-item,
 input,button,textarea,select,h1,h2,h3,h4,p,span,div,label{
-  font-family:'Inter',system-ui,sans-serif;
+  font-family:'JetBrains Mono',ui-monospace,'SF Mono',Consolas,monospace;
 }
 .q-icon,.material-icons,.material-symbols-outlined,.notranslate{
   font-family:'Material Icons' !important;
 }
 body,.q-page,.nicegui-content{
-  background:
-    radial-gradient(1200px 600px at 8% -10%, rgba(232,164,92,0.13), transparent 58%),
-    radial-gradient(1000px 620px at 108% 4%, rgba(182,166,224,0.10), transparent 55%),
-    var(--bg) !important;
+  background:var(--bg) !important;
   color:var(--text);
 }
 
@@ -186,28 +187,26 @@ body,.q-page,.nicegui-content{
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
 .studio-sidebar{
-  background:linear-gradient(180deg,#15101e,#100d16) !important;
-  border-right:1px solid var(--border); width:230px;
+  background:var(--sidebar) !important;
+  border-right:1px solid var(--border); width:220px;
 }
 .appbar-mobile{ background:var(--sidebar) !important; border-bottom:1px solid var(--border); }
-.studio-brand{ font-weight:800; letter-spacing:.5px; font-size:1.05rem; }
+.studio-brand{ font-weight:700; letter-spacing:.5px; font-size:.95rem; }
 .nav-item{
-  display:flex; align-items:center; gap:12px; padding:10px 14px; border-radius:12px;
-  color:var(--muted); cursor:pointer; font-weight:550; transition:all .15s; user-select:none;
+  display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:3px;
+  color:var(--muted); cursor:pointer; font-weight:500; transition:background .1s, color .1s;
+  user-select:none; border-left:2px solid transparent;
 }
-.nav-item:hover{ background:rgba(255,255,255,0.04); color:var(--text); }
+.nav-item:hover{ background:var(--surface2); color:var(--text); }
 .nav-item.active{
-  background:linear-gradient(100deg,rgba(232,164,92,0.20),rgba(182,166,224,0.10));
-  color:var(--text); box-shadow:inset 0 0 0 1px var(--border);
+  background:var(--surface2); color:var(--text); border-left:2px solid var(--amber);
 }
-.nav-item .q-icon{ font-size:20px; }
+.nav-item .q-icon{ font-size:18px; }
 
 /* ── Cards ───────────────────────────────────────────────────────────────── */
 .studio-card{
   background:var(--surface) !important; border:1px solid var(--border2);
-  border-radius:20px; padding:var(--space-5) var(--space-6);
-  box-shadow:0 14px 40px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.04);
-  backdrop-filter:blur(12px);
+  border-radius:3px; padding:var(--space-5) var(--space-6);
 }
 /* tone modifiers for theme.card(tone=...) -- e.g. a "connect your account"
    nudge banner -- instead of a one-off inline background style() bypass. */
@@ -215,98 +214,98 @@ body,.q-page,.nicegui-content{
 
 /* ── Hero "Now Rendering" ────────────────────────────────────────────────── */
 .hero{
-  background:
-    radial-gradient(700px 220px at 0% 0%, rgba(232,164,92,0.14), transparent 60%),
-    var(--surface) !important;
-  border:1px solid var(--border); border-radius:24px; padding:var(--space-6) var(--space-6);
-  box-shadow:0 18px 50px rgba(0,0,0,0.42);
+  background:var(--surface) !important;
+  border:1px solid var(--border); border-radius:3px; padding:var(--space-6) var(--space-6);
 }
 .hero-art{
-  width:148px; height:148px; border-radius:18px; object-fit:cover;
-  box-shadow:0 10px 28px rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08);
+  width:120px; height:120px; border-radius:3px; object-fit:cover;
+  border:1px solid var(--border2);
 }
 .hero-art-empty{
   display:flex; align-items:center; justify-content:center;
-  background:linear-gradient(135deg,#2a2238,#1c1726); font-size:46px;
+  background:var(--surface2); font-size:.7rem; color:var(--muted); letter-spacing:1px;
 }
 
 /* ── Stat cards ──────────────────────────────────────────────────────────── */
 .stat{
   background:var(--surface) !important; border:1px solid var(--border2);
-  border-radius:18px; padding:var(--space-4) var(--space-5); min-width:0;
+  border-radius:3px; padding:var(--space-4) var(--space-5); min-width:0;
 }
 
 /* ── Library cards ───────────────────────────────────────────────────────── */
 .libcard{
-  position:relative; border-radius:16px; overflow:hidden; cursor:pointer;
-  transition:transform .16s, box-shadow .16s;
+  position:relative; border-radius:3px; overflow:hidden; cursor:pointer;
+  transition:border-color .12s;
   border:1px solid var(--border2); background:var(--surface);
 }
-.libcard:hover{ transform:translateY(-3px); box-shadow:0 16px 34px rgba(0,0,0,0.5); }
+.libcard:hover{ border-color:var(--amber); }
 .libcard img{ width:100%; aspect-ratio:16/9; object-fit:cover; display:block; }
 .libcard .meta{ padding:8px 12px; }
 .libcard .meta .t{ font-size:.82rem; font-weight:600; color:var(--text);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .libcard .meta .d{ font-size:.7rem; color:var(--muted); }
 .libcard-media{ position:relative; }
-.libcard-del{ position:absolute; top:6px; right:6px; background:rgba(20,14,26,0.55); }
+.libcard-del{ position:absolute; top:6px; right:6px; background:rgba(0,0,0,0.6); }
 
 /* ── Detail-dialog player (image/video/iframe share the same frame look) ──── */
-.detail-media{ width:100%; border-radius:14px; border:0; }
+.detail-media{ width:100%; border-radius:3px; border:0; }
 
 /* ── Inline code/value chip (redirect URIs, IDs, etc.) ──────────────────── */
-.code-chip{ background:rgba(0,0,0,.35); padding:3px 8px; border-radius:8px; }
+.code-chip{ background:rgba(0,0,0,.4); padding:3px 8px; border-radius:3px; }
 
 /* ── Loose list rows (Samples tracks/visuals -- title+meta stacked above a
    media player, unlike the flat-column .data-row pseudo-table) ──────────── */
-.list-row{ padding:10px 4px; border-bottom:1px solid rgba(255,255,255,0.06); }
+.list-row{ padding:10px 4px; border-bottom:1px solid var(--border); }
 .sample-audio{ width:100%; height:32px; }
-.sample-video{ width:100%; border-radius:12px; }
-
-/* ── Waveform (animated) ─────────────────────────────────────────────────── */
-.wave{ display:flex; align-items:center; gap:3px; height:34px; }
-.wave i{ width:3px; border-radius:3px; background:linear-gradient(var(--amber),var(--lav));
-  animation:wv 1s ease-in-out infinite; }
-@keyframes wv{ 0%,100%{ height:6px; opacity:.5 } 50%{ height:30px; opacity:1 } }
-.wave.paused i{ animation-play-state:paused; height:6px; opacity:.35; }
+.sample-video{ width:100%; border-radius:3px; }
 
 /* ── Pills / chips ───────────────────────────────────────────────────────── */
-.pill{ border-radius:999px; padding:3px 12px; font-size:.76rem; font-weight:650;
-  border:1px solid rgba(255,255,255,0.10); background:rgba(0,0,0,0.22); }
+.pill{ border-radius:3px; padding:2px 8px; font-size:.72rem; font-weight:650;
+  border:1px solid var(--border2); background:var(--bg2); letter-spacing:.5px; }
 
 /* ── Data rows (pseudo-table) ────────────────────────────────────────────── */
 /* Shared implementation for theme.data_row() -- replaces the column-width
    pattern (ui.row().style("min-width:...px")) independently reinvented across
    Runs/Analytics/A-B-testing lists. .table-scroll makes the wrapping
    container scroll horizontally on narrow viewports instead of clipping. */
-.table-scroll{ overflow-x:auto; }
+/* Right-edge fade hints there's more to see without needing to already know
+   to swipe -- narrow/mobile viewports routinely clip data-row's later
+   columns (confirmed 2026-08-16: a failed job's reason column was fully
+   present in the DOM and scrollable, just invisible with no affordance
+   hinting that). Always-on rather than JS-gated on actual overflow -- on a
+   row that doesn't overflow this just fades into nothing, harmless. */
+.table-scroll{ overflow-x:auto; position:relative; }
+.table-scroll::after{
+  content:""; position:absolute; top:0; right:0; bottom:0; width:20px;
+  background:linear-gradient(to right, transparent, var(--surface));
+  pointer-events:none;
+}
 .data-row{ display:flex; align-items:center; gap:12px; flex-wrap:nowrap;
-  padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06); }
+  padding:4px 4px; border-bottom:1px solid var(--border); }
 .data-row--header{ opacity:.6; padding:4px; }
 .col-xs{ min-width:60px; } .col-sm{ min-width:80px; } .col-md{ min-width:100px; }
 .col-lg{ min-width:140px; } .col-xl{ min-width:220px; }
 .col-grow{ flex:2; min-width:220px; }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
-.q-btn{ border-radius:13px; text-transform:none; font-weight:650; letter-spacing:.2px; padding:7px 18px; }
-.q-btn.bg-primary{ background:linear-gradient(135deg,#f0b56e,#e08a3c) !important;
-  color:#231a10 !important; box-shadow:0 8px 22px rgba(232,164,92,0.34); }
-.q-btn.bg-secondary{ background:rgba(182,166,224,0.92) !important; color:#1e1730 !important; }
+.q-btn{ border-radius:3px; text-transform:none; font-weight:600; letter-spacing:.2px; padding:6px 14px; }
+.q-btn.bg-primary{ background:var(--amber) !important; color:#0a0a0c !important; }
+.q-btn.bg-secondary{ background:var(--lav) !important; color:#0a0a0c !important; }
 
 /* ── Log ─────────────────────────────────────────────────────────────────── */
-.studio-log{ background:#0d0b13 !important; border:1px solid var(--border2);
-  border-radius:14px; font-family:'JetBrains Mono',ui-monospace,monospace !important;
-  font-size:11.5px; color:#c9f3df; }
+.studio-log{ background:#000 !important; border:1px solid var(--border2);
+  border-radius:3px; font-family:'JetBrains Mono',ui-monospace,monospace !important;
+  font-size:11.5px; color:#9fe8bd; }
 
-/* progress bar tint */
-.q-linear-progress{ border-radius:999px; }
-.q-field__control{ border-radius:12px !important; }
+/* progress bar / field radius */
+.q-linear-progress{ border-radius:0; }
+.q-field__control{ border-radius:3px !important; }
 """
 
 _HEAD = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 """
 
 
@@ -350,14 +349,6 @@ def card(title: str | None = None, subtitle: str | None = None, classes: str = "
         if subtitle:
             ui.label(subtitle).classes(SUB)
         yield el
-
-
-def waveform(bars: int = 26, paused: bool = False):
-    cls = "wave paused" if paused else "wave"
-    html = "".join(
-        f'<i style="animation-delay:{(i % 13) * 0.07:.2f}s"></i>' for i in range(bars)
-    )
-    return ui.html(f'<div class="{cls}">{html}</div>')
 
 
 # ── Data row (pseudo-table) ──────────────────────────────────────────────────

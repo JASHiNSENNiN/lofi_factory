@@ -61,11 +61,12 @@ _ENGAGEMENT_TTL = 120
 
 
 def video_engagement(video_ids: list[str]) -> dict[str, dict]:
-    """{video_id: {likes, comments}} via one batched videos.list call (up to 50
-    ids per request, chunked if more). Cached per-id for 2 min; safe/no-throw --
-    missing ids on error just aren't included in the returned dict."""
+    """{video_id: {likes, comments, views}} via one batched videos.list call
+    (up to 50 ids per request, chunked if more). Cached per-id for 2 min;
+    safe/no-throw -- missing ids on error just aren't included in the
+    returned dict."""
     now = time.time()
-    fresh = {vid: {"likes": v["likes"], "comments": v["comments"]}
+    fresh = {vid: {"likes": v["likes"], "comments": v["comments"], "views": v.get("views", 0)}
              for vid, v in _engagement_cache.items()
              if vid in video_ids and now - v["at"] < _ENGAGEMENT_TTL}
     stale = [v for v in video_ids if v not in fresh]
@@ -90,6 +91,7 @@ def video_engagement(video_ids: list[str]) -> dict[str, dict]:
                 entry = {
                     "likes": int(st.get("likeCount", 0) or 0),
                     "comments": int(st.get("commentCount", 0) or 0),
+                    "views": int(st.get("viewCount", 0) or 0),
                 }
                 _engagement_cache[item["id"]] = {**entry, "at": now}
                 fresh[item["id"]] = entry
@@ -136,9 +138,21 @@ def _log_index() -> list[dict]:
 
 
 def _video_index() -> list[dict]:
-    """Local rendered mp4s in output/, parsed for their embedded timestamp."""
+    """Local rendered mp4s in output/, parsed for their embedded timestamp.
+
+    Skips any video still being written by ffmpeg (scripts/assemble_video.py
+    writes a sibling `<video>.mp4.grade.log` for the duration of the encode
+    and deletes it on success) -- confirmed 2026-08-16: the render's SEO
+    thumbnail is generated before the final assembly step, so the Library
+    grid already had a real card for the in-progress video (matched by
+    timestamp) while the mp4 itself had no moov atom yet -- unplayable,
+    aborted requests, looked like the gallery's player was just broken.
+    Excluding it here means that card falls back to thumbnail-only until
+    the file is actually done, instead of offering a broken player."""
     out = []
     for path in glob.glob(os.path.join(config.OUTPUT_DIR, "*.mp4")):
+        if os.path.exists(path + ".grade.log"):
+            continue
         m = re.search(r"(\d{8})_(\d{6})", os.path.basename(path))
         if not m:
             continue
@@ -379,6 +393,101 @@ def delete_comment(comment_id: str, *, client=None) -> bool:
         return True
     except Exception:
         return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Edit an already-published video — title/description/tags/privacy, and
+# regenerating + re-pushing its thumbnail. Confirmed 2026-08-16: nothing in
+# this codebase could touch a video after upload at all (publish.py/
+# upload_youtube.py only ever set these once, at upload time) -- the closest
+# YT Studio feature (editing live content) had zero equivalent here, which
+# also meant a thumbnail-generator bug fix couldn't reach anything already
+# published without this.
+# ─────────────────────────────────────────────────────────────────────────────
+def get_video_details(video_id: str, *, client=None) -> dict | None:
+    """Current snippet+status for one video, shaped for the edit dialog.
+    None if the video doesn't exist / API call fails."""
+    try:
+        yt = _yt_client(client)
+        r = yt.videos().list(part="snippet,status", id=video_id).execute()
+        items = r.get("items") or []
+        if not items:
+            return None
+        snippet, status = items[0]["snippet"], items[0]["status"]
+        return {
+            "title": snippet.get("title", ""),
+            "description": snippet.get("description", ""),
+            "tags": snippet.get("tags", []),
+            "category_id": snippet.get("categoryId", "10"),
+            "privacy": status.get("privacyStatus", "public"),
+        }
+    except Exception:
+        return None
+
+
+def update_video(video_id: str, *, title: str, description: str, tags: list[str],
+                  privacy: str, category_id: str = "10", client=None) -> bool:
+    """videos.update — the API requires the full snippet/status resource for
+    any part being updated (not a partial patch), so callers must pass every
+    field, not just the one that changed. Returns True on success."""
+    try:
+        yt = _yt_client(client)
+        yt.videos().update(part="snippet,status", body={
+            "id": video_id,
+            "snippet": {
+                "title": title[:100],
+                "description": description[:4900],
+                "tags": tags,
+                "categoryId": category_id,
+            },
+            "status": {"privacyStatus": privacy},
+        }).execute()
+        return True
+    except Exception:
+        return False
+
+
+def set_video_thumbnail(video_id: str, thumb_path: str, *, client=None) -> bool:
+    """thumbnails.set — pushes a local jpg as the video's thumbnail."""
+    try:
+        from googleapiclient.http import MediaFileUpload
+        yt = _yt_client(client)
+        yt.thumbnails().set(videoId=video_id,
+                             media_body=MediaFileUpload(thumb_path, mimetype="image/jpeg")).execute()
+        return True
+    except Exception:
+        return False
+
+
+def regenerate_thumbnail(video_id: str, title: str) -> str | None:
+    """Re-run the (now-fixed) thumbnail generator for an already-published
+    video, using the theme its original thumbnail was generated with (parsed
+    from the existing thumb_<theme>_<ts>.jpg filename -- upload_log.json
+    doesn't separately record theme) and its actual duration from
+    upload_log.json, so a re-generated thumbnail matches what the video
+    really is. Returns the new local file path, or None if no matching
+    original thumbnail/duration could be found. Does not push to YouTube --
+    call set_video_thumbnail() with the result to do that."""
+    from . import data as _data
+    entries = [e for e in _data.upload_history(limit=10_000) if e.get("video_id") == video_id]
+    if not entries:
+        return None
+    entry = entries[0]
+    thumb_file = entry.get("thumb_file") or ""
+    m = re.match(r"^thumb_(?P<theme>.+)_\d{8}_\d{6}\.jpg$", thumb_file)
+    if not m:
+        return None
+    theme_name = m.group("theme")
+
+    duration_secs = entry.get("duration_secs")
+    duration_label = "2 hours"
+    if duration_secs:
+        from scripts.assemble_video import DURATION_MAP
+        duration_label = min(DURATION_MAP, key=lambda k: abs(DURATION_MAP[k] - duration_secs))
+
+    from scripts.generate_thumbnail_cozy import generate_thumbnail
+    out_path, _ = generate_thumbnail(theme_name=theme_name, duration=duration_label, title=title)
+    return out_path
 
 
 # ── Traffic-source breakdown + subscriber growth (YouTube Analytics API) ──────

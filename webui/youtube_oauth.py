@@ -16,9 +16,17 @@ import os
 
 from . import config
 
-# CSRF state for the in-flight authorization (single-user app → module scope is
-# fine). Set when login starts, checked in the callback.
+# CSRF state + PKCE code_verifier for the in-flight authorization (single-user
+# app → module scope is fine). Set when login starts, consumed in the callback.
+# The verifier matters just as much as the state: google-auth-oauthlib
+# auto-generates a fresh code_verifier per Flow instance and sends its SHA256
+# challenge to Google in authorization_url(). Since handle_callback() builds a
+# *new* Flow to exchange the code, that instance's fetch_token() would send a
+# different (or no) verifier unless we hand the original one back to it --
+# Google then rejects the exchange with "invalid_grant: Missing code
+# verifier" because it can't match the challenge from step 1.
 _pending_state: str | None = None
+_pending_code_verifier: str | None = None
 
 
 def _client_type() -> str | None:
@@ -95,8 +103,8 @@ def _flow():
 
 
 def authorization_url() -> str:
-    """Build the Google consent URL and stash the CSRF state."""
-    global _pending_state
+    """Build the Google consent URL and stash the CSRF state + PKCE verifier."""
+    global _pending_state, _pending_code_verifier
     flow = _flow()
     url, state = flow.authorization_url(
         access_type="offline",
@@ -104,21 +112,36 @@ def authorization_url() -> str:
         prompt="consent",
     )
     _pending_state = state
+    _pending_code_verifier = flow.code_verifier
     return url
 
 
 def handle_callback(code: str, state: str | None) -> None:
     """Exchange the auth code for tokens and persist token.json."""
-    global _pending_state
+    global _pending_state, _pending_code_verifier
     if _pending_state and state and state != _pending_state:
         raise ValueError("OAuth state mismatch — please retry the login.")
     flow = _flow()
+    # Reuse the code_verifier from the Flow that built the authorization URL --
+    # this is a fresh Flow instance, and google-auth-oauthlib's fetch_token()
+    # defaults code_verifier to self.code_verifier (None here unless we set
+    # it), which Google rejects with "invalid_grant: Missing code verifier"
+    # since it can't match the code_challenge sent in step 1.
+    flow.code_verifier = _pending_code_verifier
     # Pass the code directly (not the full redirect URL): the app sees plain HTTP
     # internally behind Cloudflare's TLS termination, so an authorization_response
     # URL would trip oauthlib's https check. The code exchange itself is https.
-    flow.fetch_token(code=code)
+    try:
+        flow.fetch_token(code=code)
+    except Exception as ex:  # noqa: BLE001
+        # oauthlib's OAuth2Error subclasses carry the real reason from Google
+        # (e.g. "Malformed auth code" / "Bad Request") in .description — the
+        # bare exception class name alone isn't enough to diagnose a failure.
+        detail = getattr(ex, "description", "") or str(ex)
+        raise RuntimeError(f"{type(ex).__name__}: {detail}") from ex
     _write_token(flow.credentials)
     _pending_state = None
+    _pending_code_verifier = None
 
 
 def _write_token(creds) -> None:

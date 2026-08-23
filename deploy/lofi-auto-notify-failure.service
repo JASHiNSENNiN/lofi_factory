@@ -1,0 +1,9 @@
+[Unit]
+Description=Push a failure alert when lofi-auto.service fails (see OnFailure= there)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jashin/lofi_factory
+ExecStart=/home/jashin/lofi_factory/venv/bin/python scripts/notify_auto_failure.py
+# Best-effort notification -- a failure here must never cascade or retry-loop.
+TimeoutStartSec=30

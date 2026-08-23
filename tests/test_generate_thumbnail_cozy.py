@@ -8,6 +8,13 @@ from scripts.generate_thumbnail_cozy import (
     _select_side,
     _check_card_legibility,
     _contrast_ratio,
+    SCENE_POOL,
+    _select_scene,
+    _scene_slot,
+    _check_scene_card_collision,
+    _draw_scene_silhouette,
+    _card_geometry,
+    _check_brightness,
     generate_thumbnail,
 )
 
@@ -22,13 +29,16 @@ def test_too_short_result_falls_back():
 
 
 def test_strips_leading_genre_tag_and_trailing_em_dash_duration():
+    # Word-boundary-trimmed to _SHORT_TITLE_MAX_CHARS (20, tightened
+    # 2026-08-16 to match researched YouTube-thumbnail CTR guidance --
+    # shorter, higher-impact phrases read better at thumbnail-grid size).
     title = "lofi hip hop · the deadline blinked first — 3 hours"
-    assert _derive_short_title(title) == "the deadline blinked first"
+    assert _derive_short_title(title) == "the deadline blinked"
 
 
 def test_strips_leading_tag_and_trailing_parenthetical_duration():
     title = "lofi hip hop · you said five more minutes (10 minutes ago)"
-    assert _derive_short_title(title) == "you said five more minutes"
+    assert _derive_short_title(title) == "you said five more"
 
 
 def test_result_never_exceeds_max_chars():
@@ -123,6 +133,100 @@ def test_contrast_ratio_is_symmetric_and_bounded():
     assert ratio_a == ratio_b
     assert ratio_a > 20   # black/white is WCAG-max ~21
     assert _contrast_ratio((100, 100, 100), (100, 100, 100)) == 1.0
+
+
+# ── Scene silhouette selection ───────────────────────────────────────────────
+
+def test_scene_selection_is_deterministic_for_same_inputs():
+    for theme in ("cozy_rain", "neon_tokyo", "winter_snow", "vaporwave"):
+        for variant in range(5):
+            first  = _select_scene(theme, variant)
+            second = _select_scene(theme, variant)
+            assert first == second
+            assert first in SCENE_POOL.get(theme, ())
+
+
+def test_scene_selection_varies_across_variants():
+    seen = {_select_scene("cozy_rain", v) for v in range(12)}
+    assert len(seen) > 1
+
+
+def test_ab_variant_pair_can_use_different_scenes():
+    # Not a hard guarantee like layout (scene pools are only 3 wide and
+    # variant deltas of 1 can land on the same index), but across a spread
+    # of themes/variants the A/B pair should show real variety somewhere.
+    diffs = sum(
+        1
+        for theme in SCENE_POOL
+        for variant in range(0, 6)
+        if _select_scene(theme, variant) != _select_scene(theme, variant + 1)
+    )
+    assert diffs > 0
+
+
+# ── Scene / card collision avoidance ─────────────────────────────────────────
+
+def test_check_scene_card_collision_detects_overlap():
+    card = (500, 500, 800, 600)
+    assert _check_scene_card_collision((600, 520, 700, 580), card) is True
+    assert _check_scene_card_collision((0, 0, 100, 100), card) is False
+    assert _check_scene_card_collision(None, card) is False
+
+
+def test_draw_scene_silhouette_never_overlaps_the_real_card_geometry():
+    # Exercises the actual runtime path: compute the real card bbox via
+    # `_card_geometry` (what `generate_thumbnail` does before drawing the
+    # scene), then confirm whatever `_draw_scene_silhouette` returns -- a
+    # bbox, or None if it chose to skip -- never overlaps that card.
+    import numpy as np
+    from PIL import ImageDraw
+    from scripts.generate_thumbnail_cozy import TW, TH
+
+    titles = ["a genuinely long night of study and soft rain on the window",
+              "short one", "the deadline blinked first and then blinked again"]
+    for theme in list(SCENE_POOL)[:8]:
+        for variant in range(4):
+            layout = _select_layout(theme, variant)
+            side   = _select_side(theme, variant)
+            title  = titles[variant % len(titles)]
+            img  = Image.new("RGB", (TW, TH), (0, 0, 0))
+            draw = ImageDraw.Draw(img, "RGBA")
+            geom = _card_geometry(draw, theme, title, "2 hours", layout, side)
+            card_bbox = (geom["card_x"], geom["card_y"],
+                         geom["card_x"] + geom["card_w"], geom["card_y"] + geom["card_h"])
+            rng = np.random.default_rng(0)
+            _, scene_bbox = _draw_scene_silhouette(
+                img, theme, layout, side, variant, rng, avoid_bbox=card_bbox,
+            )
+            assert not _check_scene_card_collision(scene_bbox, card_bbox)
+
+
+def test_scene_slot_sits_on_the_side_opposite_the_card():
+    # thirds/edge layouts place the card on `side`; the scene slot should be
+    # on the opposite horizontal half of the frame.
+    from scripts.generate_thumbnail_cozy import TW
+    for layout in ("thirds", "edge"):
+        cx_left, *_ = _scene_slot(layout, "left")
+        cx_right, *_ = _scene_slot(layout, "right")
+        assert cx_left > TW / 2   # card on the left -> scene on the right
+        assert cx_right < TW / 2  # card on the right -> scene on the left
+
+
+# ── Whole-frame brightness check ─────────────────────────────────────────────
+
+def test_brightness_check_passes_midtone_fixture():
+    img = Image.new("RGB", (200, 150), (90, 90, 100))
+    ok, luma = _check_brightness(img)
+    assert ok is True
+    assert luma > 0
+
+
+def test_brightness_check_fails_near_black_and_near_white_fixtures():
+    black_ok, black_luma = _check_brightness(Image.new("RGB", (200, 150), (0, 0, 0)))
+    white_ok, white_luma = _check_brightness(Image.new("RGB", (200, 150), (255, 255, 255)))
+    assert black_ok is False
+    assert white_ok is False
+    assert black_luma < white_luma
 
 
 # ── End-to-end: A/B variant pair renders genuinely different compositions ──

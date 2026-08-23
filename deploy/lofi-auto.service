@@ -2,22 +2,49 @@
 Description=Lo-fi Factory automated render+upload (one run; triggered by lofi-auto.timer)
 After=network-online.target
 Wants=network-online.target
+# Push an alert (webui/alerts.py's existing webhook, previously only wired
+# to interactive Studio-render failures) so a failure here doesn't sit
+# silent until someone happens to open the web UI. Confirmed 2026-08-17:
+# a real TimeoutStartSec kill produced zero notification anywhere.
+OnFailure=lofi-auto-notify-failure.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=/home/jashin/lofi_factory
 ExecStart=/home/jashin/lofi_factory/venv/bin/python publish.py auto
 # run.py (invoked by `auto`) loads .env itself for any API keys it needs
-TimeoutStartSec=0
+# Real, finite wall-clock cap -- confirmed live on 2026-08-16 that
+# TimeoutStartSec=0 (no timeout) let a run wedge in mem_cgroup_handle_over_high
+# for 23+ hours straight (host swap pinned 100% full the whole time) with
+# nothing ever killing it. 4h is a generous backstop -- publish.py's
+# AUTO_DURATION_POOL is now capped to 45min/1hour (measured ~0.57x realtime
+# encode speed on this box, see publish.py's own comment), which should
+# comfortably finish well inside this, so hitting this timeout at all now
+# means something is genuinely wrong, not just an ambitious duration pick.
+TimeoutStartSec=14400
+# NOT using Restart=/RestartSec= here: tried it (2026-08-16), and it doesn't
+# reliably work for a Type=oneshot service killed by its own start timeout --
+# confirmed live 2026-08-17, the scheduled restart attempt immediately hit
+# systemd's own start-rate-limit ("Start request repeated too quickly") and
+# never actually re-ran, just added confusing duplicate "Failed" log lines.
+# A failed run now simply waits for tomorrow's regularly-scheduled timer
+# fire instead -- simpler and actually predictable, backed by the
+# OnFailure= alert above so that wait is never silent.
 # Memory backstop: ffmpeg encode + FluidSynth render + Pedalboard FX all run
 # in this one process. Without a cap, a stuck/runaway run can OOM the whole
 # box (including lofi-webui). MemoryHigh throttles first; MemoryMax is a
 # hard kill if it's still climbing -- a killed oneshot run just means no
-# video today, which is far better than the whole host going down. Sized
-# for a ~2-4GB VPS; raise both if your box has more headroom.
+# video today, which is far better than the whole host going down.
+# Raised 2026-08-16: the old MemoryHigh=1536M was confirmed (via
+# /proc/*/task/*/wchan showing mem_cgroup_handle_over_high on 3 worker
+# threads) to be too tight for a real render's working set on this box --
+# same failure mode already fixed once for lofi-webui.service, just never
+# applied here. This box has 11GiB RAM; lofi-webui.service caps at 768M, so
+# 4096M here still leaves headroom for the OS baseline. Adjust to your
+# actual box's RAM if reusing this unit elsewhere.
 # Deliberately NOT setting CPUQuota here: this is a burst job that should
 # finish as fast as possible, and ffmpeg/x264 already self-limit their own
 # thread count (see stream_live.py's x264-params) -- a CPU quota on top
 # would only slow the render down, not protect anything.
-MemoryHigh=1536M
-MemoryMax=2048M
+MemoryHigh=3072M
+MemoryMax=4096M

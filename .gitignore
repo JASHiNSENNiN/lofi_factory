@@ -24,6 +24,7 @@ visuals/bg_scenes/
 visuals/.recipe_log.jsonl
 assets/seo_*.json
 assets/thumb_*.jpg
+assets/qa_contact_sheet_*.png
 .pipeline.lock
 upload_log.json
 assets/job_queue.json
