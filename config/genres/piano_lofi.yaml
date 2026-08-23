@@ -1,0 +1,18 @@
+key: piano_lofi
+family: acoustic_classical
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_VIBRAPHONE
+  countermelody_program: GM_CELLO
+  scales: [major_pent, pent, dorian, major]
+  drum_pattern_indices: [7, 9, 13]
+  bpm_range: [66, 84]
+  energy: low
+  progression_indices: [22, 16, 12, 7, 20, 25, 35, 36, 46]
+swing_range: [0.53, 0.63]
+cozy_bias: true
+drum_kit_programs: [40, 32]
+drum_sampler_pattern: jazz
+mix: {lpf_hz: 14000, bitcrush_bits: 14, reverb_room: 0.45, reverb_wet: 0.25, tape_wobble_depth: 0.08,
+  compress_ratio: 1.8, vinyl_crackle: 0.04, use_ir_reverb: true, sidechain_duck: false}
+song_form: ambient

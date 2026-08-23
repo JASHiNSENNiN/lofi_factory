@@ -64,187 +64,17 @@ PPQN = 480
 BAR  = PPQN * 4   # 1920 ticks
 S16  = PPQN // 4  # 120 ticks per 16th note
 
-# GM Programs (0-indexed)
-GM_RHODES     = 4
-GM_EP2        = 5
-GM_VIBRAPHONE = 11
-GM_BASS       = 32
-GM_STRINGS    = 48
-GM_WARM_PAD   = 89
-
-# New instruments for genre diversity
-GM_MARIMBA        = 12   # summer_vibes, city_pop accent
-GM_GUITAR_NYLON   = 24   # bossa_lofi, piano_lofi counter melody
-GM_GUITAR_JAZZ    = 26   # lofi_jazz, jazz_cafe comping texture
-GM_ORGAN_ROCK     = 17   # neo_soul, lo_fi_funk stabs (drawbar organ)
-GM_MUTED_TRUMPET  = 59   # nujabes, jazz_cafe, lofi_jazz fills
-GM_CELLO          = 42   # dark_lofi, piano_lofi, ambient pad voice
-GM_FLUTE          = 73   # ambient, morning_lofi, bossa_lofi whisper
-
-# GM "Ethnic" family (spec slots 105/108/109, 0-indexed) — lofi_world's lead/
-# counter-melody/texture voices, distinct from every other subgenre's Western
-# instrument palette above.
-GM_SITAR          = 104  # lofi_world lead melody
-GM_KOTO           = 107  # lofi_world counter-melody
-GM_KALIMBA        = 108  # lofi_world texture accent
+# GM Programs (0-indexed) — moved to scripts/gm_instruments.py (pure relocation)
+from scripts.gm_instruments import *  # noqa: F401,F403
+from scripts import genre_presets
 
 # ─── SUB-GENRE CONFIG TABLE ───────────────────────────────────────────────────
-# Unified per-sub-genre settings — replaces scattered inline dicts.
-# 'piano'/'melody': GM program. 'scale': biased pool. 'drum_pats': preferred indices.
-# 'bpm': (lo, hi). 'progs': preferred progression indices. 'energy': force or None.
-
-_SUBGENRE_CONFIG = {
-    # ── Hip-hop / beat ───────────────────────────────────────────────────────────
-    'chillhop':     {'piano': GM_RHODES,    'melody': GM_GUITAR_NYLON,'cmelo': GM_WARM_PAD,
-                     'scale': ['pent','dorian','natural_minor'],
-                     'drum_pats': [0,1,2,13], 'bpm': (76,88), 'energy': None,
-                     'progs': [0,1,7,10,11,13,33,38,44,45]},
-    'hip_hop_lofi': {'piano': GM_RHODES,    'melody': GM_MUTED_TRUMPET,'cmelo': GM_ORGAN_ROCK,
-                     'scale': ['pent','dorian','mixo','blues'],
-                     'drum_pats': [0,2,6,11,14], 'bpm': (78,92), 'energy': None,
-                     'progs': [0,1,3,10,11,38,39,45]},
-    'lo_fi_funk':   {'piano': GM_EP2,       'melody': GM_GUITAR_JAZZ,'cmelo': GM_ORGAN_ROCK,
-                     'scale': ['mixo','pent','blues'],
-                     'drum_pats': [5,8,12,14], 'bpm': (82,96), 'energy': 'high',
-                     'progs': [26,27,10,11,3,38,45]},
-    'chill_beats':  {'piano': GM_WARM_PAD,  'melody': GM_VIBRAPHONE,'cmelo': GM_WARM_PAD,
-                     'scale': ['pent','dorian','natural_minor'],
-                     'drum_pats': [1,7,9,10,13], 'bpm': (62,76), 'energy': 'low',
-                     'progs': [7,12,13,19,20,33,35,36]},
-    'lofi_house':   {'piano': GM_EP2,       'melody': GM_VIBRAPHONE,'cmelo': GM_GUITAR_JAZZ,
-                     'scale': ['dorian','pent','major'],
-                     'drum_pats': [6,8,11], 'bpm': (88,100), 'energy': 'medium',
-                     'progs': [3,0,1,10,33,46]},
-    # ── Jazz / soul ───────────────────────────────────────────────────────────────
-    'lofi_jazz':    {'piano': GM_EP2,       'melody': GM_VIBRAPHONE,'cmelo': GM_MUTED_TRUMPET,
-                     'scale': ['dorian','natural_minor'],
-                     'drum_pats': [1,3,10,13], 'bpm': (70,84), 'energy': None,
-                     'progs': [2,5,6,28,31,32,33,34,39,40]},
-    'jazz_cafe':    {'piano': GM_EP2,       'melody': GM_VIBRAPHONE,'cmelo': GM_MUTED_TRUMPET,
-                     'scale': ['dorian','major_pent','major'],
-                     'drum_pats': [3,1,10,13], 'bpm': (78,94), 'energy': None,
-                     'progs': [2,5,8,26,6,28,31,33,34,45]},
-    'nujabes':      {'piano': GM_RHODES,    'melody': GM_VIBRAPHONE,'cmelo': GM_MUTED_TRUMPET,
-                     'scale': ['dorian','pent','lydian','natural_minor'],
-                     'drum_pats': [1,0,10,14], 'bpm': (80,92), 'energy': None,
-                     'progs': [6,2,28,32,37,39,40]},
-    'neo_soul':     {'piano': GM_EP2,       'melody': GM_MUTED_TRUMPET,'cmelo': GM_CELLO,
-                     'scale': ['dorian','pent','blues','natural_minor'],
-                     'drum_pats': [2,5,8,12], 'bpm': (72,86), 'energy': None,
-                     'progs': [10,11,27,38,40,45]},
-    'bossa_lofi':   {'piano': GM_VIBRAPHONE,'melody': GM_FLUTE,     'cmelo': GM_GUITAR_NYLON,
-                     'scale': ['pent','dorian','major'],
-                     'drum_pats': [4,12], 'bpm': (74,88), 'energy': None,
-                     'progs': [8,9,29,33,34,44]},
-    'lofi_rnb':     {'piano': GM_EP2,       'melody': GM_MUTED_TRUMPET,'cmelo': GM_CELLO,
-                     'scale': ['dorian','pent','mixo','blues'],
-                     'drum_pats': [2,5,8,12], 'bpm': (70,84), 'energy': None,
-                     'progs': [10,11,3,0,6,27,38,40,45]},
-    # ── Dark / moody ─────────────────────────────────────────────────────────────
-    'dark_lofi':    {'piano': GM_RHODES,    'melody': GM_GUITAR_JAZZ,'cmelo': GM_CELLO,
-                     'scale': ['phryg','pent','natural_minor','harmonic_minor','blues'],
-                     'drum_pats': [0,2,5,9,14], 'bpm': (65,80), 'energy': None,
-                     'progs': [14,15,3,31,39,41,42,43]},
-    'lofi_phonk':   {'piano': GM_RHODES,    'melody': GM_ORGAN_ROCK,'cmelo': GM_CELLO,
-                     'scale': ['phryg','pent','natural_minor'],
-                     'drum_pats': [0,2,5,9,11,14], 'bpm': (65,78), 'energy': None,
-                     'progs': [14,15,3,7,41,42,43]},
-    'vaporwave':    {'piano': GM_WARM_PAD,  'melody': GM_WARM_PAD,  'cmelo': GM_STRINGS,
-                     'scale': ['lydian','major','whole_tone'],
-                     'drum_pats': [7,9,11], 'bpm': (58,74), 'energy': 'low',
-                     'progs': [12,13,19,7,20,35,37,50]},
-    'ambient':      {'piano': GM_WARM_PAD,  'melody': GM_WARM_PAD,  'cmelo': GM_FLUTE,
-                     'scale': ['pent','natural_minor','whole_tone'],
-                     'drum_pats': [7,9,13], 'bpm': (58,74), 'energy': 'low',
-                     'progs': [12,13,7,19,35,36]},
-    # ── Cozy / bright ────────────────────────────────────────────────────────────
-    'cozy_cafe':    {'piano': GM_EP2,       'melody': GM_VIBRAPHONE,'cmelo': GM_VIBRAPHONE,
-                     'scale': ['major_pent','pent','dorian','major'],
-                     'drum_pats': [0,4,10,13], 'bpm': (76,92), 'energy': None,
-                     'progs': [22,21,16,17,25,28,44,45,46]},
-    'morning_lofi': {'piano': GM_EP2,       'melody': GM_VIBRAPHONE,'cmelo': GM_FLUTE,
-                     'scale': ['major_pent','pent','major'],
-                     'drum_pats': [0,4,7,13], 'bpm': (72,86), 'energy': 'low',
-                     'progs': [16,17,18,4,9,28,44,45,46,49]},
-    'anime_lofi':   {'piano': GM_EP2,       'melody': GM_VIBRAPHONE,'cmelo': GM_VIBRAPHONE,
-                     'scale': ['major_pent','pent','major'],
-                     'drum_pats': [0,1,4,13], 'bpm': (80,94), 'energy': None,
-                     'progs': [22,25,16,18,24,44,45,46,49]},
-    'summer_vibes': {'piano': GM_VIBRAPHONE,'melody': GM_VIBRAPHONE,'cmelo': GM_MARIMBA,
-                     'scale': ['major_pent','pent','major'],
-                     'drum_pats': [4,8,12], 'bpm': (80,94), 'energy': None,
-                     'progs': [22,21,23,16,18,44,45,46,48]},
-    'bedroom_pop':  {'piano': GM_VIBRAPHONE,'melody': GM_GUITAR_NYLON,'cmelo': GM_FLUTE,
-                     'scale': ['major_pent','major','pent'],
-                     'drum_pats': [0,4,7,13], 'bpm': (78,92), 'energy': None,
-                     'progs': [16,17,22,18,44,46,49]},
-    'city_pop':     {'piano': GM_EP2,       'melody': GM_FLUTE,     'cmelo': GM_GUITAR_JAZZ,
-                     'scale': ['major_pent','pent','major'],
-                     'drum_pats': [0,6,8,12], 'bpm': (78,92), 'energy': None,
-                     'progs': [8,4,18,29,44,46,48,49]},
-    'study_lofi':   {'piano': GM_RHODES,    'melody': GM_MARIMBA,   'cmelo': GM_WARM_PAD,
-                     'scale': ['pent','dorian','major_pent','major'],
-                     'drum_pats': [0,1,9,13], 'bpm': (74,90), 'energy': 'medium',
-                     'progs': [0,1,7,22,16,28,33,35,44,46]},
-    # ── Acoustic / classical ─────────────────────────────────────────────────────
-    'piano_lofi':   {'piano': GM_EP2,       'melody': GM_VIBRAPHONE,'cmelo': GM_CELLO,
-                     'scale': ['major_pent','pent','dorian','major'],
-                     'drum_pats': [7,9,13], 'bpm': (66,84), 'energy': 'low',
-                     'progs': [22,16,12,7,20,25,35,36,46]},
-    'lofi_classical':{'piano': GM_EP2,      'melody': GM_CELLO,     'cmelo': GM_STRINGS,
-                     'scale': ['major','lydian','major_pent','harmonic_minor'],
-                     'drum_pats': [7,9,13], 'bpm': (58,78), 'energy': 'low',
-                     'progs': [16,17,18,22,25,35,46,50]},
-    # ── Drill / trap-adjacent ────────────────────────────────────────────────────
-    'lofi_drill':   {'piano': GM_RHODES,    'melody': GM_ORGAN_ROCK,'cmelo': GM_CELLO,
-                     'scale': ['natural_minor','harmonic_minor','phryg','pent'],
-                     'drum_pats': [15,11,2,9], 'bpm': (72,88), 'energy': 'high',
-                     'progs': [14,15,41,42,43,7,39]},
-    # ── World / ethnic-fusion ────────────────────────────────────────────────────
-    'lofi_world':   {'piano': GM_RHODES,    'melody': GM_SITAR,     'cmelo': GM_KOTO,
-                     'scale': ['dorian','phryg_dom','pent','natural_minor'],
-                     'drum_pats': [12,4,3,9], 'bpm': (70,86), 'energy': None,
-                     'progs': [13,0,7,3,38,10,32,39]},
-}
-
-# Per-genre swing ranges. Heavy hip-hop swings hard (0.72); bossa/classical nearly
-# straight (0.52). This alone creates huge perceived variety across the 26 genres.
-_SWING_RANGE: dict[str, tuple[float, float]] = {
-    'lofi_drill':    (0.63, 0.74),   # heaviest swing tier — drill bounce
-    'lofi_phonk':    (0.62, 0.73),   # massive trap swing
-    'dark_lofi':     (0.62, 0.71),   # heavy laid-back pocket
-    'nujabes':       (0.61, 0.69),   # j-dilla-ish moderate-heavy
-    'hip_hop_lofi':  (0.61, 0.69),
-    'lo_fi_funk':    (0.60, 0.69),   # funky swing
-    'neo_soul':      (0.60, 0.68),
-    'lofi_rnb':      (0.59, 0.68),
-    'lofi_jazz':     (0.58, 0.68),   # jazz swing, variable
-    'chillhop':      (0.59, 0.67),
-    'chill_beats':   (0.58, 0.66),
-    'study_lofi':    (0.58, 0.66),
-    'cozy_cafe':     (0.58, 0.66),
-    'jazz_cafe':     (0.57, 0.65),
-    'bedroom_pop':   (0.58, 0.65),
-    'summer_vibes':  (0.59, 0.66),
-    'morning_lofi':  (0.57, 0.65),
-    'anime_lofi':    (0.57, 0.65),
-    'lofi_house':    (0.54, 0.61),   # house = mostly straight
-    'city_pop':      (0.55, 0.63),
-    'bossa_lofi':    (0.52, 0.60),   # bossa is 8th-note straight
-    'piano_lofi':    (0.53, 0.63),
-    'lofi_classical':(0.50, 0.57),   # classical straight
-    'ambient':       (0.50, 0.60),   # minimal swing
-    'vaporwave':     (0.50, 0.60),   # electronic, straight
-    'lofi_world':    (0.58, 0.68),   # organic percussive feel, not stiff-straight
-}
+# Unified per-sub-genre settings — one config/genres/<key>.yaml per subgenre,
+# loaded via scripts/genre_presets.py. _SUBGENRE_CONFIG/_SWING_RANGE/
+# _COZY_SUBGENRES are built further down (after PROGRESSIONS/DRUM_PATTERNS
+# are defined — genre_presets does load-time bounds validation of
+# progression_indices/drum_pattern_indices against those tables).
 _SWING_DEFAULT = (0.58, 0.68)
-
-# Cozy/bright sub-genres for the channel identity bias (2× base weight in picker)
-_COZY_SUBGENRES: frozenset[str] = frozenset({
-    "cozy_cafe", "anime_lofi", "summer_vibes", "study_lofi",
-    "morning_lofi", "jazz_cafe", "piano_lofi", "bedroom_pop",
-    "lofi_rnb", "lofi_classical", "lofi_house", "chillhop",
-})
 
 
 # GM Drum notes (channel 9)
@@ -290,6 +120,36 @@ VOICING_OPTIONS = {
     # Secondary dominant voicings used in new progressions
     'F7':    [[53,57,60,63], [57,60,63,65], [53,60,63,68], [57,63,65,68]],
     'A7':    [[57,61,64,67], [61,64,67,69], [57,64,67,73], [61,67,69,73]],
+
+    # Modal-interchange / borrowed-chord additions (research/theory/
+    # harmony-voicings.md "Concrete additions") — major-key tonics needed so
+    # the orphaned A/D major keys have a real I chord to borrow iv/bIII/bVI/
+    # bVII against (those borrowed chords reuse Dm7/Fmaj7/Gmaj7/Cmaj7/Gm7/
+    # Bbmaj7, all already present above).
+    'Amaj7': [[57,61,64,68], [61,64,68,69], [52,57,64,68], [61,68,69,73]],
+    'Dmaj7': [[50,54,57,61], [54,57,61,62], [45,50,57,61], [54,61,62,66]],
+
+    # Minor ii-V-i siblings (research: generalizing the existing Bm7b5-
+    # E7b9-Am7 pattern into the previously-orphaned minor keys, plus the
+    # Gm-context sibling the research table gives verbatim).
+    'F#m7b5': [[54,57,60,64], [57,60,64,66], [54,60,64,69], [57,60,66,69]],
+    'B7b9':   [[59,63,69,72], [63,69,72,75], [59,69,72,75]],
+    'G#m7b5': [[56,59,62,66], [59,62,66,68], [56,62,66,71], [59,62,68,71]],
+    'C#7b9':  [[61,65,71,74], [65,71,74,77], [61,71,74,77]],
+    'F#m7':   [[54,57,61,64], [57,61,64,66], [49,54,61,64], [57,61,64,69]],
+    'C#m7b5': [[61,64,67,71], [64,67,71,73], [61,67,71,76], [64,67,73,76]],
+    'F#7b9':  [[54,58,64,67], [58,64,67,70], [54,64,67,70]],
+    'Bm7':    [[59,62,66,69], [62,66,69,71], [54,59,66,69], [62,66,69,74]],
+    'Fm7b5':  [[53,56,59,63], [56,59,63,65], [53,59,63,68], [56,59,65,68]],
+    'Bb7b9':  [[58,62,68,71], [62,68,71,74], [58,68,71,74]],
+    'Ebm7':   [[63,66,70,73], [66,70,73,75], [58,63,70,73], [66,70,73,78]],
+    'Am7b5':  [[57,60,63,67], [60,63,67,69], [57,63,67,72], [60,63,69,72]],
+    'D7b9':   [[50,54,60,63], [54,60,63,66], [50,60,63,66]],
+
+    # Dedicated tritone-substitution target for G7 (see _SEC_DOM_SUBS below).
+    # Bb7 previously served double duty as both a tritone-sub target *and*
+    # Eb's diatonic V7 -- Db7 disambiguates true tritone-sub usage.
+    'Db7':    [[61,65,68,71], [65,68,71,73], [61,68,71,77], [65,71,73,77]],
 }
 
 # Bass root notes (octave 2)
@@ -300,6 +160,15 @@ BASS_ROOTS = {
     'G7':43,'G7b9':43,'E7':40,'E7b9':40,'C7':48,'Bb7':46,
     'D7':38,'D9':38,
     'F7':41,'A7':45,
+    # Modal-interchange tonics + minor ii-V-i siblings (see VOICING_OPTIONS
+    # comment above) — bass roots follow the file's existing convention of
+    # one fixed low-register value per pitch class, shared across every
+    # chord quality built on that root (e.g. F#=42 for both F#m7b5/F#m7/F#7b9).
+    'Amaj7':45,'Dmaj7':38,
+    'F#m7b5':42,'B7b9':47,'G#m7b5':44,'C#7b9':49,'F#m7':42,
+    'C#m7b5':49,'F#7b9':42,'Bm7':47,'Fm7b5':41,'Bb7b9':46,'Ebm7':51,
+    'Am7b5':45,'D7b9':38,
+    'Db7':49,
 }
 
 # Guide tone offsets from root: (3rd_semitones, 7th_semitones)
@@ -317,6 +186,14 @@ _GUIDE_TONES = {
     'C7':    (4, 10), 'Bb7':   (4, 10),
     'D7':    (4, 10), 'D9':    (4, 10),
     'F7':    (4, 10), 'A7':    (4, 10),
+    'Amaj7': (4, 11), 'Dmaj7': (4, 11),
+    'F#m7b5': (3, 10), 'B7b9':  (4, 10),
+    'G#m7b5': (3, 10), 'C#7b9': (4, 10),
+    'F#m7':   (3, 10), 'C#m7b5': (3, 10),
+    'F#7b9':  (4, 10), 'Bm7':   (3, 10),
+    'Fm7b5':  (3, 10), 'Bb7b9': (4, 10),
+    'Ebm7':   (3, 10), 'Am7b5': (3, 10), 'D7b9': (4, 10),
+    'Db7':    (4, 10),
 }
 
 # Tension-driven chord-extension escalation (build_chords()'s `tension` param):
@@ -397,6 +274,21 @@ PROGRESSIONS = [
     [('Fmaj9',2),('Gmaj7',2),('Em7',2),('Am9',2)],         # 48 IV-V-iii-vi city pop
     [('Cmaj9',2),('Em7',2),('Gmaj7',1),('Am9',1)],          # 49 I-iii-V-vi city pop
     [('Ebmaj7',2),('Bbmaj7',2),('Gm7',2),('Cm7',2)],        # 50 Eb warm jazz cycle
+
+    # ── Modal-interchange / borrowed-chord + minor ii-V-i additions ──────
+    # (research/theory/harmony-voicings.md "Concrete additions" table).
+    # Append-only: existing indices 0-50 are untouched. Prioritizes the six
+    # keys that were previously orphaned in KEY_ROOTS/PROGRESSION_KEY (Em,
+    # F#m, Bm, Ebm, A, D — see the PROGRESSION_KEY comment above) so the
+    # existing 14-key palette actually gets exercised.
+    [('Amaj7',2),('Cmaj7',1),('Dm7',1),('Fmaj7',1),('Gmaj7',1),('Amaj7',2)],  # 51 A major: I-bIII-iv-bVI-bVII-I (modal interchange)
+    [('Dmaj7',2),('Fmaj7',1),('Gm7',1),('Bbmaj7',1),('Cmaj7',1),('Dmaj7',2)], # 52 D major: I-bIII-iv-bVI-bVII-I (modal interchange)
+    [('F#m7b5',1),('B7b9',1),('Em7',2)],                    # 53 Em minor ii-V-i
+    [('G#m7b5',1),('C#7b9',1),('F#m7',2)],                  # 54 F#m minor ii-V-i
+    [('C#m7b5',1),('F#7b9',1),('Bm7',2)],                   # 55 Bm minor ii-V-i
+    [('Fm7b5',1),('Bb7b9',1),('Ebm7',2)],                   # 56 Ebm minor ii-V-i
+    [('Cmaj9',2),('Ebmaj7',1),('Fm7',1),('Cmaj9',2),('Bbmaj7',2)],  # 57 C major: I-bIII-iv-I-bVII (research example, verbatim)
+    [('Am7b5',1),('D7b9',1),('Gm7',2)],                     # 58 Gm minor ii-V-i (second sibling, research example)
 ]
 
 # Real tonal center of each PROGRESSIONS entry (functional-harmony read: which
@@ -416,11 +308,20 @@ PROGRESSION_KEY = [
     'Bb', 'Eb', 'Am', 'C',  'F',  'F',  'Am', 'Am', 'Dm', 'Am',   # 30-39
     'C',  'Cm', 'Bb', 'Am', 'G',  'G',  'C',  'Bb', 'C',  'C',    # 40-49
     'Eb',                                                        # 50
+    'A',  'D',  'Em', 'F#m', 'Bm', 'Ebm', 'C', 'Gm',             # 51-58
 ]
 assert len(PROGRESSION_KEY) == len(PROGRESSIONS)
 
 # Secondary dominant / tritone substitutions — applied by maybe_sub_chord()
-# key = chord being approached; value = (substitute_chord, probability)
+# key = chord being approached; value = (substitute_chord, probability), OR
+# a list of such tuples when more than one substitute is available (each
+# rolled independently, first hit wins) -- used for G7/G7b9 below, which
+# previously pointed only at Bb7. Bb7 is *also* Eb's diatonic V7 (it's the
+# real chord of progressions like #9/#31/#42), so a G7 -> Bb7 substitution
+# is ambiguous with plain diatonic Eb harmony. Db7 is the "purer"
+# unambiguous tritone-sub target (research/theory/harmony-voicings.md):
+# it shares no diatonic role anywhere else in PROGRESSIONS, so seeing Db7
+# unambiguously signals "tritone substitution happened here."
 _SEC_DOM_SUBS = {
     'Fmaj7':  ('C7',   0.15),   # C7 → Fmaj7 (V7/IV)
     'Fmaj9':  ('C7',   0.15),
@@ -428,9 +329,11 @@ _SEC_DOM_SUBS = {
     'Am9':    ('E7',   0.12),
     'Cmaj7':  ('G7',   0.10),   # G7 → Cmaj7 (V7/I)
     'Cmaj9':  ('G7',   0.10),
-    'G7':     ('Bb7',  0.08),   # Bb7 = tritone sub for G7 (shares 3rd/7th enharmonically)
-    'G7b9':   ('Bb7',  0.08),
-    'Ebmaj7': ('Bb7',  0.10),   # Bb7 → Ebmaj7 (V7/I in Eb)
+    # Bb7 = tritone sub for G7 (shares 3rd/7th enharmonically); Db7 = the
+    # dedicated, unambiguous tritone-sub target (see comment above).
+    'G7':     [('Bb7', 0.08), ('Db7', 0.06)],
+    'G7b9':   [('Bb7', 0.08), ('Db7', 0.06)],
+    'Ebmaj7': ('Bb7',  0.10),   # Bb7 → Ebmaj7 (V7/I in Eb) -- diatonic use of Bb7, unrelated to the tritone sub above
     'Gm7':    ('D7',   0.10),   # D7 → Gm7 (V7/iv)
     'Gm9':    ('D7',   0.10),
     'Cm7':    ('G7',   0.10),   # G7 → Cm7 (V7/iv in Fm context)
@@ -441,13 +344,33 @@ _SEC_DOM_SUBS = {
 
 def maybe_sub_chord(chord_name, position_in_prog):
     """Occasionally replace chord with secondary dominant or tritone sub.
-    Never subs position 0 (preserves tonic feel at start of progression)."""
+    Never subs position 0 (preserves tonic feel at start of progression).
+    _SEC_DOM_SUBS entries are either a single (substitute, probability)
+    tuple or a list of them (e.g. G7's Bb7/Db7 pair) -- each candidate is
+    rolled independently in order, first hit wins."""
     if position_in_prog == 0:
         return chord_name
     sub_info = _SEC_DOM_SUBS.get(chord_name)
-    if sub_info and random.random() < sub_info[1]:
-        return sub_info[0]
+    if not sub_info:
+        return chord_name
+    candidates = sub_info if isinstance(sub_info, list) else [sub_info]
+    for target, prob in candidates:
+        if random.random() < prob:
+            return target
     return chord_name
+
+
+# Chord names that appear as secondary-dominant / tritone-sub *targets* in
+# _SEC_DOM_SUBS -- i.e. dominant chords that function as tension resolving
+# somewhere else, not a diatonic chord in their own right at that moment.
+# build_melody() uses this to know when a phrase can reach for get_altered()
+# instead of the track's main scale (research/theory/scales-modes-gaps.md:
+# altered scale over a dominant == lydian dominant of its tritone-sub root,
+# melodically unifying with this substitution machinery).
+_SEC_DOM_SUB_TARGETS = {
+    target for subs in _SEC_DOM_SUBS.values()
+    for target, _ in (subs if isinstance(subs, list) else [subs])
+}
 
 
 # ─── PROCEDURAL PROGRESSION GENERATOR (Markov, mined from curated table) ──────
@@ -851,7 +774,35 @@ DRUM_PATTERNS = [
      CHH:  [58,0,55,0,58,0,55,0,62,60,65,62,68,65,70,72],
      OHH:  [0,0,0,0,  0,0,0,0,  0,0,0,0,  0,0,0,60],
      RIM:  [0]*16},
+    # Q: Phonk hat-roll cell -- research/theory/rhythm-groove.md "Concrete
+    # additions": straight 8th-note hat base with a dense roll-burst on the
+    # last quarter of the bar (steps 12-15, the finest density this 16-step
+    # grid can express as an approximation of the genre's real 32nd/64th-note
+    # hat rolls), plus a pitched-cowbell-style RIM voice on the "and" of 2
+    # and 4 (steps 6, 14) as the genre-defining accent voice distinct from
+    # the hats. A genuinely new curated pattern, not reachable by tuning
+    # generate_euclidean_drum_pattern()'s k/n or the CA rule pool.
+    {KICK: [92,0,0,0,  0,0,80,0,  0,0,86,0,  0,0,0,70],
+     SNARE:[0,0,0,0,  0,0,0,0,  90,0,0,0,  0,0,38,0],
+     CHH:  [55,0,55,0,55,0,55,0,55,0,55,0,60,68,76,85],
+     OHH:  [0,0,0,0,  55,0,0,0,  0,0,0,0,  0,0,0,0],
+     RIM:  [0,0,0,0,  0,0,50,0,  0,0,0,0,  0,0,55,0]},
 ]
+
+# ─── Per-subgenre tables, loaded from config/genres/*.yaml ───────────────────
+# Placed here (after PROGRESSIONS/DRUM_PATTERNS/VOICING_OPTIONS) because
+# genre_presets.load_all() bounds-validates progression_indices/
+# drum_pattern_indices against PROGRESSIONS/DRUM_PATTERNS at load time.
+_SUBGENRE_CONFIG = genre_presets.build_subgenre_config()
+_SWING_RANGE: dict[str, tuple[float, float]] = genre_presets.build_swing_range()
+_COZY_SUBGENRES: frozenset[str] = genre_presets.build_cozy_subgenres()
+# New engine-feature membership sets (same pattern as _IR_GENRES/
+# _SIDECHAIN_DUCK_GENRES in lofi_fx.py): which subgenres opt into the
+# 808 pitch-slide bass, per-voice micro-timing drum swing, and continuous
+# arpeggiator melody engine, respectively.
+_GLIDE_808_GENRES: set = genre_presets.build_glide_808_genres()
+_MICRO_SWING_GENRES: set = genre_presets.build_micro_swing_genres()
+_CONTINUOUS_ARP_GENRES: set = genre_presets.build_continuous_arp_genres()
 
 # Drum fills (1 bar of 16 steps — fire at last bar of a section)
 DRUM_FILLS = [
@@ -994,6 +945,107 @@ def get_whole_tone(root):
                 notes.append(n)
     return sorted(set(notes))
 
+def get_melodic_minor(root):
+    """Melodic minor (jazz minor) — raised 6th AND 7th vs. natural minor
+    (harmonic_minor only raises the 7th). Jazz convention: same ascending
+    and descending. Color for m(maj7)/m6/m9/m6-9 chords; also the parent
+    scale of locrian-nat2/lydian-dominant/altered (see research/theory/
+    scales-modes-gaps.md)."""
+    notes = []
+    for oct_off in range(3):
+        for i in [0, 2, 3, 5, 7, 9, 11]:
+            n = root + i + oct_off * 12
+            if 53 <= n <= 86:
+                notes.append(n)
+    return sorted(set(notes))
+
+def get_locrian(root):
+    """Locrian mode — the only diatonic major-scale mode previously missing
+    from this file. Diminished 5th gives a built-in half-diminished color;
+    pairs with the existing Bm7b5 chord (progressions #2, #32, #39)."""
+    notes = []
+    for oct_off in range(3):
+        for i in [0, 1, 3, 5, 6, 8, 10]:
+            n = root + i + oct_off * 12
+            if 53 <= n <= 86:
+                notes.append(n)
+    return sorted(set(notes))
+
+def get_altered(root):
+    """Altered / super-locrian scale (7th mode of melodic minor) — b9, #9,
+    b5/#11, b13/#5, b7: every degree but the root is flattened relative to
+    major. Standard color over 7alt/7b9/7#9 dominants; melodically unifies
+    with _SEC_DOM_SUBS' tritone substitutions (altered scale on a dominant
+    == lydian dominant of that dominant's tritone-sub root)."""
+    notes = []
+    for oct_off in range(3):
+        for i in [0, 1, 3, 4, 6, 8, 10]:
+            n = root + i + oct_off * 12
+            if 53 <= n <= 86:
+                notes.append(n)
+    return sorted(set(notes))
+
+def get_bebop_dominant(root):
+    """Bebop dominant scale — Mixolydian plus a chromatic passing major-7th
+    between b7 and the octave root (8 notes). The extra tone is a rhythmic-
+    alignment device: playing continuous 8th/16th runs from a chord tone
+    keeps chord tones landing on strong beats, since an 8-note scale divides
+    evenly into common beat groupings where a 7-note scale doesn't. Used for
+    dense/fast melody passages over any dominant 7 chord."""
+    notes = []
+    for oct_off in range(3):
+        for i in [0, 2, 4, 5, 7, 9, 10, 11]:
+            n = root + i + oct_off * 12
+            if 53 <= n <= 86:
+                notes.append(n)
+    return sorted(set(notes))
+
+
+def _resolve_scale(scale, root):
+    """Canonical scale-name -> note-list dispatch, shared by build_melody(),
+    build_counter_melody(), and build_midi()'s motif-seed scale selection so
+    every new scale only needs to be wired in once. Mirrors the elif chain
+    that used to be duplicated (and, in build_midi()'s case, only partially
+    duplicated) at each call site."""
+    if scale == 'dorian':
+        return get_dorian(root)
+    elif scale == 'phryg':
+        return get_phrygian(root)
+    elif scale == 'phryg_dom':
+        return get_phrygian_dominant(root)
+    elif scale == 'major_pent':
+        return [n for oct_off in range(3)
+                for i in [0, 2, 4, 7, 9]
+                for n in [root + i + oct_off * 12]
+                if 53 <= root + i + oct_off * 12 <= 86]
+    elif scale == 'mixo':
+        return [n for oct_off in range(3)
+                for i in [0, 2, 4, 5, 7, 9, 10]
+                for n in [root + i + oct_off * 12]
+                if 53 <= root + i + oct_off * 12 <= 86]
+    elif scale == 'major':
+        return get_major(root)
+    elif scale == 'lydian':
+        return get_lydian(root)
+    elif scale == 'natural_minor':
+        return get_natural_minor(root)
+    elif scale == 'harmonic_minor':
+        return get_harmonic_minor(root)
+    elif scale == 'blues':
+        return get_blues(root)
+    elif scale == 'whole_tone':
+        return get_whole_tone(root)
+    elif scale == 'melodic_minor':
+        return get_melodic_minor(root)
+    elif scale == 'locrian':
+        return get_locrian(root)
+    elif scale == 'altered':
+        return get_altered(root)
+    elif scale == 'bebop_dominant':
+        return get_bebop_dominant(root)
+    else:
+        return get_pentatonic(root)
+
 
 # ─── MOTIF ENGINE ─────────────────────────────────────────────────────────────
 
@@ -1010,8 +1062,17 @@ def generate_motif(scale_notes, length=4):
     return motif
 
 
+# Duration multiplier applied at build_melody()'s `dur = ...` call site when
+# a phrase's variation is 'augment' -- vary_motif() only returns pitches
+# (durations are assigned per-note in build_melody), so augmentation is
+# communicated back to the caller via this lookup rather than a return value.
+# Every variation not listed here implicitly scales by 1.0 (unchanged).
+_VARIATION_DUR_SCALE = {'augment': 1.75}
+
+
 def vary_motif(motif, scale_notes, variation):
-    """Return a variation of the motif (retrograde, invert, transpose, or nudge)."""
+    """Return a variation of the motif (retrograde, invert, transpose,
+    augment, fragment, or nudge)."""
     if not motif or not scale_notes:
         return motif or []
 
@@ -1028,6 +1089,19 @@ def vary_motif(motif, scale_notes, variation):
 
     if variation == 'transpose_up':
         return [scale_notes[min(len(scale_notes)-1, _idx(n)+1)] for n in motif]
+
+    if variation == 'augment':
+        # Classical augmentation: pitches unchanged, note durations stretched
+        # by the caller (see _VARIATION_DUR_SCALE / build_melody's dur= line).
+        return list(motif)
+
+    if variation == 'fragment':
+        # Fragmentation: repeat a short sub-cell (first 2 notes) instead of
+        # playing the full motif -- a standard Liszt/Berlioz-era thematic-
+        # transformation technique, alongside retrograde/inversion, that was
+        # previously entirely absent (only whole-motif variations existed).
+        cell = motif[:2] if len(motif) >= 2 else motif[:]
+        return cell * 2
 
     # 'default': small random nudge — preserves shape without being identical
     shift = random.choice([-1, 0, 0, 1])
@@ -1069,12 +1143,21 @@ def _lofi_late(tick: int, bpm: int) -> int:
     ticks_per_ms = (PPQN * bpm) / 60_000.0
     return max(0, tick + int(offset_ms * ticks_per_ms))
 
-def abs_to_track(events, channel, program=None, cc_events=None, bank_msb=None):
+def abs_to_track(events, channel, program=None, cc_events=None, bank_msb=None,
+                  pitch_bend_range=None):
     """
     Convert absolute-tick note events to a MIDI track.
-    events:    list of (abs_tick, note, velocity, duration)
+    events:    list of (abs_tick, note, velocity, duration). A note value of
+               _PITCHWHEEL_NOTE marks a pitch-bend event instead of a real
+               note (velocity field carries the 14-bit pitch value, center
+               8192) -- see build_bass()'s glide=True path / _glide_pitchbend_events().
     cc_events: optional list of (abs_tick, control, value) for CC messages (e.g. sustain pedal)
     bank_msb:  if set, send CC0=bank_msb + CC32=0 before program_change (GS drum kit select)
+    pitch_bend_range: if set, emit an RPN 0,0 (pitch-bend-range) message at
+               track start, +-this many semitones, before any note/pitchwheel
+               events -- required once per channel for pitchwheel messages to
+               bend by a musically-correct interval instead of the device's
+               default (usually +-2 semitones).
     """
     import mido
     track = mido.MidiTrack()
@@ -1083,8 +1166,22 @@ def abs_to_track(events, channel, program=None, cc_events=None, bank_msb=None):
         track.append(mido.Message('control_change', channel=channel, control=32, value=0,        time=0))
     if program is not None:
         track.append(mido.Message('program_change', channel=channel, program=program, time=0))
+    if pitch_bend_range is not None:
+        # RPN 0,0 = pitch-bend-range; data entry MSB = semitones, LSB = cents
+        # (0 here). Null RPN (101/100 = 127) afterward so later CC6/CC38
+        # sends on this channel (if any) aren't misinterpreted as RPN data.
+        semis = max(0, min(24, int(pitch_bend_range)))
+        track.append(mido.Message('control_change', channel=channel, control=101, value=0,   time=0))
+        track.append(mido.Message('control_change', channel=channel, control=100, value=0,   time=0))
+        track.append(mido.Message('control_change', channel=channel, control=6,   value=semis, time=0))
+        track.append(mido.Message('control_change', channel=channel, control=38,  value=0,   time=0))
+        track.append(mido.Message('control_change', channel=channel, control=101, value=127, time=0))
+        track.append(mido.Message('control_change', channel=channel, control=100, value=127, time=0))
     msgs = []
     for abs_tick, note, velocity, dur in events:
+        if note == _PITCHWHEEL_NOTE:
+            msgs.append((max(0, int(abs_tick)), 0, 'pitchwheel', velocity))
+            continue
         on  = max(0, int(abs_tick))
         off = max(on+1, int(abs_tick+dur))
         msgs.append((on,  0, 'note_on',  note, max(1,velocity)))
@@ -1099,6 +1196,10 @@ def abs_to_track(events, channel, program=None, cc_events=None, bank_msb=None):
         if mtype == 'cc':
             track.append(mido.Message('control_change', channel=channel,
                                       control=item[3], value=item[4], time=t-prev))
+        elif mtype == 'pitchwheel':
+            pitch14 = max(0, min(16383, int(item[3])))
+            track.append(mido.Message('pitchwheel', channel=channel,
+                                      pitch=pitch14 - 8192, time=t-prev))
         else:
             track.append(mido.Message(mtype, channel=channel,
                                       note=item[3], velocity=item[4], time=t-prev))
@@ -1127,11 +1228,35 @@ def build_sustain_pedal(progression, start_bar, num_loops, swing, bpm):
 
 # ─── BUILDERS ─────────────────────────────────────────────────────────────────
 
-def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None):
+# Per-voice micro-timing profile for garage/2-step programming (research/
+# subgenres/lofi_garage.md: "garage swing lives in the individual hits" --
+# per-hit micro-timing offsets per drum voice, not one uniform swing ratio).
+# (bias_ms, jitter_ms): bias = mean push-late offset, jitter_ms = std-dev fed
+# into _gauss_jitter -- extends that existing humanization call, doesn't
+# replace it. Hats get the widest spread + latest push (2-step's off-grid
+# hi-hat signature); snare gets a smaller consistent late pull; kick stays
+# closest to the grid to keep the four-on-the-floor anchor solid.
+_MICRO_SWING_PROFILE = {
+    CHH:   (10.0, 12.0),
+    OHH:   (8.0,  10.0),
+    RIDE:  (8.0,  10.0),
+    RIM:   (6.0,  8.0),
+    SNARE: (5.0,  5.0),
+    KICK:  (0.0,  2.0),
+}
+_MICRO_SWING_DEFAULT = (4.0, 6.0)
+
+
+def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None, micro_swing=False):
     """
     Build drum events. fill_bars = set of bar numbers that get a fill
     instead of the regular pattern. Every 4 bars gets a hi-hat 16th run.
     Per-bar mutation: 8% chance each step is dropped or added for variation.
+
+    micro_swing=True layers a per-voice micro-timing profile (see
+    _MICRO_SWING_PROFILE) on top of the existing _gauss_jitter humanization —
+    each drum voice gets its own bias/std-dev instead of every voice sharing
+    the same flat +-4ms jitter.
     """
     events = []
     fill_bars = fill_bars or set()
@@ -1192,11 +1317,22 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None):
 
                 # Hi-hat 16th run on last beat every 4 bars
                 if hat_run and drum_note == CHH and step >= 12:
-                    vel_val = max(vel_val, v(55, 10))
+                    vel_val = max(vel_val, _gauss_velocity(55, 10))
 
                 if vel_val > 0:
-                    t = jitter(base_t, 4, bpm)
-                    events.append((t, drum_note, v(vel_val, 8), 25))
+                    # Gaussian humanization (matches melody/chords/bass'
+                    # _gauss_jitter/_gauss_velocity conventions elsewhere in
+                    # this file) instead of the flat/uniform jitter()/v() --
+                    # real human timing/velocity variance clusters near the
+                    # target rather than spreading uniformly. Only the feel
+                    # changes here; which steps/drums fire is untouched.
+                    if micro_swing:
+                        bias_ms, jit_ms = _MICRO_SWING_PROFILE.get(drum_note, _MICRO_SWING_DEFAULT)
+                        ticks_per_ms = (PPQN * bpm) / 60_000.0
+                        t = _gauss_jitter(base_t + int(bias_ms * ticks_per_ms), jit_ms, bpm)
+                    else:
+                        t = _gauss_jitter(base_t, 4, bpm)
+                    events.append((t, drum_note, _gauss_velocity(vel_val, 8), 25))
 
     return events
 
@@ -1211,6 +1347,21 @@ def _chord_pcs_at_bar(progression, bar, prog_bars):
             return {n % 12 for n in voicing}
         cursor += dur
     return set()
+
+
+def _chord_name_at_bar(progression, bar, prog_bars):
+    """Return the chord symbol (not just its pitch classes) playing at the
+    given absolute bar -- companion to _chord_pcs_at_bar, used by
+    build_melody() to detect when the current chord is a secondary-dominant/
+    tritone-sub target (see _SEC_DOM_SUB_TARGETS) so it can reach for
+    get_altered() instead of the track's main scale for that phrase."""
+    bar_in_prog = bar % max(1, prog_bars)
+    cursor = 0
+    for chord_name, dur in progression:
+        if bar_in_prog < cursor + dur:
+            return chord_name
+        cursor += dur
+    return None
 
 
 def _voice_lead_choice(chord_name, prev_top=None):
@@ -1295,13 +1446,71 @@ def build_pad(progression, start_bar, num_loops, swing, bpm):
     return events
 
 
-def build_bass(progression, start_bar, num_loops, swing, bpm, walking=False):
+# Sentinel note value marking a pitchwheel event inside an (abs_tick, note,
+# velocity, duration) events tuple, rather than a real note -- lets glide
+# events flow through the same list/`+=` accumulation build_midi() already
+# uses for bass_ev, with zero changes needed at any build_bass() call site.
+# No real MIDI note is ever negative, so this can't collide with a pitch.
+_PITCHWHEEL_NOTE = -1
+
+# Pitch-bend range abs_to_track() sets (via RPN 0,0) on the bass channel
+# whenever glide=True is used -- wide enough for drill's 808 slides (research:
+# "the single most recognizable production element in modern drill") without
+# needing to retune per note.
+_GLIDE_BEND_RANGE_SEMITONES = 12
+
+
+def _bend_semitones_to_pitch14(semitones: float, bend_range_semitones: float = _GLIDE_BEND_RANGE_SEMITONES) -> int:
+    """Convert a semitone offset to a 14-bit MIDI pitch-bend value (center=8192),
+    given the RPN pitch-bend-range abs_to_track() puts on the channel."""
+    raw = 8192 + round((semitones / bend_range_semitones) * 8192)
+    return max(0, min(16383, raw))
+
+
+def _glide_pitchbend_events(note_on_tick: int, note_dur: int, bpm: int,
+                            ramp_ms=(80, 150), slide_semitones=(2, 5), steps: int = 6) -> list:
+    """808 pitch-slide ornament: a ramp of pitchwheel messages sliding the
+    bass note's pitch (mostly down, occasionally up) by a few semitones
+    during the last ramp_ms of its duration -- the classic drill 808 "glide"
+    at a note's tail (research/subgenres/lofi_drill.md) -- then a reset back
+    to center exactly at the note's tail so the next note starts in tune.
+    Returns a list of (abs_tick, _PITCHWHEEL_NOTE, pitch14, 0) tuples meant to
+    be appended into the same events list build_bass() returns; abs_to_track()
+    special-cases note == _PITCHWHEEL_NOTE to emit a real 'pitchwheel' message
+    instead of a note on/off pair."""
+    if note_dur <= 1:
+        return []
+    ticks_per_ms = (PPQN * bpm) / 60_000.0
+    ramp_ticks = max(1, min(int(random.uniform(*ramp_ms) * ticks_per_ms), note_dur - 1))
+    direction = -1 if random.random() < 0.80 else 1   # mostly slides DOWN at the tail
+    target_semitones = direction * random.uniform(*slide_semitones)
+
+    start_tick = note_on_tick + (note_dur - ramp_ticks)
+    end_tick   = note_on_tick + note_dur
+
+    events = []
+    for i in range(1, steps + 1):
+        frac = i / steps
+        tick = start_tick + int(frac * ramp_ticks)
+        events.append((tick, _PITCHWHEEL_NOTE,
+                        _bend_semitones_to_pitch14(target_semitones * frac), 0))
+    # Reset to center right at the note's tail, before the next note begins.
+    events.append((end_tick, _PITCHWHEEL_NOTE, 8192, 0))
+    return events
+
+
+def build_bass(progression, start_bar, num_loops, swing, bpm, walking=False, glide=False):
     """
     Bass line with:
     - Root on beat 1 (always)
     - Fifth on beat 2-and (syncopated, 70%)
     - Occasional passing note on beat 4-and
     - walking=True: occasional 4-note walking line in last bar of progression
+    - glide=True: 808 pitch-slide portamento on the beat-1 root hit's tail
+      (drill's signature bass technique) -- see _glide_pitchbend_events().
+      Requires the bass track to be assembled with abs_to_track(...,
+      pitch_bend_range=_GLIDE_BEND_RANGE_SEMITONES) so the pitchwheel events
+      this emits bend by a musically-correct interval.
     """
     events = []
     cursor = start_bar
@@ -1345,7 +1554,13 @@ def build_bass(progression, start_bar, num_loops, swing, bpm, walking=False):
                 else:
                     # Beat 1: root
                     t1 = _gauss_jitter(grid_tick(abs_bar*16, swing), 8, bpm)
-                    events.append((t1, root, _gauss_velocity(80,10), int(BAR*0.82)))
+                    root_dur = int(BAR*0.82)
+                    events.append((t1, root, _gauss_velocity(80,10), root_dur))
+                    # 808 glide: pitch-slide the root's tail (75% of hits) —
+                    # the loudest structural differentiator drill has over
+                    # its nearest sibling (lofi_phonk), per research.
+                    if glide and random.random() < 0.75:
+                        events += _glide_pitchbend_events(t1, root_dur, bpm)
                     # Beat 2-and: guide tone (3rd when walking, fifth otherwise) 70%
                     if random.random() < 0.70:
                         t2 = _gauss_jitter(grid_tick(abs_bar*16+6, swing), 8, bpm)
@@ -1408,43 +1623,14 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
     arc through the melody, not just drum velocity. density='dense' (used
     for the climax loop) additionally drops the forced rest floor to 0.
     """
-    if scale == 'dorian':
-        notes_scale = get_dorian(key_root)
-    elif scale == 'phryg':
-        notes_scale = get_phrygian(key_root)
-    elif scale == 'phryg_dom':
-        notes_scale = get_phrygian_dominant(key_root)
-    elif scale == 'major_pent':
-        notes_scale = [n for oct_off in range(3)
-                       for i in [0, 2, 4, 7, 9]
-                       for n in [key_root + i + oct_off * 12]
-                       if 53 <= key_root + i + oct_off * 12 <= 86]
-    elif scale == 'mixo':
-        notes_scale = [n for oct_off in range(3)
-                       for i in [0, 2, 4, 5, 7, 9, 10]
-                       for n in [key_root + i + oct_off * 12]
-                       if 53 <= key_root + i + oct_off * 12 <= 86]
-    elif scale == 'major':
-        notes_scale = get_major(key_root)
-    elif scale == 'lydian':
-        notes_scale = get_lydian(key_root)
-    elif scale == 'natural_minor':
-        notes_scale = get_natural_minor(key_root)
-    elif scale == 'harmonic_minor':
-        notes_scale = get_harmonic_minor(key_root)
-    elif scale == 'blues':
-        notes_scale = get_blues(key_root)
-    elif scale == 'whole_tone':
-        notes_scale = get_whole_tone(key_root)
-    else:
-        notes_scale = get_pentatonic(key_root)
+    notes_scale = _resolve_scale(scale, key_root)
     if not notes_scale:
         return []
 
     if motif is None:
         motif = generate_motif(notes_scale, length=random.randint(3, 5))
 
-    VARIATIONS = ['retrograde', 'transpose_up', 'invert', 'default', 'default']
+    VARIATIONS = ['retrograde', 'transpose_up', 'invert', 'augment', 'fragment', 'default', 'default']
     var_idx = 0
     events = []
     bar = start_bar
@@ -1455,7 +1641,9 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
 
     while bar < start_bar + num_bars:
         if random.random() < phrase_prob:
-            phrase_notes = vary_motif(motif, notes_scale, VARIATIONS[var_idx % len(VARIATIONS)])
+            phrase_variation = VARIATIONS[var_idx % len(VARIATIONS)]
+            phrase_notes = vary_motif(motif, notes_scale, phrase_variation)
+            phrase_dur_scale = _VARIATION_DUR_SCALE.get(phrase_variation, 1.0)
             var_idx += 1
             phrase_len   = len(phrase_notes)
             phrase_start = bar * 16 + random.randint(0, 5)
@@ -1482,8 +1670,20 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                 # Chord-aware phrase start: snap first note to nearest chord tone (60%).
                 # Ensures each phrase "lands" on a note that fits the active harmony.
                 if i == 0 and progression and prog_bars and random.random() < 0.60:
-                    chord_pcs = _chord_pcs_at_bar(progression, bar, prog_bars)
-                    chord_scale = [n for n in notes_scale if n % 12 in chord_pcs]
+                    chord_scale = None
+                    # Altered-scale / tritone-sub pairing: when the chord
+                    # sounding at this bar is itself a secondary-dominant or
+                    # tritone-sub *target* (e.g. Db7 subbed in for G7), reach
+                    # for get_altered() over its root instead of the track's
+                    # main scale (50% of the time) -- see _SEC_DOM_SUB_TARGETS.
+                    chord_name_here = _chord_name_at_bar(progression, bar, prog_bars)
+                    if chord_name_here in _SEC_DOM_SUB_TARGETS and random.random() < 0.5:
+                        alt_root = BASS_ROOTS.get(chord_name_here)
+                        if alt_root is not None:
+                            chord_scale = get_altered(alt_root)
+                    if not chord_scale:
+                        chord_pcs = _chord_pcs_at_bar(progression, bar, prog_bars)
+                        chord_scale = [n for n in notes_scale if n % 12 in chord_pcs]
                     if chord_scale:
                         note = min(chord_scale, key=lambda n: abs(n - note))
 
@@ -1516,7 +1716,7 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                     grace_note = notes_scale[gn_idx]
                     grace_t = max(0, t - int(S16 * 0.35))
                     events.append((grace_t, grace_note, _gauss_velocity(38, 6), int(S16 * 0.30)))
-                dur = int(BAR * random.uniform(0.22, 0.72))
+                dur = int(BAR * random.uniform(0.22, 0.72) * phrase_dur_scale)
                 if random.random() < 0.30:
                     dur = int(dur * 1.5)
                 events.append((t, note, _gauss_velocity(70 + vel_bonus + vel_arc, 13), dur))
@@ -1526,6 +1726,65 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
             bar += random.randint(2, 5)
 
     return events
+
+
+def build_arpeggio(progression, start_bar, num_loops, swing, bpm, key_root=None,
+                    pattern='up', subdivision=16, octave_range=2):
+    """
+    Continuous arpeggiator -- synthwave's melodic engine (research/subgenres/
+    lofi_synthwave.md): "a repeating note sequence built from the chord tones
+    of each chord, running continuously as the harmonic backdrop of the
+    entire track," typically 16th notes. Structurally different from
+    build_melody(): no rests, no phrase/motif development -- every
+    subdivision slot gets a note, cycling through the active chord's tones
+    for its full duration, looping the tone-cycle as needed to fill the bars.
+
+    Reuses VOICING_OPTIONS for chord-tone lookup (same table build_chords()/
+    build_pad() use) instead of re-deriving pitches.
+
+    pattern: 'up' | 'down' | 'up_down' | 'random'
+    subdivision: steps per bar (16 = 16th notes, the genre default; should
+      evenly divide 16 for exact grid alignment -- 16, 8, 4).
+    octave_range: how many octaves the chord-tone cycle is stacked across
+      (each extra octave reuses the same chord tones transposed +12, no new
+      pitch material introduced).
+
+    key_root is accepted for signature symmetry with build_melody()/
+    build_bass() but unused -- the arpeggio's pitch material comes entirely
+    from the chord voicings, not the track's scale/key.
+    """
+    events = []
+    cursor = start_bar
+    subdivision = max(1, int(subdivision))
+    step_ticks = max(1, BAR // subdivision)
+    steps_per_16th = 16 / subdivision
+
+    for _ in range(max(1, num_loops)):
+        for chord_name, dur_bars in progression:
+            voicing = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])[0]
+            tones = sorted(set(voicing))
+            full_tones = [t + 12 * oct_i for oct_i in range(max(1, octave_range)) for t in tones]
+
+            if pattern == 'down':
+                seq = list(reversed(full_tones))
+            elif pattern == 'up_down' and len(full_tones) > 2:
+                seq = full_tones + list(reversed(full_tones))[1:-1]
+            else:
+                seq = full_tones   # 'up' (default) and 'random' (re-rolled per step below)
+
+            base_bar_tick = cursor * 16
+            total_steps = dur_bars * subdivision
+            for step in range(total_steps):
+                grid = base_bar_tick + int(round(step * steps_per_16th))
+                note = random.choice(full_tones) if pattern == 'random' else seq[step % len(seq)]
+                t = _gauss_jitter(grid_tick(grid, swing), 6, bpm)
+                dur = int(step_ticks * 0.92)
+                events.append((t, note, _gauss_velocity(62, 8), dur))
+
+            cursor += dur_bars
+
+    return events
+
 
 def build_intro_hats(start_bar: int, num_bars: int, swing: float, bpm: int) -> list:
     """
@@ -1588,31 +1847,66 @@ def build_buildup_fill(end_bar: int, num_bars: int, swing: float, bpm: int) -> l
     return events
 
 
+# "Answering" variations for build_counter_melody()'s call-and-response mode
+# -- deliberately excludes 'default' (a near-identical nudge) and 'augment'
+# (duration stretch would fight the counter-melody's own note-length roll
+# below) so the answer reads as a related-but-distinct response rather than
+# an echo of the main melody's call.
+_COUNTER_MELODY_ANSWER_VARIATIONS = ['invert', 'retrograde', 'fragment']
+
+
 def build_counter_melody(key_root: int, start_bar: int, num_bars: int,
-                         swing: float, bpm: int) -> list:
+                         swing: float, bpm: int, scale: str = 'pent',
+                         seed_motif: list | None = None) -> list:
     """
     Answering melody in lower register (root-12). Fills silence between
     main melody phrases. 1-2 short phrases per num_bars section.
     Very sparse — complements without cluttering.
+
+    scale: same scale-name vocabulary as build_melody() (via the shared
+    _resolve_scale() dispatch) -- previously this always hardcoded
+    get_pentatonic() regardless of the track's actual scale.
+
+    seed_motif: when provided (pass the main melody's own track_motif),
+    each phrase is derived from it via vary_motif() using a contrasting
+    "answering" variation (invert/retrograde/fragment) instead of an
+    independent random walk -- true call-and-response, where the answer is
+    recognizably related to the main melody's call rather than merely
+    co-located in time. Falls back to the prior independent-random-walk
+    behavior when no seed motif is given, so existing call sites that don't
+    pass one keep their exact prior behavior.
     """
-    notes_low = get_pentatonic(key_root - 12)
+    notes_low = _resolve_scale(scale, key_root - 12) or _resolve_scale(scale, key_root)
     if not notes_low:
         notes_low = get_pentatonic(key_root)
     events = []
     bar = start_bar
     while bar < start_bar + num_bars - 1:
         if random.random() < 0.60:
-            phrase_len = random.randint(1, 3)
-            phrase_start = bar * 16 + random.randint(0, 6)
+            if seed_motif:
+                answer = vary_motif(seed_motif, notes_low,
+                                     random.choice(_COUNTER_MELODY_ANSWER_VARIATIONS))
+            else:
+                answer = None
+            phrase_len = len(answer) if answer else random.randint(1, 3)
+            # Offset a little further into the bar than a "call" phrase would
+            # start, so the answer follows rather than overlaps the main
+            # melody's phrase (call-and-response timing).
+            phrase_start = bar * 16 + random.randint(2, 8)
             prev_note = random.choice(notes_low)
             for i in range(phrase_len):
                 g = phrase_start + i * random.randint(3, 6)
                 if g >= (start_bar + num_bars) * 16:
                     break
-                idx  = notes_low.index(prev_note) if prev_note in notes_low else len(notes_low) // 2
-                step = random.choice([-1, -1, 0, 1, 1])
-                idx  = max(0, min(len(notes_low) - 1, idx + step))
-                note = notes_low[idx]
+                if answer:
+                    target = answer[i]
+                    note = target if target in notes_low else min(
+                        notes_low, key=lambda n: abs(n - target))
+                else:
+                    idx  = notes_low.index(prev_note) if prev_note in notes_low else len(notes_low) // 2
+                    step = random.choice([-1, -1, 0, 1, 1])
+                    idx  = max(0, min(len(notes_low) - 1, idx + step))
+                    note = notes_low[idx]
                 t    = jitter(grid_tick(g, swing), 28, bpm)
                 dur  = int(BAR * random.uniform(0.65, 1.55))
                 events.append((t, note, v(44, 10), dur))
@@ -1919,6 +2213,23 @@ def _pick_subgenre_weighted(history: list[dict]) -> str:
         (2.0 if s in _COZY_SUBGENRES else 1.0) / (counts.get(s, 0) + 1)
         for s in all_subs
     ]
+
+    # Engagement-analytics feedback (Thompson-sampling bandit over watch-
+    # ratio/CTR/like/comment-rate — see analytics.sub_genre_weights()):
+    # multiply the diversity-driven base weights above by how well each
+    # sub-genre has actually performed. Neutral 1.0 for every sub-genre when
+    # there's no/insufficient data (cold start), so this is a no-op until
+    # enough videos have been synced. try/except-guarded exactly like every
+    # other optional layer in pick_params() — a missing/corrupt
+    # analytics_log.json or any other failure here must never block a
+    # render, just fall back to the base diversity weighting.
+    try:
+        from scripts.analytics import sub_genre_weights
+        engagement_w = sub_genre_weights(all_subs)
+        weights = [w * engagement_w.get(s, 1.0) for w, s in zip(weights, all_subs)]
+    except Exception as e:
+        print(f"  [params] sub_genre engagement weighting failed ({e}) — using base weights")
+
     return random.choices(all_subs, weights=weights, k=1)[0]
 
 
@@ -2056,6 +2367,28 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         'sub_genre':      sub,
     }
 
+    # Engagement-analytics soft nudge on BPM (see analytics.bpm_bucket_weights()):
+    # re-roll within the subgenre's own bpm range, weighted toward whichever
+    # 10-bpm bucket has historically performed best, instead of the plain
+    # random.randint() draw above winning outright. A subgenre's bpm range is
+    # often narrow (10-20 bpm wide), so this draws a small set of candidate
+    # bpms spanning that range (including the original draw) and re-picks
+    # among them by bucket weight — a soft bias, not a hard override, and it
+    # degrades to the plain random.randint() result whenever there's no
+    # engagement data (bpm_bucket_weights() returns {} at cold start, so
+    # every candidate gets an equal 1.0 weight). try/except-guarded exactly
+    # like every other optional layer in this function — never blocks a render.
+    try:
+        lo, hi = cfg['bpm']
+        if hi > lo:
+            from scripts.analytics import bpm_bucket_weights
+            bpm_bucket_w = bpm_bucket_weights()
+            candidates = sorted({params['bpm'], lo, hi, *(random.randint(lo, hi) for _ in range(3))})
+            cand_weights = [bpm_bucket_w.get((c // 10) * 10, 1.0) for c in candidates]
+            params['bpm'] = random.choices(candidates, weights=cand_weights, k=1)[0]
+    except Exception as e:
+        print(f"  [params] BPM engagement re-roll failed ({e}) — using plain random bpm")
+
     # ~35% independent chance each for A/B drum sections to use a freshly
     # generated Euclidean pattern instead of the curated table (Phase-A
     # adoption bump; started at 20%). Each call is individually try/except'd
@@ -2191,19 +2524,23 @@ _SONG_FORMS = {
     'funk':     [('I',2),('A',6),('BR',1),('B',6),('O',1)],   # energy-forward = 16
     'minimal':  [('A',2),('BR',1),('B',2)],                    # tight = 5 loops
     'extended': [('I',1),('A',4),('BR',2),('B',6),('O',2)],   # long nujabes = 15
+    # research/theory/arrangement-structure.md #5: canonical 32-bar jazz-
+    # standard AABA shape (two A statements, a contrasting bridge, a final
+    # A) -- BR doubles as the "B"/bridge section, consistent with how
+    # _bridge_progression() already reharmonizes BR. For bossa_lofi/jazz_cafe,
+    # which currently fall back to 'standard' despite being the two
+    # subgenres most rooted in jazz-standard form.
+    'aaba':     [('I',1),('A',2),('A',2),('BR',2),('A',2),('O',1)],  # 10 loops
+    # research/theory/arrangement-structure.md #6: approximates phonk/drill's
+    # buildup->release cycling using only existing labels -- BR repurposed as
+    # a short filtered-buildup section immediately preceding a return to
+    # full-energy A, cycled three times, instead of the ambient-style single
+    # mid-track breakdown the other forms use. No B section: phonk/drill
+    # arrangement is repetition-with-layer-swap, not a long contrasting
+    # drop-down section.
+    'build':    [('I',1),('A',3),('BR',1),('A',3),('BR',1),('A',3),('O',1)],  # 13 loops
 }
-_FORM_BY_SUBGENRE = {
-    'ambient':        'ambient',
-    'chill_beats':    'ambient',
-    'piano_lofi':     'ambient',
-    'vaporwave':      'ambient',   # long dreamy drift
-    'lofi_classical': 'extended',  # refined, needs space
-    'lo_fi_funk':     'funk',
-    'hip_hop_lofi':   'funk',
-    'lofi_house':     'funk',      # rhythmic energy-forward
-    'nujabes':        'extended',
-    'lofi_jazz':      'extended',
-}
+_FORM_BY_SUBGENRE = genre_presets.build_form_overrides()
 
 # ─── GENERATIVE SONG-FORM GRAMMAR ──────────────────────────────────────────
 # An ADDITIONAL, more varied alternative to the 5 hand-authored _SONG_FORMS
@@ -2287,25 +2624,7 @@ def generate_song_form(seed: int | None = None) -> list[tuple[str, int]]:
 
 # Secondary genre-specific instrument texture layer
 # (program, style) — style controls rhythm pattern for that instrument character
-_SUBGENRE_TEXTURE = {
-    'bossa_lofi':     (GM_GUITAR_NYLON, 'strum'),
-    'lofi_jazz':      (GM_GUITAR_JAZZ,  'strum'),
-    'jazz_cafe':      (GM_GUITAR_JAZZ,  'strum'),
-    'neo_soul':       (GM_ORGAN_ROCK,   'stab'),
-    'lo_fi_funk':     (GM_ORGAN_ROCK,   'stab'),
-    'lofi_house':     (GM_ORGAN_ROCK,   'stab'),
-    'morning_lofi':   (GM_FLUTE,        'breath'),
-    'ambient':        (GM_FLUTE,        'breath'),
-    'vaporwave':      (GM_FLUTE,        'breath'),
-    'lofi_classical': (GM_FLUTE,        'breath'),
-    'bedroom_pop':    (GM_GUITAR_NYLON, 'strum'),
-    'lofi_rnb':       (GM_GUITAR_JAZZ,  'strum'),
-    'summer_vibes':   (GM_MARIMBA,      'pop'),
-    'city_pop':       (GM_MARIMBA,      'pop'),
-    'nujabes':        (GM_MUTED_TRUMPET,'fill'),
-    'lofi_drill':     (GM_ORGAN_ROCK,   'stab'),
-    'lofi_world':     (GM_KALIMBA,      'pop'),
-}
+_SUBGENRE_TEXTURE = genre_presets.build_subgenre_texture()
 
 
 def build_texture(program, progression, start_bar, num_bars, swing, bpm, style):
@@ -2383,22 +2702,7 @@ def build_texture(program, progression, start_bar, num_bars, swing, bpm, style):
 # 0=Standard, 8=Room, 16=Power, 24=Electronic, 25=TR-808, 32=Jazz, 40=Brush.
 # Non-zero programs are ignored by GM-only soundfonts (falls back to Standard),
 # but GS/SF3 soundfonts select a genuinely different drum kit — audible variety.
-_SUBGENRE_DRUM_KITS: dict[str, list[int]] = {
-    'hip_hop_lofi': [0, 24, 25],   # Standard / Electronic / TR-808
-    'lofi_phonk':   [24, 25],      # Electronic / TR-808 for phonk character
-    'dark_lofi':    [0, 8],        # Standard / Room (darker, more reverb)
-    'nujabes':      [0, 32],       # Standard / Jazz kit
-    'lofi_jazz':    [32, 40],      # Jazz / Brush kit
-    'jazz_cafe':    [32, 40],
-    'bossa_lofi':   [40, 32],      # Brush / Jazz
-    'ambient':      [40, 8],       # Brush / Room (very soft)
-    'piano_lofi':   [40, 32],
-    'lofi_classical': [40, 32],
-    'vaporwave':    [24, 0],       # Electronic / Standard
-    'neo_soul':     [0, 8],
-    'chill_beats':  [0, 8],
-    'lo_fi_funk':   [0, 16],       # Standard / Power (punchy)
-}
+_SUBGENRE_DRUM_KITS: dict[str, list[int]] = genre_presets.build_subgenre_drum_kits()
 _DEFAULT_DRUM_KIT_POOL = [0, 0, 0, 8, 32]  # mostly Standard, occasional variety
 
 # Scale modal lift for break section: shift to relative major 35% of the time
@@ -2516,6 +2820,13 @@ def build_midi(params, output_path):
     # Drum energy modifier
     energy_mult = {'low': 0.78, 'medium': 1.0, 'high': 1.20}.get(energy, 1.0)
 
+    # New engine-feature membership checks (see _GLIDE_808_GENRES/
+    # _MICRO_SWING_GENRES/_CONTINUOUS_ARP_GENRES above) — resolved once per
+    # track, threaded through every relevant build_*() call site below.
+    use_glide_bass  = sub_genre in _GLIDE_808_GENRES
+    use_micro_swing = sub_genre in _MICRO_SWING_GENRES
+    use_arp_melody  = sub_genre in _CONTINUOUS_ARP_GENRES
+
     # ── Song form ───────────────────────────────────────────────
     form_name = _FORM_BY_SUBGENRE.get(sub_genre, 'standard')
     form = _SONG_FORMS[form_name]
@@ -2540,18 +2851,13 @@ def build_midi(params, output_path):
         fill_bars.add(c - 1)
 
     # ── Motif scale (recomputed fresh per retry attempt below) ──
-    if scale == 'dorian':
-        _motif_scale = get_dorian(key_root)
-    elif scale == 'phryg':
-        _motif_scale = get_phrygian(key_root)
-    elif scale == 'phryg_dom':
-        _motif_scale = get_phrygian_dominant(key_root)
-    elif scale == 'major':
-        _motif_scale = get_major(key_root)
-    elif scale == 'lydian':
-        _motif_scale = get_lydian(key_root)
-    else:
-        _motif_scale = get_pentatonic(key_root)
+    # Uses the same _resolve_scale() dispatch as build_melody()/
+    # build_counter_melody() (previously this was a separate, partial elif
+    # chain covering only 5 of the ~15 scale names -- any other scale name
+    # silently fell back to pentatonic here even though build_melody() would
+    # go on to use the correct scale for the actual notes, which meant the
+    # seed motif and the melody built from it could disagree on scale).
+    _motif_scale = _resolve_scale(scale, key_root)
 
     print(f"  BPM={bpm} key={key} prog={prog_idx} swing={int(swing*100)}% "
           f"energy={energy} sub={sub_genre} walk={walking} form={form_name} mood='{mood}' | {TOTAL} bars")
@@ -2613,19 +2919,27 @@ def build_midi(params, output_path):
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 bass_s = sec_start + min(2, prog_bars - 1)
-                bass_ev += build_bass(prog, bass_s, 1, swing, bpm, False)
+                bass_ev += build_bass(prog, bass_s, 1, swing, bpm, False, glide=use_glide_bass)
                 hat_s = sec_start + min(2, prog_bars - 1)
                 hat_b = sec_bars - (hat_s - sec_start)
                 if hat_b > 0:
                     drum_ev += build_intro_hats(hat_s, hat_b, swing, bpm)
-                cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
+                cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm,
+                                                 scale=scale, seed_motif=track_motif)
 
             elif sec_label == 'A':
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
-                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
-                drum_ev    += build_drums(pat_a, sec_start, sec_bars, swing, bpm, fill_bars)
+                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking, glide=use_glide_bass)
+                drum_ev    += build_drums(pat_a, sec_start, sec_bars, swing, bpm, fill_bars,
+                                          micro_swing=use_micro_swing)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-                mel_ev     += build_melody(key_root, sec_start, sec_bars, swing, bpm,
+                if use_arp_melody:
+                    # Synthwave's melodic engine is the arp itself, not
+                    # arp-plus-separate-phrase-melody (research/subgenres/
+                    # lofi_synthwave.md) -- replaces build_melody() here.
+                    mel_ev += build_arpeggio(prog, sec_start, n_loops, swing, bpm, key_root=key_root)
+                else:
+                    mel_ev += build_melody(key_root, sec_start, sec_bars, swing, bpm,
                                            'sparse', scale, motif=track_motif,
                                            progression=prog, prog_bars=prog_bars,
                                            markov_nodes=markov_nodes, tension=sec_tension)
@@ -2640,16 +2954,18 @@ def build_midi(params, output_path):
                 bridge_prog_bars = sum(d for _, d in bridge_prog) or prog_bars
                 bridge_loops     = max(1, sec_bars // bridge_prog_bars)
                 piano_ev   += build_chords(bridge_prog, sec_start, bridge_loops, swing, bpm, tension=sec_tension)
-                bass_ev    += build_bass(bridge_prog, sec_start, bridge_loops, swing, bpm, walking)
+                bass_ev    += build_bass(bridge_prog, sec_start, bridge_loops, swing, bpm, walking, glide=use_glide_bass)
                 pad_ev     += build_pad(bridge_prog, sec_start, bridge_loops, swing, bpm)
                 drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
-                cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm)
+                cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm,
+                                                   scale=break_scale, seed_motif=track_motif)
                 sustain_ev += build_sustain_pedal(bridge_prog, sec_start, bridge_loops, swing, bpm)
 
             elif sec_label == 'B':
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
-                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking)
-                drum_ev    += build_drums(pat_b, sec_start, sec_bars, swing, bpm, fill_bars)
+                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking, glide=use_glide_bass)
+                drum_ev    += build_drums(pat_b, sec_start, sec_bars, swing, bpm, fill_bars,
+                                          micro_swing=use_micro_swing)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 active_bars += sec_bars
@@ -2664,13 +2980,17 @@ def build_midi(params, output_path):
                     loop_start   = sec_start + loop_i * prog_bars
                     loop_tension = _tension(loop_start + prog_bars // 2, TOTAL)
                     is_climax    = loop_tension >= 0.95
-                    mel_ev += build_melody(key_root, loop_start, prog_bars, swing, bpm,
-                                           'dense' if is_climax else 'medium', scale,
-                                           motif=track_motif, progression=prog,
-                                           prog_bars=prog_bars, markov_nodes=markov_nodes,
-                                           tension=loop_tension)
+                    if use_arp_melody:
+                        mel_ev += build_arpeggio(prog, loop_start, 1, swing, bpm, key_root=key_root)
+                    else:
+                        mel_ev += build_melody(key_root, loop_start, prog_bars, swing, bpm,
+                                               'dense' if is_climax else 'medium', scale,
+                                               motif=track_motif, progression=prog,
+                                               prog_bars=prog_bars, markov_nodes=markov_nodes,
+                                               tension=loop_tension)
                     if loop_i >= 1 or is_climax:
-                        cmelo_ev += build_counter_melody(key_root, loop_start, prog_bars, swing, bpm)
+                        cmelo_ev += build_counter_melody(key_root, loop_start, prog_bars, swing, bpm,
+                                                         scale=scale, seed_motif=track_motif)
                     if is_climax:
                         if _tex:
                             texture_ev += build_texture(_tex[0], prog, loop_start, prog_bars,
@@ -2683,12 +3003,13 @@ def build_midi(params, output_path):
 
             elif sec_label == 'O':
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
-                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, False)
+                bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, False, glide=use_glide_bass)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
-                cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm)
+                cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm,
+                                                   scale=scale, seed_motif=track_motif)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 od_bars = max(1, sec_bars // 2)
-                od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm)
+                od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm, micro_swing=use_micro_swing)
                 n_od = len(od_raw)
                 od_raw = [(ev[0], ev[1], max(1, int(ev[2] * (1.0 - (i / max(1, n_od)) * 0.75))), ev[3])
                           for i, ev in enumerate(od_raw)]
@@ -2748,7 +3069,11 @@ def build_midi(params, output_path):
         'lo_fi_funk': 36, 'neo_soul': 36,
     }
     bass_prog = _BASS_PROG.get(sub_genre, GM_BASS)
-    mid.tracks.append(abs_to_track(bass_ev, channel=1, program=bass_prog))
+    # pitch_bend_range only when this subgenre's bass actually uses glide=True
+    # (see use_glide_bass above) -- keeps the RPN setup scoped to the one
+    # feature that needs it instead of touching every subgenre's bass track.
+    mid.tracks.append(abs_to_track(bass_ev, channel=1, program=bass_prog,
+                                   pitch_bend_range=_GLIDE_BEND_RANGE_SEMITONES if use_glide_bass else None))
     # Rotate drum kit per track — GS/SF3 soundfonts honor non-zero kits;
     # GM-only soundfonts silently fall back to Standard (program 0).
     drum_kit = random.choice(_SUBGENRE_DRUM_KITS.get(sub_genre, _DEFAULT_DRUM_KIT_POOL))
@@ -2887,11 +3212,19 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
         except Exception as _aqe:
             print(f"  [audio-quality] Scoring skipped ({_aqe})")
 
-    # Save sidecar metadata for stream now-playing display
+    # Save sidecar metadata for stream now-playing display AND for run.py's
+    # concept/meta-alignment step (which stashes sub_genre/bpm/music_engine
+    # onto the SEO dict so they reach upload_log.json -> analytics_log.json
+    # -> sub_genre_weights()/bpm_bucket_weights()/engine_weights()).
+    # music_engine is hardcoded "v1" here — this module is the v1 generator;
+    # generate_music_v2.py's own generate_track() hardcodes "v2" in its
+    # equivalent sidecar write.
     with open(out + ".meta.json", "w", encoding="utf-8") as _mf:
         json.dump({
             "title": params.get("mood", "lofi dreams"),
             "genre": params.get("sub_genre", "lo-fi hip hop"),
+            "bpm": params.get("bpm"),
+            "music_engine": "v1",
         }, _mf)
 
     print(f"  ✓ {out} ({os.path.getsize(out)//1024//1024} MB)")

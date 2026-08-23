@@ -21,6 +21,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 
 from nicegui import app, ui
+from nicegui.timer import Timer
 
 from . import (
     alerts, auth, automation, config, data, jobs, stats, system_admin, theme, youtube_oauth,
@@ -31,7 +32,7 @@ NAV = [
     ("library", "Library", "grid_view"),
     ("samples", "Samples", "library_music"),
     ("live", "Live", "sensors"),
-    ("trends", "Trends", "trending_up"),
+    ("logs", "Logs", "receipt_long"),
     ("analytics", "Analytics", "insights"),
     ("automation", "Automation", "autorenew"),
     ("calendar", "Calendar", "calendar_month"),
@@ -126,12 +127,58 @@ def _fmt_elapsed(secs: float) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+# Sub-genre/mood/engine dropdowns are shared verbatim between render_dialog()
+# (Studio "New render") and queue_dialog() (Calendar "Add to queue") -- both
+# build the identical run.py/publish.py argv from the identical set of
+# controls, so the argv-building itself lives in one place (testable without
+# spinning up a real NiceGUI dialog) rather than being copy-pasted per-dialog
+# the way theme/duration/privacy historically were.
+def _subgenre_select_options() -> dict[str, str]:
+    return {"auto": "Auto (algorithm picks)",
+            **{k: k.replace("_", " ").title() for k in config.subgenre_choices()}}
+
+
+_ENGINE_SELECT_OPTIONS = {
+    "auto": "Auto (bandit-selected)",
+    "v1": "v1 (stable)",
+    "v2": "v2 (beta: GA/annealing voice-leading, L-system melody)",
+}
+
+
+def _build_render_args(*, upload: bool, theme: str, duration: str, privacy: str,
+                        subgenre: str = "auto", mood: str = "", engine: str = "auto") -> list[str]:
+    """Build the run.py (render-only) or publish.py auto (render+upload) argv
+    for a render job, given the dialog's current control values. `theme`
+    "random" and `subgenre`/`engine` "auto" are each the algorithm-picks
+    default and are omitted from argv rather than passed explicitly -- for
+    engine specifically, omitting both --music-v2/--no-music-v2 is what lets
+    run.py's 3-state default (None) fall through to the bandit."""
+    if upload:
+        args = ["publish.py", "auto", "--privacy", privacy, "--duration", duration]
+    else:
+        args = ["run.py", "--skip-upload", "--duration", duration]
+    if theme != "random":
+        args += ["--theme", theme]
+    if subgenre != "auto":
+        args += ["--sub-genre", subgenre]
+    if mood:
+        args += ["--mood", mood]
+    if engine == "v2":
+        args += ["--music-v2"]
+    elif engine == "v1":
+        args += ["--no-music-v2"]
+    return args
+
+
 def render_dialog() -> None:
     yt_connected = youtube_oauth.status()["connected"]
     with ui.dialog() as dlg, theme.card(title="New render", classes="w-96 gap-3"):
         tsel = ui.select(config.THEMES, value=config.DEFAULT_THEME, label="Theme").classes("w-full")
         dsel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION, label="Duration").classes("w-full")
         psel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY, label="Privacy").classes("w-full")
+        sgsel = ui.select(_subgenre_select_options(), value="auto", label="Sub-genre").classes("w-full")
+        mood_input = ui.input("Mood (optional)", placeholder="e.g. rainy study session").classes("w-full")
+        esel = ui.select(_ENGINE_SELECT_OPTIONS, value="auto", label="Engine").classes("w-full")
         if not yt_connected:
             ui.label("YouTube isn't connected yet — connect it in Settings before uploading. "
                      "\"Render only\" works fine without it.").classes(f"{theme.SUB} text-amber")
@@ -140,16 +187,11 @@ def render_dialog() -> None:
             if jobs.manager.is_busy():
                 ui.notify("A render is already running.", type="warning")
                 return
-            if upload:
-                args = ["publish.py", "auto", "--privacy", psel.value, "--duration", dsel.value]
-                if tsel.value != "random":
-                    args += ["--theme", tsel.value]
-                name = "render+upload"
-            else:
-                args = ["run.py", "--skip-upload", "--duration", dsel.value]
-                if tsel.value != "random":
-                    args += ["--theme", tsel.value]
-                name = "render"
+            args = _build_render_args(
+                upload=upload, theme=tsel.value, duration=dsel.value, privacy=psel.value,
+                subgenre=sgsel.value, mood=mood_input.value, engine=esel.value,
+            )
+            name = "render+upload" if upload else "render"
             await jobs.manager.run(name, args)
             dlg.close()
             ui.notify(f"Started: {name}", type="positive")
@@ -183,13 +225,12 @@ def view_studio(root) -> None:
                         .props("fit=cover")
                 else:
                     with ui.element("div").classes("hero-art hero-art-empty"):
-                        ui.label("🎧")
+                        ui.label("NO DATA")
                 with ui.column().classes("gap-2 grow min-w-0"):
                     with ui.row().classes("items-center gap-2"):
                         status = ui.label().classes("pill")
                         ttl = ui.label("").classes("text-h1")
                     sub = ui.label("").classes("studio-sub")
-                    theme.waveform(30)
                     prog = ui.linear_progress(value=1.0, show_value=False)\
                         .props("indeterminate rounded color=primary").classes("w-full")
             with ui.row().classes("gap-3 mt-4"):
@@ -199,6 +240,22 @@ def view_studio(root) -> None:
                           on_click=lambda: set_view("live")).props("color=secondary")
                 ui.button("Cancel", icon="stop",
                           on_click=lambda: jobs.manager.cancel()).props("flat color=negative")
+
+        # Automation status/progress is polled on its own slower async timer
+        # (it shells out to systemctl + reads /proc + a log file -- too slow
+        # to run synchronously on refresh_hero's 1Hz tick without stalling
+        # the event loop) and cached here for refresh_hero to read.
+        _auto_hero_state: dict = {}
+
+        async def refresh_auto_for_hero() -> None:
+            if jobs.manager.is_busy() or jobs.manager.stream_running():
+                return  # a manual job/stream owns the hero; don't bother polling
+            auto_st = await asyncio.to_thread(automation.status)
+            running = auto_st.get("running_now", False)
+            progress = await asyncio.to_thread(automation.render_progress) if running else None
+            _auto_hero_state.clear()
+            _auto_hero_state.update(running=running, progress=progress)
+            refresh_hero()
 
         def refresh_hero() -> None:
             if jobs.manager.is_busy():
@@ -240,6 +297,25 @@ def view_studio(root) -> None:
                 ttl.text = j.name
                 sub.text = f"Last run failed · {_last_stage(j)}"
                 prog.visible = False
+            elif _auto_hero_state.get("running"):
+                status.text = "● AUTO-RENDERING"
+                status.classes(remove=_HERO_STATUS_CLASSES, add="text-amber")
+                ttl.text = "Unattended render in progress"
+                p = _auto_hero_state.get("progress") or {}
+                stage = {"generating": "Generating music/visual/SEO",
+                         "encoding": "Encoding final video",
+                         "uploading": "Uploading to YouTube"}.get(p.get("stage"), "Working")
+                if p.get("percent") is not None:
+                    eta = p.get("eta_secs")
+                    eta_txt = f" · ETA {_fmt_elapsed(eta)}" if eta else ""
+                    speed_txt = f" · {p['speed']:.2f}x speed" if p.get("speed") else ""
+                    sub.text = f"{stage} · {p['percent']:.0f}%{eta_txt}{speed_txt}"
+                    prog.props(remove="indeterminate")
+                    prog.value = p["percent"] / 100
+                else:
+                    sub.text = f"{stage}…"
+                    prog.props(add="indeterminate")
+                prog.visible = True
             else:
                 status.text = "● IDLE"
                 status.classes(remove=_HERO_STATUS_CLASSES, add="text-teal")
@@ -249,6 +325,62 @@ def view_studio(root) -> None:
 
         refresh_hero()
         ui.timer(1.0, refresh_hero)
+        ui.timer(0.2, refresh_auto_for_hero, once=True)
+        ui.timer(5.0, refresh_auto_for_hero)
+
+        # ── System pulse: automation + queue + health in one glance, so
+        # opening Studio answers "what's happening / what's next / what's
+        # wrong" without a tour through Automation/Calendar/System. Each chip
+        # is clickable -- jumps straight to the page that can act on it. ────
+        with theme.card("System pulse", "Automation status, what's queued next, "
+                        "and anything that needs attention."):
+            pulse_col = ui.column().classes("w-full gap-2")
+
+            def _pulse_chip(text: str, color_cls: str, nav_target: str) -> None:
+                with ui.element("div").classes(
+                        f"pill cursor-pointer {color_cls}").on(
+                        "click", lambda t=nav_target: set_view(t)):
+                    ui.label(text).classes("text-xs")
+
+            async def refresh_pulse() -> None:
+                auto_st = await asyncio.to_thread(automation.status)
+                fallback_st = await asyncio.to_thread(automation.auto_run_state)
+                pending = jobs.queue.list_pending()
+                cert = await asyncio.to_thread(system_admin.cert_status)
+                snap = await asyncio.to_thread(system_admin.resource_snapshot)
+
+                pulse_col.clear()
+                with pulse_col, ui.row().classes("items-center gap-2 flex-wrap"):
+                    if not auto_st["installed"]:
+                        _pulse_chip("automation not installed", "text-muted", "automation")
+                    elif auto_st["running_now"]:
+                        progress = await asyncio.to_thread(automation.render_progress)
+                        pct_txt = (f" · {progress['percent']:.0f}%"
+                                   if progress and progress.get("percent") is not None else "")
+                        _pulse_chip(f"● auto-render running now{pct_txt}", "text-amber", "automation")
+                    elif auto_st["active"]:
+                        _pulse_chip(f"○ armed · next {auto_st.get('next_run') or '?'}",
+                                    "text-teal", "automation")
+                    else:
+                        _pulse_chip("○ automation stopped", "text-rose", "automation")
+
+                    if pending:
+                        _pulse_chip(f"{len(pending)} queued", "text-info", "calendar")
+
+                    if fallback_st["in_fallback"]:
+                        _pulse_chip(f"⚠ {fallback_st['consecutive_failures']} consecutive "
+                                    "failures — fallback mode", "text-rose", "automation")
+
+                    if cert and cert.get("expiring_soon"):
+                        _pulse_chip(f"⚠ TLS cert expires in {cert['days_left']:.0f}d",
+                                    "text-amber", "system")
+
+                    if snap["disk_percent"] > 90:
+                        _pulse_chip(f"⚠ disk {snap['disk_percent']:.0f}% full",
+                                    "text-rose", "system")
+
+            ui.timer(0.1, refresh_pulse, once=True)
+            ui.timer(15.0, refresh_pulse)
 
         # ── Stat cards ─────────────────────────────────────────────────────────
         if not youtube_oauth.status()["connected"]:
@@ -274,6 +406,60 @@ def view_studio(root) -> None:
 
             refresh_stats()
             ui.timer(30.0, refresh_stats)
+
+        # ── Lofi-inator (trending-cover generator; folded in from the old ──────
+        # standalone "Trends" nav tab, which collided in name with the real
+        # Analytics tab and wasn't actually analytics -- it's a render-job
+        # trigger like "New render" above, so it belongs here.
+        with theme.card("Lofi-inator", "Discover trending songs, generate lofi covers, "
+                        "upload to the lofi-inator playlist."):
+            with ui.row().classes("items-end gap-4"):
+                inator_limit = ui.number("Limit", value=1, min=1, max=10, format="%d").classes("w-28")
+                inator_save_only = ui.switch("Save only (no upload)", value=False)
+
+            async def run_inator() -> None:
+                if jobs.manager.is_busy():
+                    ui.notify("A job is already running.", type="warning")
+                    return
+                inator_args = ["publish.py", "lofi-inator", "--limit", str(int(inator_limit.value or 1))]
+                if inator_save_only.value:
+                    inator_args.append("--save-only")
+                await jobs.manager.run("lofi-inator", inator_args)
+                ui.notify("Running lofi-inator…", type="positive")
+
+            ui.button("Run lofi-inator", icon="auto_awesome",
+                      on_click=run_inator).props("color=primary").classes("mt-2")
+
+        # ── Views by video ──────────────────────────────────────────────────────
+        # Single-series bar (no legend needed -- see dataviz skill's color-
+        # formula: one series doesn't need one) using the same
+        # video_engagement() batched call the Content table (Library view)
+        # reuses, so this costs nothing extra beyond what's already fetched
+        # on that page. Real absolute counts, not a sparse day-by-day
+        # analytics series -- renders meaningfully even with only 1-2 videos.
+        _lib_for_chart = stats.library(limit=10)
+        _vids_for_chart = [c["video_id"] for c in _lib_for_chart if c.get("video_id")]
+        if _vids_for_chart:
+            _eng_for_chart = stats.video_engagement(_vids_for_chart)
+            _chart_rows = sorted(
+                [{"title": c["title"], "views": _eng_for_chart.get(c["video_id"], {}).get("views", 0)}
+                 for c in _lib_for_chart if c.get("video_id")],
+                key=lambda r: r["views"], reverse=True,
+            )
+            with theme.card("Views by video", "Published uploads, most-viewed first."):
+                ui.echart({
+                    "grid": {"left": 8, "right": 16, "top": 8, "bottom": 8, "containLabel": True},
+                    "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+                    "xAxis": {"type": "value", "axisLabel": {"color": theme.MUTED}},
+                    "yAxis": {"type": "category", "inverse": True,
+                              "data": [r["title"][:36] for r in _chart_rows],
+                              "axisLabel": {"color": theme.MUTED, "fontSize": 11}},
+                    "series": [{
+                        "type": "bar", "data": [r["views"] for r in _chart_rows],
+                        "itemStyle": {"color": theme.PRIMARY, "borderRadius": [0, 3, 3, 0]},
+                        "barMaxWidth": 22,
+                    }],
+                }).classes("w-full mt-1").style(f"height:{max(120, 44 * len(_chart_rows))}px")
 
         # ── Library preview ────────────────────────────────────────────────────
         with theme.card():
@@ -330,6 +516,41 @@ async def _retry_job(job_id: str) -> None:
         ui.notify(str(e), type="negative")
 
 
+def _job_details_dialog(j) -> None:
+    """Full detail behind one job row: exact command, absolute timestamps,
+    exit code, slot -- not just what fits in the summary row. The "detailed"
+    half of the log; the summary row is the "at a glance" half."""
+    started = datetime.datetime.fromtimestamp(j.started_at).strftime("%Y-%m-%d %H:%M:%S")
+    finished = (datetime.datetime.fromtimestamp(j.finished_at).strftime("%Y-%m-%d %H:%M:%S")
+                if j.finished_at else "—")
+    with ui.dialog() as dlg, theme.card(title=j.name, classes="w-full gap-2 max-w-2xl"):
+        for label, value in [
+            ("Job ID", j.id), ("Status", j.status), ("Slot", j.slot),
+            ("Started", started), ("Finished", finished),
+            ("Duration", _fmt_elapsed(j.duration)),
+            ("Exit code", str(j.returncode) if j.returncode is not None else "—"),
+        ]:
+            with ui.row().classes("w-full items-center gap-3 no-wrap"):
+                ui.label(label).classes(f"{theme.SUB} w-24 shrink-0")
+                ui.label(value).classes("text-sm font-mono truncate")
+        ui.label("Command").classes(f"{theme.SUB} mt-2")
+        ui.label(" ".join(j.cmd)).classes("text-xs font-mono code-chip w-full")
+
+        full_log = jobs.read_job_log(j.id)
+        ui.label("Full output").classes(f"{theme.SUB} mt-2")
+        if full_log:
+            ui.label(full_log).classes(f"{theme.LOG} w-full h-96 overflow-y-auto "
+                                        "whitespace-pre-wrap p-3")
+        elif getattr(j, "error", ""):
+            ui.label(j.error).classes("text-xs font-mono code-chip w-full")
+            ui.label("(only the last line was kept — this job ran before full-log "
+                     "persistence existed)").classes(f"{theme.SUB} text-xs")
+        else:
+            ui.label("No output captured.").classes(theme.SUB)
+        ui.button("Close", on_click=dlg.close).props("flat").classes("self-end mt-2")
+    dlg.open()
+
+
 def _runs_table(history: list) -> None:
     if not history:
         ui.label("No runs yet this session.").classes(theme.SUB + " mt-1")
@@ -343,6 +564,8 @@ def _runs_table(history: list) -> None:
                 _open_detail([card], 0)
 
             def _row_actions(card=card, j=j) -> None:
+                ui.button(icon="info_outline", on_click=lambda j=j: _job_details_dialog(j))\
+                    .props("flat dense round").tooltip("Full details")
                 if card:
                     ui.button("View", icon="visibility", on_click=_view)\
                         .props("flat dense color=primary")
@@ -351,13 +574,18 @@ def _runs_table(history: list) -> None:
                               on_click=lambda j=j: _retry_job(j.id))\
                         .props("flat dense color=secondary")
 
+            # Reason column right after status (not after duration) -- on a
+            # narrow/mobile viewport the columns past what fits need a
+            # horizontal swipe to reach, and "why did it fail" matters more
+            # at a glance than exactly how long it ran for.
             theme.data_row([
                 {"icon": _STATUS_ICON.get(j.status, "help"), "color": color_cls},
                 {"text": j.name, "classes": "text-body font-medium", "width": "lg"},
                 {"text": j.status, "color": color_cls, "width": "sm"},
+                {"text": (getattr(j, "error", "") or _last_stage(j)) if j.status == "failed" else "",
+                 "classes": f"{theme.SUB} truncate"},
                 {"text": _fmt_elapsed(j.duration), "classes": theme.SUB, "width": "xs"},
-                {"text": _last_stage(j) if j.status == "failed" else "", "classes": f"{theme.SUB} truncate"},
-            ], extra=_row_actions if (card or j.status == "failed") else None)
+            ], extra=_row_actions)
 
 
 def _library_grid(cards: list[dict], on_change=lambda: None) -> None:
@@ -477,6 +705,78 @@ def _confirm_delete_render(c: dict, on_change) -> None:
     dlg.open()
 
 
+def _edit_video_dialog(c: dict) -> None:
+    """Edit an already-published video's title/description/tags/privacy, and
+    regenerate + push a new thumbnail with the current generator. Confirmed
+    2026-08-16: nothing in this codebase could touch a video after upload at
+    all -- publish.py/upload_youtube.py only ever set these once, at upload
+    time. This is the YT-Studio feature that was actually missing (editing
+    live content), not another view of data that already had a page."""
+    video_id = c["video_id"]
+    with ui.dialog() as dlg, theme.card(title="Edit video", classes="w-full gap-3 max-w-2xl"):
+        body = ui.column().classes("w-full gap-3")
+        with body:
+            ui.label("Loading current details…").classes(theme.SUB)
+
+        async def load() -> None:
+            details = await asyncio.to_thread(stats.get_video_details, video_id)
+            body.clear()
+            with body:
+                if details is None:
+                    ui.label("Couldn't load this video from YouTube — check the connection "
+                             "in Settings.").classes("text-rose")
+                    return
+                title_in = ui.input("Title", value=details["title"]).classes("w-full")
+                desc_in = ui.textarea("Description", value=details["description"])\
+                    .classes("w-full").props("rows=8")
+                tags_in = ui.input("Tags (comma-separated)",
+                                    value=", ".join(details["tags"])).classes("w-full")
+                privacy_in = ui.select(["public", "unlisted", "private"],
+                                        value=details["privacy"], label="Privacy").classes("w-48")
+
+                thumb_status = ui.label("").classes(theme.SUB)
+
+                async def do_regenerate_thumbnail() -> None:
+                    thumb_status.text = "Regenerating…"
+                    new_path = await asyncio.to_thread(
+                        stats.regenerate_thumbnail, video_id, title_in.value)
+                    if not new_path:
+                        thumb_status.text = ("Couldn't determine this video's original theme/"
+                                              "duration — regenerate skipped.")
+                        return
+                    ok = await asyncio.to_thread(stats.set_video_thumbnail, video_id, new_path)
+                    thumb_status.text = ("Pushed new thumbnail to YouTube." if ok
+                                          else "Generated locally, but pushing to YouTube failed.")
+                    if ok:
+                        ui.notify("Thumbnail updated", type="positive")
+
+                with ui.row().classes("items-center gap-2"):
+                    ui.button("Regenerate + push thumbnail", icon="auto_awesome",
+                              on_click=do_regenerate_thumbnail).props("flat color=primary")
+                    thumb_status
+
+                with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                    ui.button("Cancel", on_click=dlg.close).props("flat")
+
+                    async def do_save() -> None:
+                        tags = [t.strip() for t in (tags_in.value or "").split(",") if t.strip()]
+                        ok = await asyncio.to_thread(
+                            stats.update_video, video_id,
+                            title=title_in.value, description=desc_in.value,
+                            tags=tags, privacy=privacy_in.value,
+                            category_id=details["category_id"])
+                        ui.notify("Saved to YouTube" if ok else "Save failed — check connection",
+                                  type="positive" if ok else "negative")
+                        if ok:
+                            dlg.close()
+
+                    ui.button("Save changes", icon="save", on_click=do_save,
+                              color="primary").props("unelevated")
+
+        ui.timer(0.1, load, once=True)
+    dlg.open()
+
+
 def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
     c = cards[index]
     with ui.dialog() as dlg, theme.card(classes="w-full gap-3 max-w-3xl"):
@@ -485,6 +785,10 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
                 ui.label(c["title"]).classes(theme.H)
                 ui.label(f"{c['theme']} · {c['when']}").classes(theme.SUB)
             with ui.row().classes("gap-1 no-wrap"):
+                if c.get("video_id"):
+                    ui.button(icon="edit", color="primary",
+                              on_click=lambda: (dlg.close(), _edit_video_dialog(c)))\
+                        .props("flat round dense").tooltip("Edit title/description/tags/thumbnail")
                 ui.button(icon="delete_outline", color="negative",
                           on_click=lambda: (dlg.close(), _confirm_delete_render(c, on_change)))\
                     .props("flat round dense")
@@ -659,6 +963,60 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
     dlg.open()
 
 
+_CONTENT_SORTS = {
+    "Newest": lambda r: r["dt"] or datetime.datetime.min,
+    "Most views": lambda r: r["views"],
+    "Most likes": lambda r: r["likes"],
+    "Most comments": lambda r: r["comments"],
+}
+
+
+def _content_table(cards: list[dict], sort_by: str) -> None:
+    """YouTube-Studio-style Content table: every synced video, one row each,
+    with the at-a-glance stats the grid view can't show without opening each
+    one individually. Reuses stats.video_engagement() (already powers the
+    Analytics per-video table) for likes/comments/views in one batched call."""
+    if not cards:
+        ui.label("No renders yet.").classes(theme.SUB)
+        return
+    vids = [c["video_id"] for c in cards if c.get("video_id")]
+    engagement = stats.video_engagement(vids) if vids else {}
+    rows = []
+    for c in cards:
+        eng = engagement.get(c.get("video_id"), {})
+        rows.append({**c, "views": eng.get("views", 0), "likes": eng.get("likes", 0),
+                     "comments": eng.get("comments", 0)})
+    rows.sort(key=_CONTENT_SORTS.get(sort_by, _CONTENT_SORTS["Newest"]), reverse=True)
+
+    with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
+        theme.data_row([
+            {"text": "Video", "width": "xl"},
+            {"text": "Published", "width": "md"},
+            {"text": "Status", "width": "sm"},
+            {"text": "Views", "width": "sm"},
+            {"text": "Likes", "width": "sm"},
+            {"text": "Comments", "width": "sm"},
+        ], header=True)
+        for i, r in enumerate(rows):
+            def _view(cards=rows, i=i) -> None:
+                _open_detail(cards, i)
+
+            with ui.row().classes("data-row cursor-pointer items-center gap-3 no-wrap")\
+                    .on("click", _view):
+                with ui.row().classes("items-center gap-2 no-wrap col-xl min-w-0"):
+                    ui.image(f"/media/{r['thumb_name']}").classes("w-20 aspect-video rounded")\
+                        .props("fit=cover")
+                    ui.label(r["title"]).classes("text-sm font-medium truncate")
+                ui.label(r["when"]).classes(f"{theme.SUB} col-md")
+                if r.get("video_id"):
+                    ui.label("Public").classes("text-teal text-sm col-sm")
+                else:
+                    ui.label("Local only").classes(f"{theme.SUB} col-sm")
+                ui.label(stats.fmt_count(r["views"])).classes("text-sm col-sm")
+                ui.label(stats.fmt_count(r["likes"])).classes("text-sm col-sm")
+                ui.label(stats.fmt_count(r["comments"])).classes("text-sm col-sm")
+
+
 def view_library(root) -> None:
     with root:
         with theme.card():
@@ -669,8 +1027,15 @@ def view_library(root) -> None:
                 ui.label("Library").classes(theme.H)
                 search = ui.input(placeholder="Search title or theme...")\
                     .props("dense clearable").classes("grow max-w-xs")
-                ui.button("Refresh", icon="refresh",
-                          on_click=lambda: set_view("library")).props("flat dense color=primary")
+                with ui.row().classes("items-center gap-2 no-wrap"):
+                    sort_sel = ui.select(list(_CONTENT_SORTS), value="Newest")\
+                        .props("dense").classes("w-36")
+                    # Table-first by default -- matches YT Studio's own
+                    # Content tab (a sortable table, not a thumbnail grid);
+                    # the grid is still one click away for visual browsing.
+                    table_toggle = ui.switch("Table view", value=True)
+                    ui.button("Refresh", icon="refresh",
+                              on_click=lambda: set_view("library")).props("flat dense color=primary")
 
             state = {"limit": 48}
             grid_container = ui.column().classes("w-full")
@@ -683,10 +1048,13 @@ def view_library(root) -> None:
                     cards = [c for c in cards
                              if q in c["title"].lower() or q in c["theme"].lower()]
                 with grid_container:
-                    _library_grid(cards, on_change=render)
-                    if not q and len(cards) >= state["limit"]:
-                        ui.button("Load more", icon="expand_more", on_click=load_more)\
-                            .props("flat dense color=primary").classes("mt-3")
+                    if table_toggle.value:
+                        _content_table(cards, sort_sel.value)
+                    else:
+                        _library_grid(cards, on_change=render)
+                        if not q and len(cards) >= state["limit"]:
+                            ui.button("Load more", icon="expand_more", on_click=load_more)\
+                                .props("flat dense color=primary").classes("mt-3")
 
             def load_more() -> None:
                 state["limit"] += 48
@@ -695,6 +1063,8 @@ def view_library(root) -> None:
             # No debounce needed: this filters an already-fetched in-memory list
             # (stats.library() reads local files, no network call per keystroke).
             search.on_value_change(render)
+            sort_sel.on_value_change(render)
+            table_toggle.on_value_change(render)
             render()
 
 
@@ -764,31 +1134,6 @@ def view_live(root) -> None:
             live_log(lambda: jobs.manager.stream or jobs.manager.current, height="h-80")
 
 
-def view_trends(root) -> None:
-    with root:
-        with theme.card("lofi-inator",
-                        "Discover trending songs, generate lofi covers, upload to the "
-                        "lofi-inator playlist."):
-            with ui.row().classes("items-end gap-4"):
-                limit = ui.number("Limit", value=1, min=1, max=10, format="%d").classes("w-28")
-                save_only = ui.switch("Save only (no upload)", value=False)
-
-            async def run_inator() -> None:
-                if jobs.manager.is_busy():
-                    ui.notify("A job is already running.", type="warning")
-                    return
-                args = ["publish.py", "lofi-inator", "--limit", str(int(limit.value or 1))]
-                if save_only.value:
-                    args.append("--save-only")
-                await jobs.manager.run("lofi-inator", args)
-                ui.notify("Running lofi-inator…", type="positive")
-
-            ui.button("Run lofi-inator", icon="auto_awesome",
-                      on_click=run_inator).props("color=primary").classes("mt-2")
-        with theme.card("Output"):
-            live_log(lambda: jobs.manager.current, height="h-72")
-
-
 _PILLAR_MARKER_COLOR = {"▲": "text-teal", "▼": "text-rose", " ": "text-amber"}
 # echarts itemStyle needs real hex (can't reach into CSS custom properties from
 # a JSON series config), so this mirrors _PILLAR_MARKER_COLOR using the same
@@ -847,492 +1192,551 @@ def view_analytics(root) -> None:
                 return
             set_view("analytics")
 
-        with theme.card():
-            with ui.row().classes("w-full items-center justify-between"):
-                ui.label("Performance by pillar").classes(theme.H)
-                ui.button("Sync now", icon="sync", on_click=do_sync)\
-                    .props("flat dense color=primary")
-            ui.label("How CTR/watch-time compares across SEO title pillars, based on "
-                     "uploads 7-90 days old. Feeds back into which pillar gets picked more "
-                     "often for future renders (see generate_seo.py's pillar weighting).")\
-                .classes(theme.SUB)
+        with ui.tabs().classes("w-full") as analytics_tabs:
+            ui.tab("overview", label="Overview")
+            ui.tab("performance", label="Performance")
+            ui.tab("audience", label="Audience")
+            ui.tab("revenue", label="Revenue")
+            ui.tab("content", label="Content")
+        with ui.tab_panels(analytics_tabs, value="overview").classes("w-full"):
+            with ui.tab_panel("overview").classes("gap-5"):
+                with theme.card():
+                    with ui.row().classes("w-full items-center justify-between"):
+                        ui.label("Performance by pillar").classes(theme.H)
+                        ui.button("Sync now", icon="sync", on_click=do_sync)\
+                            .props("flat dense color=primary")
+                    ui.label("How CTR/watch-time compares across SEO title pillars, based on "
+                             "uploads 7-90 days old. Feeds back into which pillar gets picked more "
+                             "often for future renders (see generate_seo.py's pillar weighting).")\
+                        .classes(theme.SUB)
 
-            if not result["by_pillar"]:
-                ui.label("No analytics data yet. Needs uploaded videos with 7+ days of view "
-                         "history, then hit Sync now (or run "
-                         "`python scripts/analytics.py --report` on the server).")\
-                    .classes(theme.SUB + " mt-3")
-            else:
-                with ui.row().classes("w-full gap-4 no-wrap mt-2 overflow-x-auto"):
-                    with ui.element("div").classes("stat grow"):
-                        ui.label(f"{result['channel_avg_ctr'] * 100:.1f}%").classes("stat-num")
-                        ui.label("Channel avg CTR").classes("stat-lbl")
-                    with ui.element("div").classes("stat grow"):
-                        ui.label(str(result["n_total"])).classes("stat-num")
-                        ui.label("Videos tracked").classes("stat-lbl")
+                    if not result["by_pillar"]:
+                        ui.label("No analytics data yet. Needs uploaded videos with 7+ days of view "
+                                 "history, then hit Sync now (or run "
+                                 "`python scripts/analytics.py --report` on the server).")\
+                            .classes(theme.SUB + " mt-3")
+                    else:
+                        with ui.row().classes("w-full gap-4 no-wrap mt-2 overflow-x-auto"):
+                            with ui.element("div").classes("stat grow"):
+                                ui.label(f"{result['channel_avg_ctr'] * 100:.1f}%").classes("stat-num")
+                                ui.label("Channel avg CTR").classes("stat-lbl")
+                            with ui.element("div").classes("stat grow"):
+                                ui.label(str(result["n_total"])).classes("stat-num")
+                                ui.label("Videos tracked").classes("stat-lbl")
 
-                pillars = [r["pillar"] for r in result["by_pillar"]]
-                ctrs = [round(r["avg_ctr"] * 100, 2) for r in result["by_pillar"]]
-                colors = [_PILLAR_MARKER_HEX.get(r["marker"], theme.PRIMARY)
-                          for r in result["by_pillar"]]
-                ui.echart({
-                    "grid": {"left": 60, "right": 16, "top": 16, "bottom": 40},
-                    "xAxis": {"type": "category", "data": pillars,
-                              "axisLabel": {"color": theme.MUTED, "rotate": 20}},
-                    "yAxis": {"type": "value", "name": "avg CTR %",
-                              "axisLabel": {"color": theme.MUTED}},
-                    "series": [{
-                        "type": "bar", "data": [
-                            {"value": v, "itemStyle": {"color": c}}
-                            for v, c in zip(ctrs, colors)
-                        ],
-                    }],
-                }).classes("w-full mt-3").style("height:260px")
-
-                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
-                    for row in result["by_pillar"]:
-                        color_cls = _PILLAR_MARKER_COLOR.get(row["marker"], "text-amber")
-                        theme.data_row([
-                            {"text": row["marker"] or "·", "color": color_cls, "classes": ""},
-                            {"text": row["pillar"], "classes": "text-sm font-medium", "width": "lg"},
-                            {"text": f"{row['avg_ctr'] * 100:.1f}% CTR", "color": color_cls,
-                             "classes": "text-sm", "width": "md"},
-                            {"text": f"{row['avg_views']:.0f} avg views", "classes": theme.SUB},
-                            {"text": f"{row['avg_watch_min']:.0f} min avg watch", "classes": theme.SUB},
-                            {"text": f"n={row['n']}", "classes": theme.SUB},
-                        ])
-
-        # ── Bandit arm posteriors ───────────────────────────────────────────
-        with ui.element("div").classes("studio-card w-full"):
-            ui.label("Pillar bandit posteriors").classes(theme.H)
-            ui.label("Beta-Bernoulli Thompson Sampling posterior behind the pillar weighting "
-                     "above (scripts/bandit.py) — alpha/beta accumulate composite-engagement "
-                     "successes/failures (median-split) per pillar; mean is the current "
-                     "posterior estimate of that pillar's win probability. This is what "
-                     "generate_seo.py's pick_concept_from_pool() samples from.")\
-                .classes(theme.SUB)
-            posteriors = analytics_mod.pillar_bandit_posteriors(analytics=data_dict)
-            with ui.column().classes("w-full gap-1 mt-2"):
-                for pillar, st in sorted(posteriors.items(), key=lambda kv: -kv[1]["mean"]):
-                    with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
-                        ui.label(pillar).classes("text-sm font-medium col-md")
-                        ui.linear_progress(value=st["mean"], show_value=False)\
-                            .classes("grow").props("rounded color=primary")
-                        ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm col-xs")
-                        ui.label(f"α={st['alpha']:.0f} β={st['beta']:.0f}")\
-                            .classes(f"{theme.SUB} col-md")
-                        ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
-
-        # ── Cohort growth curves + forecast + viral-moment flags ────────────
-        _TOP_N = 6
-        _cohort_candidates = []
-        for vid, d in data_dict.items():
-            m = analytics_mod.latest_metrics(d)
-            hist = history_by_vid.get(vid, [])
-            if not hist:
-                continue
-            _cohort_candidates.append((vid, d, hist, float(m.get("views") or 0)))
-        _cohort_candidates.sort(key=lambda t: -t[3])
-        top_videos = _cohort_candidates[:_TOP_N]
-
-        with ui.element("div").classes("studio-card w-full"):
-            ui.label("Growth curves & forecasts").classes(theme.H)
-            ui.label("Cumulative views by days-since-upload (cohort-aligned so videos "
-                     "uploaded on different dates compare fairly), for the top "
-                     f"{_TOP_N} tracked videos by current views. Forecast projects 7/30-day "
-                     "view counts with simple exponential smoothing over view-velocity "
-                     "(needs at least 4 synced snapshots).").classes(theme.SUB)
-
-            if not top_videos:
-                ui.label("No longitudinal history yet — needs at least one synced snapshot "
-                         "per video.").classes(theme.SUB + " mt-3")
-            else:
-                series = []
-                for vid, d, hist, _ in top_videos:
-                    upload_date = d.get("upload_date")
-                    title = d.get("title") or vid
-                    points = []
-                    try:
-                        d0 = datetime.date.fromisoformat(upload_date) if upload_date else None
-                    except ValueError:
-                        d0 = None
-                    for snap in hist:
-                        sdate, sviews = snap.get("date"), snap.get("views")
-                        if not sdate or sviews is None or d0 is None:
-                            continue
-                        try:
-                            day_offset = (datetime.date.fromisoformat(sdate) - d0).days
-                        except ValueError:
-                            continue
-                        points.append([day_offset, sviews])
-                    points.sort(key=lambda p: p[0])
-                    if points:
-                        series.append({"name": title[:40], "type": "line", "showSymbol": True,
-                                       "data": points})
-
-                ui.echart({
-                    "grid": {"left": 60, "right": 16, "top": 40, "bottom": 40},
-                    "legend": {"top": 0, "textStyle": {"color": theme.MUTED, "fontSize": 10}},
-                    "tooltip": {"trigger": "axis"},
-                    "xAxis": {"type": "value", "name": "days since upload",
-                              "axisLabel": {"color": theme.MUTED}},
-                    "yAxis": {"type": "value", "name": "cumulative views",
-                              "axisLabel": {"color": theme.MUTED}},
-                    "series": series,
-                }).classes("w-full mt-1").style("height:280px")
-
-                with ui.column().classes("w-full gap-1 mt-3"):
-                    ui.label("Forecast (7d / 30d) & viral-moment flags").classes(
-                        "text-sm font-medium")
-                    for vid, d, hist, current_views in top_videos:
-                        title = d.get("title") or vid
-                        forecast = analytics_mod.forecast_views(hist)
-                        viral = analytics_mod.detect_viral_moment(hist)
-                        cells = [
-                            {"text": title[:40], "classes": "text-sm truncate", "width": "grow"},
-                            {"text": f"now {stats.fmt_count(int(current_views))}",
-                             "classes": theme.SUB, "width": "md"},
-                        ]
-                        if forecast:
-                            cells.append({
-                                "text": f"7d ~{stats.fmt_count(int(forecast['forecast']['7d']))}",
-                                "classes": theme.SUB, "width": "md"})
-                            cells.append({
-                                "text": f"30d ~{stats.fmt_count(int(forecast['forecast']['30d']))}",
-                                "classes": theme.SUB, "width": "md"})
-                        else:
-                            cells.append({"text": "forecast: needs more history",
-                                          "classes": theme.SUB, "width": "xl"})
-                        if viral and viral.get("flagged"):
-                            up = viral["direction"] == "up"
-                            color_cls = "text-teal" if up else "text-rose"
-                            cells.append({"icon": "trending_up" if up else "trending_down",
-                                          "color": color_cls})
-                            cells.append({"text": f"viral moment {viral['change_point_date']}",
-                                          "classes": f"text-sm {color_cls}"})
-                        theme.data_row(cells)
-
-        rows: list[dict] = []
-        if data_dict:
-            with theme.card(classes="w-full"):
-                with ui.row().classes("w-full items-center justify-between"):
-                    ui.label("Per-video performance").classes(theme.H)
-                    export_btn = ui.button("Export CSV", icon="download").props(
-                        "flat dense color=primary")
-                ui.label("Every tracked upload, most-clicked first. Click a row to open it "
-                         "(retention chart, player) the same way as from Library. Check up to "
-                         "4 rows to compare them side-by-side below.")\
-                    .classes(theme.SUB)
-
-                vids = list(data_dict.keys())
-                engagement = stats.video_engagement(vids)
-                card_by_vid = {c["video_id"]: c for c in stats.library(limit=200)
-                               if c.get("video_id")}
-
-                for vid, d in data_dict.items():
-                    eng = engagement.get(vid, {})
-                    m = analytics_mod.latest_metrics(d)
-                    rows.append({
-                        "video_id": vid,
-                        "title": d.get("title") or vid,
-                        "pillar": d.get("pillar") or "—",
-                        "ctr": m.get("videoThumbnailImpressionsClickRate", 0) or 0,
-                        "views": int(m.get("views", 0) or 0),
-                        "watch_min": round(m.get("averageViewDuration", 0) or 0) // 60,
-                        "likes": eng.get("likes"),
-                        "comments": eng.get("comments"),
-                    })
-                rows.sort(key=lambda r: r["ctr"], reverse=True)
-
-                export_btn.on_click(lambda: ui.download(
-                    _rows_to_csv(rows).encode("utf-8"),
-                    "analytics_per_video.csv", media_type="text/csv"))
-
-                # ── Multi-video comparison (pins 2-4 rows, reuses `rows` -- no
-                # refetch) ─────────────────────────────────────────────────
-                _selected_ids: list[str] = []
-                comparison_container = ui.column().classes("w-full")
-
-                def _render_comparison() -> None:
-                    comparison_container.clear()
-                    with comparison_container:
-                        if len(_selected_ids) < 2:
-                            return
-                        compare = _comparison_rows(rows, _selected_ids)
-                        ui.separator().classes("mt-3")
-                        ui.label(f"Comparing {len(compare)} videos").classes(
-                            "text-sm font-medium mt-2")
+                        pillars = [r["pillar"] for r in result["by_pillar"]]
+                        ctrs = [round(r["avg_ctr"] * 100, 2) for r in result["by_pillar"]]
+                        colors = [_PILLAR_MARKER_HEX.get(r["marker"], theme.PRIMARY)
+                                  for r in result["by_pillar"]]
                         ui.echart({
-                            "grid": {"left": 60, "right": 16, "top": 40, "bottom": 60},
-                            "legend": {"top": 0, "textStyle": {"color": theme.MUTED,
-                                                                "fontSize": 10}},
-                            "tooltip": {"trigger": "axis"},
-                            "xAxis": {"type": "category",
-                                      "data": ["CTR %", "Views (100s)", "Watch (min)",
-                                               "Likes", "Comments"],
-                                      "axisLabel": {"color": theme.MUTED, "rotate": 15}},
-                            "yAxis": {"type": "value", "axisLabel": {"color": theme.MUTED}},
+                            "grid": {"left": 60, "right": 16, "top": 16, "bottom": 40},
+                            "xAxis": {"type": "category", "data": pillars,
+                                      "axisLabel": {"color": theme.MUTED, "rotate": 20}},
+                            "yAxis": {"type": "value", "name": "avg CTR %",
+                                      "axisLabel": {"color": theme.MUTED}},
                             "series": [{
-                                "name": c["title"][:30], "type": "bar",
-                                "data": [
-                                    round(c["ctr"] * 100, 2),
-                                    round(c["views"] / 100, 1),
-                                    c["watch_min"],
-                                    c["likes"] or 0,
-                                    c["comments"] or 0,
+                                "type": "bar", "data": [
+                                    {"value": v, "itemStyle": {"color": c}}
+                                    for v, c in zip(ctrs, colors)
                                 ],
-                            } for c in compare],
-                        }).classes("w-full mt-1").style("height:260px")
+                            }],
+                        }).classes("w-full mt-3").style("height:260px")
+
                         with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
+                            for row in result["by_pillar"]:
+                                color_cls = _PILLAR_MARKER_COLOR.get(row["marker"], "text-amber")
+                                theme.data_row([
+                                    {"text": row["marker"] or "·", "color": color_cls, "classes": ""},
+                                    {"text": row["pillar"], "classes": "text-sm font-medium", "width": "lg"},
+                                    {"text": f"{row['avg_ctr'] * 100:.1f}% CTR", "color": color_cls,
+                                     "classes": "text-sm", "width": "md"},
+                                    {"text": f"{row['avg_views']:.0f} avg views", "classes": theme.SUB},
+                                    {"text": f"{row['avg_watch_min']:.0f} min avg watch", "classes": theme.SUB},
+                                    {"text": f"n={row['n']}", "classes": theme.SUB},
+                                ])
+
+                # ── Bandit arm posteriors ───────────────────────────────────────────
+                with ui.element("div").classes("studio-card w-full"):
+                    ui.label("Pillar bandit posteriors").classes(theme.H)
+                    ui.label("Beta-Bernoulli Thompson Sampling posterior behind the pillar weighting "
+                             "above (scripts/bandit.py) — alpha/beta accumulate composite-engagement "
+                             "successes/failures (median-split) per pillar; mean is the current "
+                             "posterior estimate of that pillar's win probability. This is what "
+                             "generate_seo.py's pick_concept_from_pool() samples from.")\
+                        .classes(theme.SUB)
+                    posteriors = analytics_mod.pillar_bandit_posteriors(analytics=data_dict)
+                    with ui.column().classes("w-full gap-1 mt-2"):
+                        for pillar, st in sorted(posteriors.items(), key=lambda kv: -kv[1]["mean"]):
+                            with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
+                                ui.label(pillar).classes("text-sm font-medium col-md")
+                                ui.linear_progress(value=st["mean"], show_value=False)\
+                                    .classes("grow").props("rounded color=primary")
+                                ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm col-xs")
+                                ui.label(f"α={st['alpha']:.0f} β={st['beta']:.0f}")\
+                                    .classes(f"{theme.SUB} col-md")
+                                ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
+
+                # ── Cohort growth curves + forecast + viral-moment flags ────────────
+                _TOP_N = 6
+                _cohort_candidates = []
+                for vid, d in data_dict.items():
+                    m = analytics_mod.latest_metrics(d)
+                    hist = history_by_vid.get(vid, [])
+                    if not hist:
+                        continue
+                    _cohort_candidates.append((vid, d, hist, float(m.get("views") or 0)))
+                _cohort_candidates.sort(key=lambda t: -t[3])
+                top_videos = _cohort_candidates[:_TOP_N]
+
+            with ui.tab_panel("performance").classes("gap-5"):
+                with ui.element("div").classes("studio-card w-full"):
+                    ui.label("Growth curves & forecasts").classes(theme.H)
+                    ui.label("Cumulative views by days-since-upload (cohort-aligned so videos "
+                             "uploaded on different dates compare fairly), for the top "
+                             f"{_TOP_N} tracked videos by current views. Forecast projects 7/30-day "
+                             "view counts with simple exponential smoothing over view-velocity "
+                             "(needs at least 4 synced snapshots).").classes(theme.SUB)
+
+                    if not top_videos:
+                        ui.label("No longitudinal history yet — needs at least one synced snapshot "
+                                 "per video.").classes(theme.SUB + " mt-3")
+                    else:
+                        series = []
+                        for vid, d, hist, _ in top_videos:
+                            upload_date = d.get("upload_date")
+                            title = d.get("title") or vid
+                            points = []
+                            try:
+                                d0 = datetime.date.fromisoformat(upload_date) if upload_date else None
+                            except ValueError:
+                                d0 = None
+                            for snap in hist:
+                                sdate, sviews = snap.get("date"), snap.get("views")
+                                if not sdate or sviews is None or d0 is None:
+                                    continue
+                                try:
+                                    day_offset = (datetime.date.fromisoformat(sdate) - d0).days
+                                except ValueError:
+                                    continue
+                                points.append([day_offset, sviews])
+                            points.sort(key=lambda p: p[0])
+                            if points:
+                                series.append({"name": title[:40], "type": "line", "showSymbol": True,
+                                               "data": points})
+
+                        ui.echart({
+                            "grid": {"left": 60, "right": 16, "top": 40, "bottom": 40},
+                            "legend": {"top": 0, "textStyle": {"color": theme.MUTED, "fontSize": 10}},
+                            "tooltip": {"trigger": "axis"},
+                            "xAxis": {"type": "value", "name": "days since upload",
+                                      "axisLabel": {"color": theme.MUTED}},
+                            "yAxis": {"type": "value", "name": "cumulative views",
+                                      "axisLabel": {"color": theme.MUTED}},
+                            "series": series,
+                        }).classes("w-full mt-1").style("height:280px")
+
+                        with ui.column().classes("w-full gap-1 mt-3"):
+                            ui.label("Forecast (7d / 30d) & viral-moment flags").classes(
+                                "text-sm font-medium")
+                            for vid, d, hist, current_views in top_videos:
+                                title = d.get("title") or vid
+                                forecast = analytics_mod.forecast_views(hist)
+                                viral = analytics_mod.detect_viral_moment(hist)
+                                cells = [
+                                    {"text": title[:40], "classes": "text-sm truncate", "width": "grow"},
+                                    {"text": f"now {stats.fmt_count(int(current_views))}",
+                                     "classes": theme.SUB, "width": "md"},
+                                ]
+                                if forecast:
+                                    cells.append({
+                                        "text": f"7d ~{stats.fmt_count(int(forecast['forecast']['7d']))}",
+                                        "classes": theme.SUB, "width": "md"})
+                                    cells.append({
+                                        "text": f"30d ~{stats.fmt_count(int(forecast['forecast']['30d']))}",
+                                        "classes": theme.SUB, "width": "md"})
+                                else:
+                                    cells.append({"text": "forecast: needs more history",
+                                                  "classes": theme.SUB, "width": "xl"})
+                                if viral and viral.get("flagged"):
+                                    up = viral["direction"] == "up"
+                                    color_cls = "text-teal" if up else "text-rose"
+                                    cells.append({"icon": "trending_up" if up else "trending_down",
+                                                  "color": color_cls})
+                                    cells.append({"text": f"viral moment {viral['change_point_date']}",
+                                                  "classes": f"text-sm {color_cls}"})
+                                theme.data_row(cells)
+
+                rows: list[dict] = []
+                if data_dict:
+                    with theme.card(classes="w-full"):
+                        with ui.row().classes("w-full items-center justify-between"):
+                            ui.label("Per-video performance").classes(theme.H)
+                            export_btn = ui.button("Export CSV", icon="download").props(
+                                "flat dense color=primary")
+                        ui.label("Every tracked upload, most-clicked first. Click a row to open it "
+                                 "(retention chart, player) the same way as from Library. Check up to "
+                                 "4 rows to compare them side-by-side below.")\
+                            .classes(theme.SUB)
+
+                        vids = list(data_dict.keys())
+                        engagement = stats.video_engagement(vids)
+                        card_by_vid = {c["video_id"]: c for c in stats.library(limit=200)
+                                       if c.get("video_id")}
+
+                        for vid, d in data_dict.items():
+                            eng = engagement.get(vid, {})
+                            m = analytics_mod.latest_metrics(d)
+                            rows.append({
+                                "video_id": vid,
+                                "title": d.get("title") or vid,
+                                "pillar": d.get("pillar") or "—",
+                                "ctr": m.get("videoThumbnailImpressionsClickRate", 0) or 0,
+                                "views": int(m.get("views", 0) or 0),
+                                "watch_min": round(m.get("averageViewDuration", 0) or 0) // 60,
+                                "likes": eng.get("likes"),
+                                "comments": eng.get("comments"),
+                            })
+                        rows.sort(key=lambda r: r["ctr"], reverse=True)
+
+                        export_btn.on_click(lambda: ui.download(
+                            _rows_to_csv(rows).encode("utf-8"),
+                            "analytics_per_video.csv", media_type="text/csv"))
+
+                        # ── Multi-video comparison (pins 2-4 rows, reuses `rows` -- no
+                        # refetch) ─────────────────────────────────────────────────
+                        _selected_ids: list[str] = []
+                        comparison_container = ui.column().classes("w-full")
+
+                        def _render_comparison() -> None:
+                            comparison_container.clear()
+                            with comparison_container:
+                                if len(_selected_ids) < 2:
+                                    return
+                                compare = _comparison_rows(rows, _selected_ids)
+                                ui.separator().classes("mt-3")
+                                ui.label(f"Comparing {len(compare)} videos").classes(
+                                    "text-sm font-medium mt-2")
+                                ui.echart({
+                                    "grid": {"left": 60, "right": 16, "top": 40, "bottom": 60},
+                                    "legend": {"top": 0, "textStyle": {"color": theme.MUTED,
+                                                                        "fontSize": 10}},
+                                    "tooltip": {"trigger": "axis"},
+                                    "xAxis": {"type": "category",
+                                              "data": ["CTR %", "Views (100s)", "Watch (min)",
+                                                       "Likes", "Comments"],
+                                              "axisLabel": {"color": theme.MUTED, "rotate": 15}},
+                                    "yAxis": {"type": "value", "axisLabel": {"color": theme.MUTED}},
+                                    "series": [{
+                                        "name": c["title"][:30], "type": "bar",
+                                        "data": [
+                                            round(c["ctr"] * 100, 2),
+                                            round(c["views"] / 100, 1),
+                                            c["watch_min"],
+                                            c["likes"] or 0,
+                                            c["comments"] or 0,
+                                        ],
+                                    } for c in compare],
+                                }).classes("w-full mt-1").style("height:260px")
+                                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
+                                    theme.data_row([
+                                        {"text": "Title", "width": "grow"},
+                                        {"text": "CTR", "width": "xs"},
+                                        {"text": "Views", "width": "sm"},
+                                        {"text": "Watch", "width": "xs"},
+                                        {"text": "Likes", "width": "xs"},
+                                        {"text": "Comments", "width": "sm"},
+                                    ], header=True)
+                                    for c in compare:
+                                        theme.data_row([
+                                            {"text": c["title"][:40], "classes": "text-sm truncate",
+                                             "width": "grow"},
+                                            {"text": f"{c['ctr'] * 100:.1f}%", "classes": "text-sm",
+                                             "width": "xs"},
+                                            {"text": stats.fmt_count(c["views"]), "classes": "text-sm",
+                                             "width": "sm"},
+                                            {"text": f"{c['watch_min']}m", "classes": "text-sm",
+                                             "width": "xs"},
+                                            {"text": stats.fmt_count(c["likes"])
+                                             if c["likes"] is not None else "—",
+                                             "classes": "text-sm", "width": "xs"},
+                                            {"text": stats.fmt_count(c["comments"])
+                                             if c["comments"] is not None else "—",
+                                             "classes": "text-sm", "width": "sm"},
+                                        ])
+
+                        def _toggle_selected(vid: str, checked: bool) -> None:
+                            if checked:
+                                if len(_selected_ids) >= 4:
+                                    ui.notify("Comparison is limited to 4 videos — "
+                                              "uncheck one first.", type="warning")
+                                    return
+                                if vid not in _selected_ids:
+                                    _selected_ids.append(vid)
+                            elif vid in _selected_ids:
+                                _selected_ids.remove(vid)
+                            _render_comparison()
+
+                        with ui.column().classes(
+                                "w-full gap-1 mt-2 table-scroll max-h-[420px] overflow-y-auto"):
+                            with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                                ui.label("").classes("shrink-0 w-7")
+                                theme.data_row([
+                                    {"text": "Title", "width": "grow"},
+                                    {"text": "Pillar", "width": "md"},
+                                    {"text": "CTR", "width": "xs"},
+                                    {"text": "Views", "width": "sm"},
+                                    {"text": "Watch", "width": "xs"},
+                                    {"text": "Likes", "width": "xs"},
+                                    {"text": "Comments", "width": "sm"},
+                                ], header=True, classes="grow")
+                            for r in rows:
+                                card = card_by_vid.get(r["video_id"])
+
+                                def _open(r=r, card=card) -> None:
+                                    if card:
+                                        _open_detail([card], 0)
+                                    elif r["video_id"]:
+                                        ui.navigate.to(
+                                            f"https://youtube.com/watch?v={r['video_id']}",
+                                            new_tab=True)
+
+                                with ui.row().classes("w-full items-center gap-2 no-wrap"):
+                                    ui.checkbox(value=False, on_change=(
+                                        lambda e, vid=r["video_id"]: _toggle_selected(vid, e.value)
+                                    )).props("dense").classes("shrink-0")
+                                    theme.data_row([
+                                        {"text": r["title"], "classes": "text-sm truncate", "width": "grow"},
+                                        {"text": r["pillar"], "classes": "text-sm", "width": "md"},
+                                        {"text": f"{r['ctr'] * 100:.1f}%", "classes": "text-sm", "width": "xs"},
+                                        {"text": stats.fmt_count(r["views"]), "classes": "text-sm", "width": "sm"},
+                                        {"text": f"{r['watch_min']}m", "classes": "text-sm", "width": "xs"},
+                                        {"text": stats.fmt_count(r["likes"]) if r["likes"] is not None else "—",
+                                         "classes": "text-sm", "width": "xs"},
+                                        {"text": stats.fmt_count(r["comments"]) if r["comments"] is not None else "—",
+                                         "classes": "text-sm", "width": "sm"},
+                                    ], on_click=_open, classes="grow")
+
+                swapped = [{"video_id": vid, **d} for vid, d in data_dict.items() if d.get("thumb_swapped")]
+                ab_tested = sorted(
+                    ([{"video_id": vid, **d} for vid, d in data_dict.items()
+                      if d.get("thumb_ab_p") is not None]),
+                    key=lambda s: s["thumb_ab_p"],
+                )
+                with theme.card("Thumbnail A/B testing",
+                                "Runs automatically with the daily analytics sync (lofi-analytics.timer): "
+                                "a video 7-30 days old only gets its thumbnail swapped to the alt variant "
+                                "when a two-proportion z-test finds its CTR significantly below the rest "
+                                "of the channel (p < 0.05) — not just below a flat ratio threshold. Each "
+                                "video also carries a randomized ab_variant (\"A\"/\"B\") assigned at first "
+                                "sync, toggled on swap."):
+                    if not swapped:
+                        ui.label("No swaps yet.").classes(theme.SUB + " mt-2")
+                    else:
+                        with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
+                            for s in swapped:
+                                theme.data_row([
+                                    {"icon": "swap_horiz", "color": "text-amber"},
+                                    {"text": s.get("title", s["video_id"]), "classes": "text-sm", "width": "xl"},
+                                    {"text": f"swapped {s.get('thumb_swapped_at', '')[:10]}", "classes": theme.SUB},
+                                ])
+
+                    if ab_tested:
+                        ui.label("Significance panel (most recent z-test per video)").classes(
+                            "text-sm font-medium mt-4")
+                        with ui.column().classes("w-full gap-1 mt-1 table-scroll"):
                             theme.data_row([
                                 {"text": "Title", "width": "grow"},
                                 {"text": "CTR", "width": "xs"},
-                                {"text": "Views", "width": "sm"},
-                                {"text": "Watch", "width": "xs"},
-                                {"text": "Likes", "width": "xs"},
-                                {"text": "Comments", "width": "sm"},
+                                {"text": "z", "width": "xs"},
+                                {"text": "p-value", "width": "sm"},
+                                {"text": "variant", "width": "xs"},
                             ], header=True)
-                            for c in compare:
+                            for s in ab_tested:
+                                m = analytics_mod.latest_metrics(s)
+                                p_value = s["thumb_ab_p"]
+                                significant = p_value < 0.05
+                                color_cls = "text-rose" if significant else theme.SUB
                                 theme.data_row([
-                                    {"text": c["title"][:40], "classes": "text-sm truncate",
-                                     "width": "grow"},
-                                    {"text": f"{c['ctr'] * 100:.1f}%", "classes": "text-sm",
-                                     "width": "xs"},
-                                    {"text": stats.fmt_count(c["views"]), "classes": "text-sm",
-                                     "width": "sm"},
-                                    {"text": f"{c['watch_min']}m", "classes": "text-sm",
-                                     "width": "xs"},
-                                    {"text": stats.fmt_count(c["likes"])
-                                     if c["likes"] is not None else "—",
+                                    {"text": s.get("title", s["video_id"])[:40],
+                                     "classes": "text-sm truncate", "width": "grow"},
+                                    {"text": f"{(m.get('videoThumbnailImpressionsClickRate') or 0) * 100:.1f}%",
                                      "classes": "text-sm", "width": "xs"},
-                                    {"text": stats.fmt_count(c["comments"])
-                                     if c["comments"] is not None else "—",
-                                     "classes": "text-sm", "width": "sm"},
+                                    {"text": f"{s.get('thumb_ab_z', 0):.2f}", "classes": "text-sm", "width": "xs"},
+                                    {"text": f"{p_value:.4f}" + (" *" if significant else ""),
+                                     "classes": f"text-sm {color_cls}", "width": "sm"},
+                                    {"text": s.get("ab_variant") or "—", "classes": theme.SUB, "width": "xs"},
                                 ])
 
-                def _toggle_selected(vid: str, checked: bool) -> None:
-                    if checked:
-                        if len(_selected_ids) >= 4:
-                            ui.notify("Comparison is limited to 4 videos — "
-                                      "uncheck one first.", type="warning")
-                            return
-                        if vid not in _selected_ids:
-                            _selected_ids.append(vid)
-                    elif vid in _selected_ids:
-                        _selected_ids.remove(vid)
-                    _render_comparison()
+                # ── Traffic-source breakdown + subscriber growth (YT Analytics API) ──
+            with ui.tab_panel("audience").classes("gap-5"):
+                with ui.element("div").classes("studio-card w-full"):
+                    ui.label("Traffic sources & subscriber growth").classes(theme.H)
+                    ui.label("Where views come from (insightTrafficSourceType, last 28 days) and "
+                             "net subscriber change over the last 90 days, from the YouTube Analytics "
+                             "API. Uses the same yt-analytics.readonly scope as the rest of this "
+                             "page.").classes(theme.SUB)
 
-                with ui.column().classes(
-                        "w-full gap-1 mt-2 table-scroll max-h-[420px] overflow-y-auto"):
-                    with ui.row().classes("w-full items-center gap-2 no-wrap"):
-                        ui.label("").classes("shrink-0 w-7")
-                        theme.data_row([
-                            {"text": "Title", "width": "grow"},
-                            {"text": "Pillar", "width": "md"},
-                            {"text": "CTR", "width": "xs"},
-                            {"text": "Views", "width": "sm"},
-                            {"text": "Watch", "width": "xs"},
-                            {"text": "Likes", "width": "xs"},
-                            {"text": "Comments", "width": "sm"},
-                        ], header=True, classes="grow")
-                    for r in rows:
-                        card = card_by_vid.get(r["video_id"])
+                    traffic = stats.traffic_sources()
+                    if not traffic:
+                        ui.label("No traffic-source data yet — needs YouTube connected in Settings "
+                                 "and some recent view volume.").classes(theme.SUB + " mt-3")
+                    else:
+                        ui.echart({
+                            "tooltip": {"trigger": "item"},
+                            "legend": {"orient": "vertical", "left": "left",
+                                       "textStyle": {"color": theme.MUTED, "fontSize": 10}},
+                            "series": [{
+                                "type": "pie", "radius": ["35%", "65%"],
+                                "data": [{"name": t["source"], "value": t["views"]} for t in traffic],
+                                "label": {"color": theme.MUTED},
+                            }],
+                        }).classes("w-full mt-2").style("height:260px")
 
-                        def _open(r=r, card=card) -> None:
-                            if card:
-                                _open_detail([card], 0)
-                            elif r["video_id"]:
-                                ui.navigate.to(
-                                    f"https://youtube.com/watch?v={r['video_id']}",
-                                    new_tab=True)
+                    growth = stats.subscriber_growth()
+                    if growth:
+                        ui.label("Subscriber growth (net gained/lost per day)").classes(
+                            "text-sm font-medium mt-4")
+                        ui.echart({
+                            "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
+                            "tooltip": {"trigger": "axis"},
+                            "xAxis": {"type": "category", "data": [g["date"] for g in growth],
+                                      "axisLabel": {"color": theme.MUTED, "rotate": 30, "fontSize": 9}},
+                            "yAxis": {"type": "value", "name": "net subs",
+                                      "axisLabel": {"color": theme.MUTED}},
+                            "series": [{
+                                "type": "bar",
+                                "data": [{"value": g["net"],
+                                          "itemStyle": {"color": theme.TEAL if g["net"] >= 0
+                                                        else theme.ROSE}}
+                                         for g in growth],
+                            }],
+                        }).classes("w-full mt-2").style("height:220px")
+                    elif traffic:
+                        # Only show a second "no data" note if the traffic panel above didn't
+                        # already explain the not-connected case.
+                        ui.label("No subscriber growth data yet.").classes(theme.SUB + " mt-3")
 
-                        with ui.row().classes("w-full items-center gap-2 no-wrap"):
-                            ui.checkbox(value=False, on_change=(
-                                lambda e, vid=r["video_id"]: _toggle_selected(vid, e.value)
-                            )).props("dense").classes("shrink-0")
+                # ── Revenue / RPM / CPM (opt-in — see Settings: Connect monetary analytics) ──
+            with ui.tab_panel("revenue").classes("gap-5"):
+                with ui.element("div").classes("studio-card w-full"):
+                    ui.label("Revenue & RPM").classes(theme.H)
+                    if not stats.revenue_available():
+                        ui.label(
+                            "Not connected. Revenue/RPM/CPM figures need the "
+                            "yt-analytics-monetary.readonly scope, which is intentionally NOT "
+                            "requested by the normal YouTube login (so ordinary uploads/analytics "
+                            "never trigger a surprise consent screen). Opt in from Settings -> "
+                            "'Revenue & RPM' to grant just this extra scope via a separate consent "
+                            "flow.").classes(theme.SUB + " mt-2")
+                        ui.button("Go to Settings", icon="settings",
+                                  on_click=lambda: set_view("settings"))\
+                            .props("flat dense color=primary").classes("mt-2")
+                    else:
+                        revenue = stats.revenue_stats()
+                        if not revenue:
+                            ui.label("Connected, but no revenue data returned yet (channel may not "
+                                     "be monetized, or too new for estimates).").classes(
+                                theme.SUB + " mt-2")
+                        else:
+                            total_rev = sum(r["revenue"] for r in revenue)
+                            avg_cpm = (sum(r["cpm"] for r in revenue) / len(revenue)) if revenue else 0
+                            with ui.row().classes("w-full gap-4 no-wrap mt-2"):
+                                with ui.element("div").classes("stat grow"):
+                                    ui.label(f"${total_rev:.2f}").classes("stat-num")
+                                    ui.label("Est. revenue (28d)").classes("stat-lbl")
+                                with ui.element("div").classes("stat grow"):
+                                    ui.label(f"${avg_cpm:.2f}").classes("stat-num")
+                                    ui.label("Avg CPM").classes("stat-lbl")
+                            ui.echart({
+                                "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
+                                "tooltip": {"trigger": "axis"},
+                                "xAxis": {"type": "category", "data": [r["date"] for r in revenue],
+                                          "axisLabel": {"color": theme.MUTED, "rotate": 30,
+                                                        "fontSize": 9}},
+                                "yAxis": {"type": "value", "name": "$ est. revenue",
+                                          "axisLabel": {"color": theme.MUTED}},
+                                "series": [{"type": "line", "data": [r["revenue"] for r in revenue],
+                                            "smooth": True, "areaStyle": {"opacity": 0.15},
+                                            "color": theme.PRIMARY}],
+                            }).classes("w-full mt-3").style("height:220px")
+
+            with ui.tab_panel("content").classes("gap-5"):
+                # ── Playlist-level aggregation (pillar -> playlist mapping from
+                # scripts/playlist_curation.py) ───────────────────────────────────────
+                if data_dict:
+                    plist = analytics_mod.playlist_stats(data_dict)
+                    with ui.element("div").classes("studio-card w-full"):
+                        ui.label("Playlist performance").classes(theme.H)
+                        ui.label("Tracked videos aggregated by the playlist they'd be filed under "
+                                 "(scripts/playlist_curation.py's pillar -> YT_PLAYLIST_<PILLAR> env "
+                                 "mapping, with the legacy duration-based vars as fallback). "
+                                 "'Unassigned' means no matching env var is set for that "
+                                 "video's pillar/duration.").classes(theme.SUB)
+                        with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
                             theme.data_row([
-                                {"text": r["title"], "classes": "text-sm truncate", "width": "grow"},
-                                {"text": r["pillar"], "classes": "text-sm", "width": "md"},
-                                {"text": f"{r['ctr'] * 100:.1f}%", "classes": "text-sm", "width": "xs"},
-                                {"text": stats.fmt_count(r["views"]), "classes": "text-sm", "width": "sm"},
-                                {"text": f"{r['watch_min']}m", "classes": "text-sm", "width": "xs"},
-                                {"text": stats.fmt_count(r["likes"]) if r["likes"] is not None else "—",
-                                 "classes": "text-sm", "width": "xs"},
-                                {"text": stats.fmt_count(r["comments"]) if r["comments"] is not None else "—",
-                                 "classes": "text-sm", "width": "sm"},
-                            ], on_click=_open, classes="grow")
+                                {"text": "Playlist", "width": "xl"},
+                                {"text": "Pillars", "width": "lg"},
+                                {"text": "Avg CTR", "width": "sm"},
+                                {"text": "Avg views", "width": "sm"},
+                                {"text": "n", "width": "xs"},
+                            ], header=True)
+                            for p in plist:
+                                label = p["playlist_id"] or "Unassigned"
+                                theme.data_row([
+                                    {"text": label, "classes": "text-sm font-medium truncate", "width": "xl"},
+                                    {"text": ", ".join(p["pillars"]), "classes": theme.SUB, "width": "lg"},
+                                    {"text": f"{p['avg_ctr'] * 100:.1f}%", "classes": "text-sm", "width": "sm"},
+                                    {"text": stats.fmt_count(int(p["avg_views"])), "classes": "text-sm",
+                                     "width": "sm"},
+                                    {"text": str(p["n"]), "classes": theme.SUB, "width": "xs"},
+                                ])
 
-        swapped = [{"video_id": vid, **d} for vid, d in data_dict.items() if d.get("thumb_swapped")]
-        ab_tested = sorted(
-            ([{"video_id": vid, **d} for vid, d in data_dict.items()
-              if d.get("thumb_ab_p") is not None]),
-            key=lambda s: s["thumb_ab_p"],
-        )
-        with theme.card("Thumbnail A/B testing",
-                        "Runs automatically with the daily analytics sync (lofi-analytics.timer): "
-                        "a video 7-30 days old only gets its thumbnail swapped to the alt variant "
-                        "when a two-proportion z-test finds its CTR significantly below the rest "
-                        "of the channel (p < 0.05) — not just below a flat ratio threshold. Each "
-                        "video also carries a randomized ab_variant (\"A\"/\"B\") assigned at first "
-                        "sync, toggled on swap."):
-            if not swapped:
-                ui.label("No swaps yet.").classes(theme.SUB + " mt-2")
-            else:
-                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
-                    for s in swapped:
-                        theme.data_row([
-                            {"icon": "swap_horiz", "color": "text-amber"},
-                            {"text": s.get("title", s["video_id"]), "classes": "text-sm", "width": "xl"},
-                            {"text": f"swapped {s.get('thumb_swapped_at', '')[:10]}", "classes": theme.SUB},
-                        ])
+                # ── Upload history (upload_log.json, full metadata -- distinct from
+                # Studio's "Recent runs", which is only this webui session's last 20
+                # jobs. This is the full all-time record: which SEO pillar, which
+                # title variant won the bandit pick, and the concept each video was
+                # generated from -- previously backed by data.upload_history() with
+                # no UI anywhere to see it. ──────────────────────────────────────────
+                with theme.card("Upload history", "Every upload, with the SEO pillar/concept/title "
+                                "variant actually used — the full record data.upload_history() "
+                                "already tracks, just not shown anywhere until now."):
+                    entries = data.upload_history(limit=30)
+                    if not entries:
+                        ui.label("No uploads recorded yet.").classes(theme.SUB + " mt-1")
+                    else:
+                        with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
+                            theme.data_row([
+                                {"text": "When", "width": "md"},
+                                {"text": "Title", "width": "xl"},
+                                {"text": "Pillar", "width": "sm"},
+                                {"text": "Concept", "width": "xl"},
+                                {"text": "Duration", "width": "xs"},
+                            ], header=True)
+                            for e in entries:
+                                ts = (e.get("timestamp") or "")[:16].replace("T", " ")
+                                dur = e.get("duration_secs")
+                                dur_txt = f"{int(dur // 60)}min" if dur else "—"
+                                variants = e.get("title_variants") or []
+                                chosen_idx = e.get("title_chosen_idx")
+                                variant_note = (f" (variant {chosen_idx + 1}/{len(variants)})"
+                                                 if variants and chosen_idx is not None else "")
+                                url = e.get("url")
 
-            if ab_tested:
-                ui.label("Significance panel (most recent z-test per video)").classes(
-                    "text-sm font-medium mt-4")
-                with ui.column().classes("w-full gap-1 mt-1 table-scroll"):
-                    theme.data_row([
-                        {"text": "Title", "width": "grow"},
-                        {"text": "CTR", "width": "xs"},
-                        {"text": "z", "width": "xs"},
-                        {"text": "p-value", "width": "sm"},
-                        {"text": "variant", "width": "xs"},
-                    ], header=True)
-                    for s in ab_tested:
-                        m = analytics_mod.latest_metrics(s)
-                        p_value = s["thumb_ab_p"]
-                        significant = p_value < 0.05
-                        color_cls = "text-rose" if significant else theme.SUB
-                        theme.data_row([
-                            {"text": s.get("title", s["video_id"])[:40],
-                             "classes": "text-sm truncate", "width": "grow"},
-                            {"text": f"{(m.get('videoThumbnailImpressionsClickRate') or 0) * 100:.1f}%",
-                             "classes": "text-sm", "width": "xs"},
-                            {"text": f"{s.get('thumb_ab_z', 0):.2f}", "classes": "text-sm", "width": "xs"},
-                            {"text": f"{p_value:.4f}" + (" *" if significant else ""),
-                             "classes": f"text-sm {color_cls}", "width": "sm"},
-                            {"text": s.get("ab_variant") or "—", "classes": theme.SUB, "width": "xs"},
-                        ])
+                                def _row_extra(url=url) -> None:
+                                    if url:
+                                        ui.button(icon="open_in_new",
+                                                  on_click=lambda url=url: ui.navigate.to(url, new_tab=True))\
+                                            .props("flat dense round color=primary")
 
-        # ── Traffic-source breakdown + subscriber growth (YT Analytics API) ──
-        with ui.element("div").classes("studio-card w-full"):
-            ui.label("Traffic sources & subscriber growth").classes(theme.H)
-            ui.label("Where views come from (insightTrafficSourceType, last 28 days) and "
-                     "net subscriber change over the last 90 days, from the YouTube Analytics "
-                     "API. Uses the same yt-analytics.readonly scope as the rest of this "
-                     "page.").classes(theme.SUB)
-
-            traffic = stats.traffic_sources()
-            if not traffic:
-                ui.label("No traffic-source data yet — needs YouTube connected in Settings "
-                         "and some recent view volume.").classes(theme.SUB + " mt-3")
-            else:
-                ui.echart({
-                    "tooltip": {"trigger": "item"},
-                    "legend": {"orient": "vertical", "left": "left",
-                               "textStyle": {"color": theme.MUTED, "fontSize": 10}},
-                    "series": [{
-                        "type": "pie", "radius": ["35%", "65%"],
-                        "data": [{"name": t["source"], "value": t["views"]} for t in traffic],
-                        "label": {"color": theme.MUTED},
-                    }],
-                }).classes("w-full mt-2").style("height:260px")
-
-            growth = stats.subscriber_growth()
-            if growth:
-                ui.label("Subscriber growth (net gained/lost per day)").classes(
-                    "text-sm font-medium mt-4")
-                ui.echart({
-                    "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
-                    "tooltip": {"trigger": "axis"},
-                    "xAxis": {"type": "category", "data": [g["date"] for g in growth],
-                              "axisLabel": {"color": theme.MUTED, "rotate": 30, "fontSize": 9}},
-                    "yAxis": {"type": "value", "name": "net subs",
-                              "axisLabel": {"color": theme.MUTED}},
-                    "series": [{
-                        "type": "bar",
-                        "data": [{"value": g["net"],
-                                  "itemStyle": {"color": theme.TEAL if g["net"] >= 0
-                                                else theme.ROSE}}
-                                 for g in growth],
-                    }],
-                }).classes("w-full mt-2").style("height:220px")
-            elif traffic:
-                # Only show a second "no data" note if the traffic panel above didn't
-                # already explain the not-connected case.
-                ui.label("No subscriber growth data yet.").classes(theme.SUB + " mt-3")
-
-        # ── Revenue / RPM / CPM (opt-in — see Settings: Connect monetary analytics) ──
-        with ui.element("div").classes("studio-card w-full"):
-            ui.label("Revenue & RPM").classes(theme.H)
-            if not stats.revenue_available():
-                ui.label(
-                    "Not connected. Revenue/RPM/CPM figures need the "
-                    "yt-analytics-monetary.readonly scope, which is intentionally NOT "
-                    "requested by the normal YouTube login (so ordinary uploads/analytics "
-                    "never trigger a surprise consent screen). Opt in from Settings -> "
-                    "'Revenue & RPM' to grant just this extra scope via a separate consent "
-                    "flow.").classes(theme.SUB + " mt-2")
-                ui.button("Go to Settings", icon="settings",
-                          on_click=lambda: set_view("settings"))\
-                    .props("flat dense color=primary").classes("mt-2")
-            else:
-                revenue = stats.revenue_stats()
-                if not revenue:
-                    ui.label("Connected, but no revenue data returned yet (channel may not "
-                             "be monetized, or too new for estimates).").classes(
-                        theme.SUB + " mt-2")
-                else:
-                    total_rev = sum(r["revenue"] for r in revenue)
-                    avg_cpm = (sum(r["cpm"] for r in revenue) / len(revenue)) if revenue else 0
-                    with ui.row().classes("w-full gap-4 no-wrap mt-2"):
-                        with ui.element("div").classes("stat grow"):
-                            ui.label(f"${total_rev:.2f}").classes("stat-num")
-                            ui.label("Est. revenue (28d)").classes("stat-lbl")
-                        with ui.element("div").classes("stat grow"):
-                            ui.label(f"${avg_cpm:.2f}").classes("stat-num")
-                            ui.label("Avg CPM").classes("stat-lbl")
-                    ui.echart({
-                        "grid": {"left": 50, "right": 16, "top": 20, "bottom": 40},
-                        "tooltip": {"trigger": "axis"},
-                        "xAxis": {"type": "category", "data": [r["date"] for r in revenue],
-                                  "axisLabel": {"color": theme.MUTED, "rotate": 30,
-                                                "fontSize": 9}},
-                        "yAxis": {"type": "value", "name": "$ est. revenue",
-                                  "axisLabel": {"color": theme.MUTED}},
-                        "series": [{"type": "line", "data": [r["revenue"] for r in revenue],
-                                    "smooth": True, "areaStyle": {"opacity": 0.15},
-                                    "color": theme.PRIMARY}],
-                    }).classes("w-full mt-3").style("height:220px")
-
-        # ── Playlist-level aggregation (pillar -> playlist mapping from
-        # scripts/playlist_curation.py) ───────────────────────────────────────
-        if data_dict:
-            plist = analytics_mod.playlist_stats(data_dict)
-            with ui.element("div").classes("studio-card w-full"):
-                ui.label("Playlist performance").classes(theme.H)
-                ui.label("Tracked videos aggregated by the playlist they'd be filed under "
-                         "(scripts/playlist_curation.py's pillar -> YT_PLAYLIST_<PILLAR> env "
-                         "mapping, with the legacy duration-based vars as fallback). "
-                         "'Unassigned' means no matching env var is set for that "
-                         "video's pillar/duration.").classes(theme.SUB)
-                with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
-                    theme.data_row([
-                        {"text": "Playlist", "width": "xl"},
-                        {"text": "Pillars", "width": "lg"},
-                        {"text": "Avg CTR", "width": "sm"},
-                        {"text": "Avg views", "width": "sm"},
-                        {"text": "n", "width": "xs"},
-                    ], header=True)
-                    for p in plist:
-                        label = p["playlist_id"] or "Unassigned"
-                        theme.data_row([
-                            {"text": label, "classes": "text-sm font-medium truncate", "width": "xl"},
-                            {"text": ", ".join(p["pillars"]), "classes": theme.SUB, "width": "lg"},
-                            {"text": f"{p['avg_ctr'] * 100:.1f}%", "classes": "text-sm", "width": "sm"},
-                            {"text": stats.fmt_count(int(p["avg_views"])), "classes": "text-sm",
-                             "width": "sm"},
-                            {"text": str(p["n"]), "classes": theme.SUB, "width": "xs"},
-                        ])
+                                theme.data_row([
+                                    {"text": ts, "classes": theme.SUB, "width": "md"},
+                                    {"text": (e.get("title") or "—") + variant_note,
+                                     "classes": "text-sm font-medium truncate", "width": "xl"},
+                                    {"text": e.get("pillar") or "—", "classes": theme.SUB, "width": "sm"},
+                                    {"text": e.get("concept") or "—", "classes": f"{theme.SUB} truncate",
+                                     "width": "xl"},
+                                    {"text": dur_txt, "classes": theme.SUB, "width": "xs"},
+                                ], extra=_row_extra)
 
 
 def view_automation(root) -> None:
@@ -1345,6 +1749,24 @@ def view_automation(root) -> None:
                 pill = ui.label().classes("pill")
                 sub = ui.label("").classes(theme.SUB)
             next_lbl = ui.label("").classes(theme.SUB)
+            progress_lbl = ui.label("").classes(theme.SUB)
+            progress_bar = ui.linear_progress(value=0, show_value=False)\
+                .props("rounded color=amber").classes("w-full")
+            progress_bar.visible = False
+            fallback_lbl = ui.label("").classes("text-sm text-amber")
+
+            def refresh_fallback_state() -> None:
+                st = automation.auto_run_state()
+                if st["in_fallback"]:
+                    fallback_lbl.text = (
+                        f"⚠ {st['consecutive_failures']} consecutive auto-run failures — "
+                        f"forcing the lightest duration tier until one succeeds.")
+                    fallback_lbl.visible = True
+                elif st["consecutive_failures"]:
+                    fallback_lbl.text = f"{st['consecutive_failures']} recent failure(s), not yet in fallback."
+                    fallback_lbl.visible = True
+                else:
+                    fallback_lbl.visible = False
 
             def refresh_status() -> None:
                 st = automation.status()
@@ -1361,12 +1783,32 @@ def view_automation(root) -> None:
                 if st["running_now"]:
                     pill.text = "● RUNNING NOW"
                     pill.classes(remove=_PILL_STATUS_CLASSES, add="text-amber")
+                    p = automation.render_progress() or {}
+                    stage = {"generating": "Generating music/visual/SEO",
+                             "encoding": "Encoding final video",
+                             "uploading": "Uploading to YouTube"}.get(p.get("stage"), "Working")
+                    if p.get("percent") is not None:
+                        eta = p.get("eta_secs")
+                        eta_txt = f" · ETA {_fmt_elapsed(eta)}" if eta else ""
+                        speed_txt = f" · {p['speed']:.2f}x speed" if p.get("speed") else ""
+                        progress_lbl.text = f"{stage} · {p['percent']:.0f}%{eta_txt}{speed_txt}"
+                        progress_bar.props(remove="indeterminate")
+                        progress_bar.value = p["percent"] / 100
+                    else:
+                        progress_lbl.text = f"{stage}…"
+                        progress_bar.props(add="indeterminate")
+                    progress_lbl.visible = True
+                    progress_bar.visible = True
                 elif st["active"]:
                     pill.text = "● ARMED"
                     pill.classes(remove=_PILL_STATUS_CLASSES, add="text-teal")
+                    progress_lbl.visible = False
+                    progress_bar.visible = False
                 else:
                     pill.text = "○ STOPPED"
                     pill.classes(remove=_PILL_STATUS_CLASSES, add="text-rose")
+                    progress_lbl.visible = False
+                    progress_bar.visible = False
                 sub.text = (f"Every {st['every_hours']}h, starting {st['start_hour']:02d}:00"
                             f" · boot: {'yes' if st['enabled'] else 'no'}")
                 bits = []
@@ -1380,6 +1822,7 @@ def view_automation(root) -> None:
                     hour_sel.value = st["start_hour"]
                 if not every_sel._edited:
                     every_sel.value = st["every_hours"]
+                refresh_fallback_state()
 
             async def do_start() -> None:
                 try:
@@ -1540,27 +1983,45 @@ def view_automation(root) -> None:
             ui.timer(0.1, refresh_resources, once=True)
             ui.timer(10.0, refresh_resources)
 
-        with theme.card("Automation log", "Live tail of the run's journal."):
-            log = ui.log(max_lines=4000).classes(f"{theme.LOG} w-full h-80")
-            proc_holder: dict = {}
+        # ── Encode speed history ────────────────────────────────────────────
+        # The real, measured-not-guessed number the dynamic duration picker
+        # (publish.py's _pick_auto_duration) actually runs on -- watching it
+        # here is how you'd notice this box getting slower/faster/switching
+        # encoder paths over time instead of that only ever being an
+        # invisible input to a background calculation.
+        speed_hist = automation.encode_speed_history()
+        if speed_hist:
+            with theme.card("Encode speed history", "Real measured ffmpeg speed per run "
+                            "(this box's actual throughput, not an assumption) — what "
+                            "the dynamic duration picker sizes unattended runs against."):
+                series = []
+                all_labels: list[str] = []
+                for key, color in (("vaapi", theme.PRIMARY), ("software", theme.SECONDARY)):
+                    samples = speed_hist.get(key) or []
+                    if not samples:
+                        continue
+                    series.append({
+                        "name": key, "type": "line", "data": samples,
+                        "itemStyle": {"color": color}, "lineStyle": {"color": color},
+                        "symbolSize": 8,
+                    })
+                    if len(samples) > len(all_labels):
+                        all_labels = [f"run {i + 1}" for i in range(len(samples))]
+                ui.echart({
+                    "grid": {"left": 8, "right": 16, "top": 32, "bottom": 24,
+                             "containLabel": True},
+                    "legend": {"top": 0, "textStyle": {"color": theme.MUTED, "fontSize": 10}},
+                    "tooltip": {"trigger": "axis"},
+                    "xAxis": {"type": "category", "data": all_labels,
+                              "axisLabel": {"color": theme.MUTED, "fontSize": 10}},
+                    "yAxis": {"type": "value", "name": "realtime ×",
+                              "axisLabel": {"color": theme.MUTED}},
+                    "series": series,
+                }).classes("w-full").style("height:220px")
 
-            def on_line(line: str) -> None:
-                log.push(line)
-
-            async def start_tail() -> None:
-                try:
-                    proc_holder["proc"] = await automation.tail_logs(on_line)
-                except FileNotFoundError:
-                    log.push("[webui] journalctl not found — can't tail logs on this host.")
-
-            ui.timer(0.1, start_tail, once=True)
-
-            def stop_tail() -> None:
-                proc = proc_holder.get("proc")
-                if proc and proc.returncode is None:
-                    proc.terminate()
-
-            ui.context.client.on_disconnect(stop_tail)
+        # Live tail of the lofi-auto systemd journal now lives on the Logs
+        # page (view_logs), alongside job history and the admin audit log,
+        # instead of being the only log surface reachable from this tab.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1619,6 +2080,9 @@ def queue_dialog() -> None:
             tsel = ui.select(config.THEMES, value=config.DEFAULT_THEME, label="Theme").classes("w-full")
             dsel = ui.select(config.DURATIONS, value=config.DEFAULT_DURATION, label="Duration").classes("w-full")
             psel = ui.select(config.PRIVACY, value=config.DEFAULT_PRIVACY, label="Privacy").classes("w-full")
+            sgsel = ui.select(_subgenre_select_options(), value="auto", label="Sub-genre").classes("w-full")
+            mood_input = ui.input("Mood (optional)", placeholder="e.g. rainy study session").classes("w-full")
+            esel = ui.select(_ENGINE_SELECT_OPTIONS, value="auto", label="Engine").classes("w-full")
             if not yt_connected:
                 ui.label("YouTube isn't connected — \"Render only\" still works; "
                          "connect YouTube in Settings before queuing an upload.") \
@@ -1637,14 +2101,16 @@ def queue_dialog() -> None:
                         "--privacy", psel_stream.value]
                 jobs.queue.add("live", args, slot="stream", note=note.value or "")
             elif upload:
-                args = ["publish.py", "auto", "--privacy", psel.value, "--duration", dsel.value]
-                if tsel.value != "random":
-                    args += ["--theme", tsel.value]
+                args = _build_render_args(
+                    upload=True, theme=tsel.value, duration=dsel.value, privacy=psel.value,
+                    subgenre=sgsel.value, mood=mood_input.value, engine=esel.value,
+                )
                 jobs.queue.add("render+upload", args, slot="main", note=note.value or "")
             else:
-                args = ["run.py", "--skip-upload", "--duration", dsel.value]
-                if tsel.value != "random":
-                    args += ["--theme", tsel.value]
+                args = _build_render_args(
+                    upload=False, theme=tsel.value, duration=dsel.value, privacy=psel.value,
+                    subgenre=sgsel.value, mood=mood_input.value, engine=esel.value,
+                )
                 jobs.queue.add("render", args, slot="main", note=note.value or "")
             dlg.close()
             ui.notify("Added to queue", type="positive")
@@ -1773,7 +2239,7 @@ def view_calendar(root) -> None:
                                 ui.link("Open ↗", row["url"], new_tab=True).classes("text-sm")
 
 
-def _env_field(label: str, key: str, *, secret: bool = False) -> None:
+def _env_field(label: str, key: str, *, secret: bool = False, on_save=None) -> None:
     """One .env-backed settings row: input + Save, reused for every credential field."""
     current = config.read_env_file().get(key, "")
     with ui.row().classes("w-full items-end gap-3 no-wrap"):
@@ -1798,10 +2264,23 @@ def _env_field(label: str, key: str, *, secret: bool = False) -> None:
             except ValueError as e:
                 ui.notify(str(e), type="negative")
                 return
-            ui.notify(f"{key} saved — restart the panel to apply", type="positive")
+            # Takes effect immediately for anything (like alerts.py) that
+            # reads os.environ live -- writing the .env *file* alone doesn't
+            # touch this already-running process's environment. Fields that
+            # need a real restart (OAuth clients built once at import time,
+            # etc.) still need one; this is strictly additive, not a
+            # replacement for that.
+            os.environ[key] = val
+            ui.notify(f"{key} saved", type="positive")
             if secret:
                 inp.value = ""
                 relabel(True)
+            if on_save:
+                # on_save may be sync or async (e.g. an async refresh_x
+                # callback) -- ui.timer handles both without this function
+                # itself needing to become async just to await one caller's
+                # coroutine.
+                ui.timer(0.01, on_save, once=True)
 
         ui.button("Save", on_click=save).props("flat dense color=primary")
 
@@ -2169,9 +2648,20 @@ def view_samples(root) -> None:
 # asyncio.to_thread per the async discipline the rest of the app follows.
 # ─────────────────────────────────────────────────────────────────────────────
 def _confirm_restart_webui() -> None:
+    # Confirmed live 2026-08-17: restarting lofi-webui.service sends SIGTERM
+    # to its entire cgroup, which includes any render subprocess JobManager
+    # currently has running underneath it -- a restart mid-render silently
+    # killed a real in-progress job (5m45s in, 41% through visual frames),
+    # with no warning at all before this check existed.
+    busy = jobs.manager.is_busy()
     with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
             .style("max-width:420px"):
         ui.label("Restart the web UI?").classes(theme.H)
+        if busy:
+            ui.label(f"⚠ \"{jobs.manager.current.name}\" is running right now — "
+                     "restarting will kill it immediately (SIGTERM to the whole "
+                     "process, not just the web UI). It will NOT resume after "
+                     "restart.").classes("text-sm text-rose")
         ui.label("This restarts lofi-webui.service right now, which will drop this "
                  "browser session for a few seconds while it comes back up. Only do "
                  "this on purpose.").classes(theme.SUB)
@@ -2186,8 +2676,8 @@ def _confirm_restart_webui() -> None:
                 except Exception as e:  # noqa: BLE001 — surface whatever systemctl/subprocess raised
                     ui.notify(f"Restart failed: {e}", type="negative")
 
-            ui.button("Restart now", icon="restart_alt", on_click=do_restart,
-                      color="negative").props("unelevated")
+            ui.button("Kill job & restart" if busy else "Restart now", icon="restart_alt",
+                      on_click=do_restart, color="negative").props("unelevated")
     dlg.open()
 
 
@@ -2233,6 +2723,48 @@ def _confirm_delete_backup(name: str, on_change) -> None:
 
             ui.button("Delete", icon="delete", on_click=do_delete,
                       color="negative").props("unelevated")
+    dlg.open()
+
+
+def _confirm_clean_scratch(on_change) -> None:
+    busy = jobs.manager.is_busy()
+    auto_running = automation.status().get("running_now", False)
+    with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
+            .style("max-width:460px"):
+        if busy or auto_running:
+            ui.label("Clean up orphaned scratch files?").classes(theme.H)
+            ui.label("A render is in progress (Studio or the lofi-auto systemd run) — "
+                     "cleanup is disabled until it finishes, since this can't tell an "
+                     "in-progress run's files from true leftovers.").classes(theme.SUB)
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Close", on_click=dlg.close).props("flat")
+        else:
+            files_holder: dict = {}
+
+            async def load() -> None:
+                files_holder["files"] = await asyncio.to_thread(system_admin.orphaned_scratch_files)
+                total = sum(f["size_bytes"] for f in files_holder["files"])
+                body.text = (f"{len(files_holder['files'])} file(s), {total / 1_048_576:.0f} MB "
+                             "— this cannot be undone." if files_holder["files"]
+                             else "Nothing to clean up.")
+
+            ui.label("Clean up orphaned scratch files?").classes(theme.H)
+            body = ui.label("Scanning…").classes(theme.SUB)
+            ui.timer(0.1, load, once=True)
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=dlg.close).props("flat")
+
+                async def do_clean() -> None:
+                    result = await asyncio.to_thread(system_admin.clean_orphaned_scratch)
+                    dlg.close()
+                    ui.notify(f"Deleted {result['deleted']} file(s), "
+                              f"freed {result['freed_bytes'] / 1_048_576:.0f} MB."
+                              if result["deleted"] else "Nothing to clean up.",
+                              type="positive" if result["deleted"] else "info")
+                    on_change()
+
+                ui.button("Clean up", icon="delete_sweep", on_click=do_clean,
+                          color="negative").props("unelevated")
     dlg.open()
 
 
@@ -2286,12 +2818,30 @@ def view_system(root) -> None:
 
         # ── Disk-usage breakdown ───────────────────────────────────────────────
         with theme.card("Disk usage", "Bytes on disk by content directory."):
-            breakdown_col = ui.column().classes("w-full gap-2")
+            breakdown_chart = ui.echart({}).classes("w-full").style("height:220px")
+            breakdown_col = ui.column().classes("w-full gap-2 mt-2")
+            _BREAKDOWN_COLORS = [theme.PRIMARY, theme.SECONDARY, theme.TEAL, theme.INFO, theme.ROSE]
 
             async def refresh_breakdown() -> None:
                 breakdown = await asyncio.to_thread(system_admin.disk_usage_breakdown)
                 breakdown_col.clear()
                 total = sum(breakdown.values()) or 1
+                breakdown_chart.options.clear()
+                breakdown_chart.options.update({
+                    "tooltip": {"trigger": "item",
+                                "formatter": "{b}: {c} GB ({d}%)"},
+                    "series": [{
+                        "type": "pie", "radius": ["45%", "72%"],
+                        "avoidLabelOverlap": True,
+                        "label": {"color": theme.MUTED, "fontSize": 11},
+                        "data": [
+                            {"name": name, "value": round(nbytes / 1_073_741_824, 2),
+                             "itemStyle": {"color": _BREAKDOWN_COLORS[i % len(_BREAKDOWN_COLORS)]}}
+                            for i, (name, nbytes) in enumerate(breakdown.items())
+                        ],
+                    }],
+                })
+                breakdown_chart.update()
                 with breakdown_col:
                     for name, nbytes in breakdown.items():
                         gb = nbytes / 1_073_741_824
@@ -2303,6 +2853,30 @@ def view_system(root) -> None:
             ui.button("Refresh", icon="refresh", on_click=refresh_breakdown)\
                 .props("flat dense color=primary")
             ui.timer(0.1, refresh_breakdown, once=True)
+
+        # ── Orphaned scratch-file cleanup ───────────────────────────────────────
+        with theme.card("Orphaned scratch files", "Leftover per-track music/ and "
+                        "visuals/ files from a killed or failed run that never made "
+                        "it into a finished output/ video."):
+            scratch_note = ui.label("—").classes(theme.SUB)
+
+            async def refresh_scratch() -> None:
+                files = await asyncio.to_thread(system_admin.orphaned_scratch_files)
+                total = sum(f["size_bytes"] for f in files)
+                if files:
+                    scratch_note.text = f"{len(files)} file(s), {total / 1_048_576:.0f} MB"
+                    scratch_note.classes(replace=f"{theme.SUB} text-amber")
+                else:
+                    scratch_note.text = "None found."
+                    scratch_note.classes(replace=theme.SUB)
+
+            with ui.row().classes("gap-2 mt-1"):
+                ui.button("Refresh", icon="refresh", on_click=refresh_scratch)\
+                    .props("flat dense color=primary")
+                ui.button("Clean up", icon="delete_sweep",
+                          on_click=lambda: _confirm_clean_scratch(refresh_scratch))\
+                    .props("flat dense color=negative")
+            ui.timer(0.1, refresh_scratch, once=True)
 
         # ── Tailscale / TLS cert status ─────────────────────────────────────────
         with theme.card("Tailscale / TLS", "Network + certificate status for this box."):
@@ -2379,8 +2953,51 @@ def view_system(root) -> None:
             ui.button("Create backup", icon="save", on_click=do_create_backup)\
                 .props("color=primary")
             refresh_backups()
+        # Admin audit log now lives on the Logs page (view_logs) alongside
+        # job history and the automation journal tail.
 
-        # ── Admin audit log ──────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logs — everything that used to be scattered across four separate places
+# (a live_log() widget re-embedded per-tab in Studio/Live/Automation, the
+# lofi-auto journal tail that only lived inside Automation, the admin audit
+# log that only lived inside System, and JobManager's persisted run history
+# which had no dedicated page of its own at all) now lives here, one place.
+# ─────────────────────────────────────────────────────────────────────────────
+def view_logs(root) -> None:
+    with root:
+        with theme.card("Live output", "Whatever the web UI itself is currently running "
+                        "(a Studio render, lofi-inator, a queued job)."):
+            live_log(lambda: jobs.manager.current, height="h-72")
+
+        with theme.card("Recent runs", "Every job the web UI has run this deploy — "
+                        "retry a failed one from here."):
+            _runs_table(jobs.manager.history)
+
+        with theme.card("Automation log", "Live tail of the lofi-auto systemd journal — "
+                        "the unattended daily render+upload, independent of anything "
+                        "started from this page."):
+            auto_log = ui.log(max_lines=4000).classes(f"{theme.LOG} w-full h-80")
+            auto_proc_holder: dict = {}
+
+            def _on_auto_line(line: str) -> None:
+                auto_log.push(line)
+
+            async def _start_auto_tail() -> None:
+                try:
+                    auto_proc_holder["proc"] = await automation.tail_logs(_on_auto_line)
+                except FileNotFoundError:
+                    auto_log.push("[webui] journalctl not found — can't tail logs on this host.")
+
+            ui.timer(0.1, _start_auto_tail, once=True)
+
+            def _stop_auto_tail() -> None:
+                proc = auto_proc_holder.get("proc")
+                if proc and proc.returncode is None:
+                    proc.terminate()
+
+            ui.context.client.on_disconnect(_stop_auto_tail)
+
         with theme.card("Admin audit log", "Last 50 admin actions (restarts, backups, "
                         "deletes, schedule changes)."):
             audit_col = ui.column().classes("w-full gap-1")
@@ -2403,10 +3020,83 @@ def view_system(root) -> None:
                 .props("flat dense color=primary")
             ui.timer(0.1, refresh_audit, once=True)
 
+        # ── Alerts ───────────────────────────────────────────────────────────
+        # Every alerts.send_sync() call (job/queue/automation failures, test
+        # alerts from Settings) now persists here regardless of whether a
+        # webhook is even configured -- confirmed 2026-08-17: this app's
+        # alert system could fail, or simply have nothing configured, with
+        # zero trace anywhere in the web UI. This card is that trace.
+        with theme.card("Alerts", "Every alert this app has tried to send — "
+                        "webhook delivery or not, it's logged here first."):
+            alert_chart_holder = ui.column().classes("w-full")
+            alert_list_holder = ui.column().classes("w-full gap-1 mt-3")
+
+            async def refresh_alerts() -> None:
+                entries = await asyncio.to_thread(alerts.recent, 100)
+                alert_chart_holder.clear()
+                alert_list_holder.clear()
+                with alert_chart_holder:
+                    if not alerts.configured():
+                        _env_field("Alert URL(s)", alerts.ALERT_ENV_KEY, on_save=refresh_alerts)
+
+                        async def send_test() -> None:
+                            ok = await alerts.send_test_alert()
+                            ui.notify("Test alert sent." if ok else
+                                      "Nothing configured yet — save a URL above first.",
+                                      type="positive" if ok else "warning")
+                            refresh_alerts()
+
+                        ui.button("Send test alert", icon="notifications_active",
+                                  on_click=send_test).props("flat dense color=secondary")
+                    if entries:
+                        by_day: dict[str, dict[str, int]] = {}
+                        for e in entries:
+                            day = (e.get("ts") or "")[:10]
+                            bucket = by_day.setdefault(day, {"sent": 0, "failed": 0})
+                            bucket["sent" if e.get("sent") else "failed"] += 1
+                        days = sorted(by_day)[-14:]
+                        ui.echart({
+                            "grid": {"left": 8, "right": 16, "top": 24, "bottom": 24,
+                                     "containLabel": True},
+                            "legend": {"top": 0, "textStyle": {"color": theme.MUTED,
+                                                                "fontSize": 10}},
+                            "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+                            "xAxis": {"type": "category", "data": days,
+                                      "axisLabel": {"color": theme.MUTED, "fontSize": 10}},
+                            "yAxis": {"type": "value", "minInterval": 1,
+                                      "axisLabel": {"color": theme.MUTED}},
+                            "series": [
+                                {"name": "Sent", "type": "bar", "stack": "a",
+                                 "data": [by_day[d]["sent"] for d in days],
+                                 "itemStyle": {"color": theme.TEAL}},
+                                {"name": "Failed to send", "type": "bar", "stack": "a",
+                                 "data": [by_day[d]["failed"] for d in days],
+                                 "itemStyle": {"color": theme.ROSE}},
+                            ],
+                        }).classes("w-full").style("height:180px")
+                with alert_list_holder:
+                    if not entries:
+                        ui.label("No alerts yet.").classes(theme.SUB)
+                    for e in entries[:30]:
+                        color_cls = "text-teal" if e.get("sent") else (
+                            "text-muted" if not e.get("configured") else "text-rose")
+                        icon = "check_circle" if e.get("sent") else (
+                            "notifications_off" if not e.get("configured") else "error")
+                        with ui.row().classes("w-full items-start gap-3 no-wrap"):
+                            ui.icon(icon).classes(f"{color_cls} text-base mt-1")
+                            with ui.column().classes("gap-0 min-w-0"):
+                                ui.label(e.get("title", "")).classes("text-sm font-medium")
+                                ui.label(e.get("ts", "")).classes(
+                                    "text-xs font-mono text-muted")
+
+            ui.button("Refresh", icon="refresh", on_click=refresh_alerts)\
+                .props("flat dense color=primary")
+            ui.timer(0.1, refresh_alerts, once=True)
+
 
 VIEWS = {
     "studio": view_studio, "library": view_library, "live": view_live,
-    "trends": view_trends, "analytics": view_analytics, "samples": view_samples,
+    "logs": view_logs, "analytics": view_analytics, "samples": view_samples,
     "automation": view_automation, "calendar": view_calendar,
     "system": view_system, "settings": view_settings,
 }
@@ -2434,12 +3124,11 @@ def index(request: Request) -> None:
 
     with ui.header().classes("lg:hidden items-center gap-2 px-3 py-2 appbar-mobile"):
         ui.button(icon="menu", on_click=drawer.toggle).props("flat round dense color=white")
-        ui.label("🎧 LO-FI FACTORY").classes("studio-brand")
+        ui.label("LOFI_FACTORY").classes("studio-brand")
 
     with drawer:
         with ui.row().classes("items-center gap-2 px-2 pt-1 pb-3"):
-            ui.label("🎧").classes("text-2xl")
-            ui.label("LO-FI FACTORY").classes("studio-brand")
+            ui.label("LOFI_FACTORY").classes("studio-brand")
         for key, label, icon in NAV:
             item = ui.element("div").classes("nav-item")
             with item:
@@ -2461,6 +3150,20 @@ def index(request: Request) -> None:
             el.classes(remove="active")
             if k == name:
                 el.classes(add="active")
+        # Every view's periodic ui.timer()s (refresh_hero, refresh_stats,
+        # refresh_resources, ...) keep firing after content.clear() removes
+        # their target elements -- clear() drops the elements but doesn't
+        # stop the still-scheduled Timer, so its next tick tries to update a
+        # now-deleted label and NiceGUI raises "The parent element this slot
+        # belongs to has been deleted" as an unhandled background-task
+        # exception. Confirmed live 2026-08-16 spamming the journal on every
+        # nav switch. Deactivating the outgoing view's timers first (they're
+        # real Timer elements, discoverable as descendants of `content` since
+        # every view renders `with root:`) closes this system-wide in one
+        # place instead of patching every individual refresh callback.
+        for t in list(content.descendants()):
+            if isinstance(t, Timer):
+                t.deactivate()
         content.clear()
         VIEWS[name](content)
 
@@ -2469,7 +3172,16 @@ def index(request: Request) -> None:
         # Only auto-close on mobile -- show-if-above keeps it pinned open on desktop
         # regardless, but only in response to an actual resize, not every render, so an
         # unconditional hide() here would also collapse it on wide screens.
-        if await ui.run_javascript("window.innerWidth < 768"):
+        try:
+            is_mobile = await ui.run_javascript("window.innerWidth < 768", timeout=3.0)
+        except TimeoutError:
+            # Confirmed live: the default 1s budget routinely isn't enough
+            # (slow client, tab backgrounded, high-latency Tailscale link) and
+            # this was crashing into an unhandled-exception traceback in the
+            # journal on ordinary navigation. Worst case on a genuine miss:
+            # the mobile drawer just doesn't auto-close, which is harmless.
+            return
+        if is_mobile:
             drawer.hide()
 
     global set_view
@@ -2484,8 +3196,8 @@ def login_page() -> None:
         ui.navigate.to("/")
         return
     with theme.card(classes="absolute-center w-80 gap-3 flex flex-col"):
-        ui.label("🎧 LO-FI FACTORY").classes("studio-brand self-center")
-        ui.label("studio control panel").classes(theme.SUB + " self-center")
+        ui.label("LOFI_FACTORY").classes("studio-brand self-center")
+        ui.label("control panel").classes(theme.SUB + " self-center")
         if not config.is_configured():
             ui.label("No WEBUI_PASSWORD set. Add it to .env and restart.")\
                 .classes("text-sm text-amber")

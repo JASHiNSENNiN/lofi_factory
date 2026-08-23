@@ -1,0 +1,26 @@
+key: bossa_lofi
+family: jazz_soul
+composition:
+  piano_program: GM_VIBRAPHONE
+  melody_program: GM_FLUTE
+  countermelody_program: GM_GUITAR_NYLON
+  scales: [pent, dorian, major]
+  drum_pattern_indices: [4, 12]
+  bpm_range: [74, 88]
+  energy: null
+  # 52: D major modal interchange -- research/subgenres/bossa_lofi.md: bossa
+  # harmony has "far more chromatic root motion and modal interchange than
+  # typical American jazz standards" -- direct match; D also matches this
+  # key's KEY_ROOTS comment ("bossa, bright morning").
+  progression_indices: [8, 9, 29, 33, 34, 44, 52]
+swing_range: [0.52, 0.6]
+cozy_bias: false
+texture: {program: GM_GUITAR_NYLON, style: strum}
+drum_kit_programs: [40, 32]
+drum_sampler_pattern: jazz
+mix: {lpf_hz: 12500, bitcrush_bits: 13, reverb_room: 0.35, reverb_wet: 0.18, tape_wobble_depth: 0.12,
+  compress_ratio: 2.2, vinyl_crackle: 0.06, use_ir_reverb: true, sidechain_duck: false}
+# research/theory/arrangement-structure.md #5: bossa_lofi is one of the two
+# subgenres most rooted in jazz-standard form and was silently falling back
+# to 'standard' -- give it the canonical AABA shape instead.
+song_form: aaba

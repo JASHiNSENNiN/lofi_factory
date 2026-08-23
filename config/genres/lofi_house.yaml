@@ -1,0 +1,29 @@
+key: lofi_house
+family: hip_hop_beat
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_VIBRAPHONE
+  countermelody_program: GM_GUITAR_JAZZ
+  scales: [dorian, pent, major]
+  drum_pattern_indices: [6, 8, 11]
+  # research/subgenres/lofi_house.md: "THE BIGGEST DISCREPANCY FOUND" -- real
+  # lofi house (Mall Grab/DJ Boring/Ross From Friends/DJ Seinfeld) runs at
+  # house's standard ~115-126 BPM four-on-the-floor tempo, not the 70-90
+  # lofi-hip-hop range the old (88,100) implied. Raised to the research
+  # file's recommended [110, 128]. This exceeds the generic 55-105 lofi-tempo
+  # test envelope in tests/generate_music/test_genre_authenticity.py -- see
+  # that file's _BPM_CEILING_OVERRIDES for the deliberate, documented
+  # exception (a real genre-tempo fact, not a bug).
+  bpm_range: [110, 128]
+  energy: medium
+  progression_indices: [3, 0, 1, 10, 33, 46]
+# research/subgenres/lofi_house.md: current (0.54,0.61) was close; real house
+# swing comes from a swung-16th hi-hat shuffle over an otherwise straighter
+# four-on-the-floor grid -- nudged down slightly to [0.52, 0.62].
+swing_range: [0.52, 0.62]
+cozy_bias: true
+texture: {program: GM_ORGAN_ROCK, style: stab}
+drum_sampler_pattern: null
+mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.4, reverb_wet: 0.2, tape_wobble_depth: 0.15,
+  compress_ratio: 3.0, vinyl_crackle: 0.09, use_ir_reverb: false, sidechain_duck: true}
+song_form: funk

@@ -1,0 +1,23 @@
+key: neo_soul
+family: jazz_soul
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_MUTED_TRUMPET
+  countermelody_program: GM_CELLO
+  scales: [dorian, pent, blues, natural_minor]
+  drum_pattern_indices: [2, 5, 8, 12]
+  bpm_range: [72, 86]
+  energy: null
+  # 56: Ebm minor ii-V-i -- research/subgenres/neo_soul.md: "The V7b9 is a
+  # signature pivot chord for resolving into minor tonics with emotional
+  # weight" -- exactly the Bb7b9->Ebm7 motion in #56; Ebm also matches this
+  # key's KEY_ROOTS comment ("neo-soul depth, jazz standard").
+  progression_indices: [10, 11, 27, 38, 40, 45, 56]
+swing_range: [0.6, 0.68]
+cozy_bias: false
+texture: {program: GM_ORGAN_ROCK, style: stab}
+drum_kit_programs: [0, 8]
+drum_sampler_pattern: null
+mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.16,
+  compress_ratio: 2.5, vinyl_crackle: 0.09, use_ir_reverb: true, sidechain_duck: false}
+song_form: null

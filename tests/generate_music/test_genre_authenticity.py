@@ -25,6 +25,23 @@ from scripts.generate_music_gemini import (
 # reads as a different genre (drum & bass, ambient drone, etc.).
 _LOFI_BPM_FLOOR, _LOFI_BPM_CEILING = 55, 105
 
+# Deliberate, documented per-subgenre ceiling overrides -- not a bug, a real
+# genre-tempo fact the generic 55-105 lofi envelope was never designed to
+# cover:
+#   lofi_house: research/subgenres/lofi_house.md -- real "lofi house" (Mall
+#     Grab/DJ Boring/Ross From Friends/DJ Seinfeld) runs at house's standard
+#     ~115-126 BPM four-on-the-floor tempo, not the 70-90 lofi-hip-hop range.
+#     Clamping it into [55,105] would misrepresent the actual genre.
+#   city_pop: research/subgenres/city_pop.md -- "city pop lives in the
+#     95-120 BPM range, with mid-tempo groove being a defining
+#     characteristic," distinctly faster than lofi hip-hop; capped at 108
+#     (below full disco/funk 120) to stay lofi-compatible while still
+#     honoring the real convention.
+_BPM_CEILING_OVERRIDES = {
+    'lofi_house': 128,
+    'city_pop': 108,
+}
+
 # Chill, jazz-family instrument voices lofi is built on -- deliberately
 # excludes synth leads, distortion guitar, brass sections, etc.
 _LOFI_CHORD_INSTRUMENTS = {GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_WARM_PAD}
@@ -35,9 +52,10 @@ _JAZZY_MARKERS = ('7', '9', '11', '13', 'dim', 'aug')
 def test_every_subgenre_bpm_range_is_within_lofi_tempo_envelope():
     for name, cfg in _SUBGENRE_CONFIG.items():
         lo, hi = cfg['bpm']
-        assert _LOFI_BPM_FLOOR <= lo <= hi <= _LOFI_BPM_CEILING, (
+        ceiling = _BPM_CEILING_OVERRIDES.get(name, _LOFI_BPM_CEILING)
+        assert _LOFI_BPM_FLOOR <= lo <= hi <= ceiling, (
             f"{name}: bpm range {cfg['bpm']} outside lofi envelope "
-            f"[{_LOFI_BPM_FLOOR}, {_LOFI_BPM_CEILING}]"
+            f"[{_LOFI_BPM_FLOOR}, {ceiling}]"
         )
 
 
@@ -79,5 +97,6 @@ def test_generated_tracks_stay_within_genre_bounds_across_many_seeds(tmp_path, m
     for seed in range(15):
         random.seed(seed)
         params = gmg.pick_params()
-        assert _LOFI_BPM_FLOOR <= params['bpm'] <= _LOFI_BPM_CEILING
+        ceiling = _BPM_CEILING_OVERRIDES.get(params.get('sub_genre'), _LOFI_BPM_CEILING)
+        assert _LOFI_BPM_FLOOR <= params['bpm'] <= ceiling
         assert params['swing'] >= 0.5

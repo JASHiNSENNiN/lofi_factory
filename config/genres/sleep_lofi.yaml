@@ -1,0 +1,32 @@
+key: sleep_lofi
+family: ambient_sleep
+composition:
+  # research/subgenres/sleep_lofi.md: "smooth-envelope instruments... are
+  # fundamentally less arousing than percussive attack-heavy sounds" -- pad
+  # for the harmonic bed, soft Rhodes/muted-mallet for the sparse melody, no
+  # percussive-attack voices anywhere.
+  piano_program: GM_WARM_PAD
+  melody_program: GM_RHODES
+  countermelody_program: GM_VIBRAPHONE
+  scales: [pent, natural_minor, dorian]
+  # H/J/N (indices 7, 9, 13): the three sparsest curated patterns in the
+  # table -- chill-sparse, half-time-with-a-single-snare, and floating-duo --
+  # same pool ambient.yaml draws from, used alone here (no busier patterns
+  # mixed in) since research explicitly wants percussion "minimal-to-absent."
+  drum_pattern_indices: [7, 9, 13]
+  bpm_range: [58, 68]
+  energy: low
+  # Most static/minimal progressions in the table: single sustained chords or
+  # 2-chord vamps held far longer than a bar, matching "a continuous,
+  # unwavering tonal foundation... staying the same pitch from beginning to
+  # end."
+  progression_indices: [12, 19, 35, 36, 7]
+swing_range: [0.5, 0.56]
+cozy_bias: false
+texture: {program: GM_FLUTE, style: breath}
+drum_sampler_pattern: null
+mix: {lpf_hz: 7000, bitcrush_bits: 10, reverb_room: 0.75, reverb_wet: 0.45, tape_wobble_depth: 0.1,
+  compress_ratio: 1.8, vinyl_crackle: 0.04, use_ir_reverb: true, sidechain_duck: false}
+# No dedicated "flat, no section contrast" form exists (out of Task 3's
+# scope); 'ambient' is the closest existing structural fit.
+song_form: ambient

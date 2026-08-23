@@ -1,0 +1,19 @@
+key: lo_fi_funk
+family: hip_hop_beat
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_GUITAR_JAZZ
+  countermelody_program: GM_ORGAN_ROCK
+  scales: [mixo, pent, blues]
+  drum_pattern_indices: [5, 8, 12, 14]
+  bpm_range: [82, 96]
+  energy: high
+  progression_indices: [26, 27, 10, 11, 3, 38, 45]
+swing_range: [0.6, 0.69]
+cozy_bias: false
+texture: {program: GM_ORGAN_ROCK, style: stab}
+drum_kit_programs: [0, 16]
+drum_sampler_pattern: null
+mix: {lpf_hz: 9500, bitcrush_bits: 10, reverb_room: 0.35, reverb_wet: 0.18, tape_wobble_depth: 0.22,
+  compress_ratio: 3.5, vinyl_crackle: 0.14, use_ir_reverb: false, sidechain_duck: true}
+song_form: funk

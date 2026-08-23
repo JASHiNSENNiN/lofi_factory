@@ -1,0 +1,19 @@
+key: jazz_cafe
+family: jazz_soul
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_VIBRAPHONE
+  countermelody_program: GM_MUTED_TRUMPET
+  scales: [dorian, major_pent, major]
+  drum_pattern_indices: [3, 1, 10, 13]
+  bpm_range: [78, 94]
+  energy: null
+  progression_indices: [2, 5, 8, 26, 6, 28, 31, 33, 34, 45]
+swing_range: [0.57, 0.65]
+cozy_bias: true
+texture: {program: GM_GUITAR_JAZZ, style: strum}
+drum_kit_programs: [32, 40]
+drum_sampler_pattern: jazz
+mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.4, reverb_wet: 0.2, tape_wobble_depth: 0.15,
+  compress_ratio: 2.5, vinyl_crackle: 0.08, use_ir_reverb: true, sidechain_duck: false}
+song_form: null

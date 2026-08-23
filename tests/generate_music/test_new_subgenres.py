@@ -11,6 +11,7 @@ from scripts.generate_music_gemini import (
     GM_KOTO,
     GM_SITAR,
     PROGRESSIONS,
+    _GLIDE_808_GENRES,
     _SUBGENRE_CONFIG,
     _SUBGENRE_TEXTURE,
     _SWING_RANGE,
@@ -31,6 +32,14 @@ def test_lofi_drill_and_lofi_world_are_registered():
     assert 'lofi_world' in _SUBGENRE_CONFIG
     assert 'lofi_drill' in _SWING_RANGE
     assert 'lofi_world' in _SWING_RANGE
+
+
+def test_lofi_drill_uses_808_glide_bass():
+    # research/subgenres/lofi_drill.md: "the sliding/gliding 808 bass...the
+    # single most recognizable production element in modern drill" -- see
+    # test_engine_feature_808_glide.py for the feature itself.
+    assert 'lofi_drill' in _GLIDE_808_GENRES
+    assert 'lofi_world' not in _GLIDE_808_GENRES
 
 
 def test_new_subgenre_drum_pattern_indices_are_valid():

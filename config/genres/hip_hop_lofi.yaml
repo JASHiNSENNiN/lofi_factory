@@ -1,0 +1,21 @@
+key: hip_hop_lofi
+family: hip_hop_beat
+composition:
+  piano_program: GM_RHODES
+  melody_program: GM_MUTED_TRUMPET
+  countermelody_program: GM_ORGAN_ROCK
+  scales: [pent, dorian, mixo, blues]
+  drum_pattern_indices: [0, 2, 6, 11, 14]
+  bpm_range: [78, 92]
+  energy: null
+  # 53: Em minor ii-V-i -- research/subgenres/hip_hop_lofi.md: "the ii-V-i
+  # cadence (e.g. Dm7b5-G7-Cm7 in a minor context) is a foundation" -- direct
+  # match, and hip_hop_lofi previously had zero true minor ii-V-i entries.
+  progression_indices: [0, 1, 3, 10, 11, 38, 39, 45, 53]
+swing_range: [0.61, 0.69]
+cozy_bias: false
+drum_kit_programs: [0, 24, 25]
+drum_sampler_pattern: boom_bap
+mix: {lpf_hz: 9000, bitcrush_bits: 10, reverb_room: 0.35, reverb_wet: 0.18, tape_wobble_depth: 0.2,
+  compress_ratio: 3.5, vinyl_crackle: 0.15, use_ir_reverb: false, sidechain_duck: true}
+song_form: funk

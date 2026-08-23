@@ -140,8 +140,17 @@ def main():
     parser.add_argument("--music-mode", default="midi",
                         choices=["mock", "midi", "colab"],
                         help="midi=MIDI+FluidSynth, entirely procedural (default), mock=placeholder, colab=print Colab code")
-    parser.add_argument("--music-v2", action="store_true",
-                        help="Use v2 beta music generator (improved voice leading, melody, bass, humanization)")
+    # Three-state: None (default) = let the engagement-analytics engine
+    # bandit (scripts.analytics.engine_weights()) choose v1 vs v2, weighted
+    # by which has performed better (neutral 50/50 with no data yet).
+    # --music-v2/--no-music-v2 explicitly force v2/v1, which always wins
+    # over the bandit (explicit flag > auto-selection). BooleanOptionalAction
+    # (not plain store_true) is what makes the "not passed at all" state
+    # distinguishable from "explicitly forced off".
+    parser.add_argument("--music-v2", action=argparse.BooleanOptionalAction, default=None,
+                        help="Use v2 beta music generator (improved voice leading, melody, bass, humanization). "
+                             "Omit to let the engagement-analytics bandit pick v1/v2 automatically; "
+                             "--no-music-v2 forces v1.")
     parser.add_argument("--music-count", type=int, default=None,
                         help="Number of tracks to generate (default: auto-scaled to duration)")
     parser.add_argument("--skip-visual", action="store_true",
@@ -163,6 +172,18 @@ def main():
                         help="Live stream to YouTube instead of assembling a file")
     parser.add_argument("--stream-test", action="store_true",
                         help="With --stream: encode 60s locally instead of pushing to YouTube")
+    # Lazy import: genre_presets.load_all() only globs+parses config/genres/*.yaml
+    # (no soundfont-pool filesystem scan, unlike importing generate_music_gemini
+    # at module top level) — cheap enough to pay even when --sub-genre is never
+    # used, and keeps run.py's own module-level footprint unchanged.
+    from scripts.genre_presets import load_all as _load_all_subgenres
+    _sub_genre_choices = ["auto"] + sorted(_load_all_subgenres().keys())
+    parser.add_argument("--sub-genre", choices=_sub_genre_choices, default="auto",
+                        help="Force a specific sub-genre instead of letting the algorithm/concept "
+                             "pick one (default: auto). See config/genres/ for the full list.")
+    parser.add_argument("--mood", default=None,
+                        help="Free-text mood/concept phrase override for the music generator "
+                             "(default: derived from the auto-generated video concept).")
     args = parser.parse_args()
 
     _pipeline_lock = _acquire_pipeline_lock()  # noqa: F841 — held for the life of this run
@@ -178,6 +199,15 @@ def main():
         "lofi ambient":    "blue_hour",
         "city pop lofi":   "neon_tokyo",
         "dark lofi":       "midnight_cafe",
+        # New research-driven subgenres' SEO labels (scripts/generate_seo.py
+        # _SUBGENRE_TO_GENRE_LABEL) -- "lofi ambient" (sleep_lofi's label)
+        # already maps to blue_hour above, so no entry needed for it here.
+        # lofi_drill/lofi_world have no SEO label at all (see the comment in
+        # generate_seo.py), so there was no existing pattern to check against
+        # for them -- these two are added because a genuinely good visual
+        # fit already exists in scripts/visual_v2/themes.py.
+        "lofi garage":     "lofi_house",   # nocturnal/moody neon-blue night fits UKG-adjacent mood
+        "synthwave lofi":  "vaporwave",    # 80s neon retro palette is the closest existing visual match
     }
 
     duration_was_set = args.duration is not None
@@ -206,14 +236,18 @@ def main():
     except Exception as _te:
         print(f"  [Trends] skipped ({_te})")
 
-    suggested_theme = trends.get("suggested_theme", None) if trends else None
-
     # ── CONCEPT (generated once, shared by music + SEO) ────────
     print("\n  Generating video concept...")
     from scripts.generate_seo import pick_concept
     concept = pick_concept(trends)
     concept_hint = concept.get("concept") or concept.get("mood_line")
     genre_hint   = concept.get("genre_label") or ""
+
+    # Explicit CLI overrides win over the auto-picked concept.
+    if args.sub_genre != "auto":
+        genre_hint = args.sub_genre
+    if args.mood:
+        concept_hint = args.mood
 
     # Theme: use --theme if set, otherwise derive from genre, else random
     if args.theme:
@@ -261,7 +295,25 @@ def main():
         print(f"\n[2/5] Music mode: {args.music_mode}")
 
         if args.music_mode == "midi":
-            if args.music_v2:
+            if args.music_v2 is None:
+                # No explicit --music-v2/--no-music-v2 on the CLI — let the
+                # engagement-analytics engine bandit choose (neutral 50/50
+                # when there's no/insufficient data yet). try/except-guarded
+                # the same way every other optional analytics-feedback layer
+                # is (sub_genre_weights()/bpm_bucket_weights() above) — a
+                # missing/corrupt analytics log must never block a render.
+                try:
+                    from scripts.analytics import engine_weights
+                    _ew = engine_weights()
+                    use_v2 = random.choices(
+                        ["v1", "v2"], weights=[_ew.get("v1", 1.0), _ew.get("v2", 1.0)], k=1,
+                    )[0] == "v2"
+                except Exception as _eng_e:
+                    print(f"  [run] Engine bandit selection failed ({_eng_e}) — defaulting to v1")
+                    use_v2 = False
+            else:
+                use_v2 = args.music_v2  # explicit flag wins over the bandit
+            if use_v2:
                 from scripts.generate_music_v2 import generate_tracks
                 print("[run] Using music generator v2 (beta)")
             else:
@@ -281,6 +333,18 @@ def main():
     # Align concept genre_label + mood_line with what was actually generated.
     # pick_concept() guesses the genre up-front; the algorithm may pick a different
     # sub_genre. Read the first track's .meta.json sidecar to correct the concept.
+    #
+    # Also stash sub_genre/bpm/music_engine (the fields the composition
+    # bandits — sub_genre_weights()/bpm_bucket_weights()/engine_weights() —
+    # need to learn from) onto local vars here, the same way genre_label
+    # flows through `concept` above, so they can be copied onto `seo` right
+    # after generate_seo() runs and from there into upload_log.json's
+    # per-video entry (see scripts/upload_youtube.py's / publish.py's
+    # log-append). Defaults are the pre-existing-behavior-safe ones for
+    # tracks generated before this metadata existed.
+    music_sub_genre = ""
+    music_bpm = None
+    music_engine = "v1"
     if generated_tracks:
         import json as _json
         meta_path = generated_tracks[0] + ".meta.json"
@@ -294,6 +358,9 @@ def main():
                     music_mood=_meta.get("title", ""),
                     base_concept=concept,
                 )
+                music_sub_genre = _meta.get("genre", "") or ""
+                music_bpm = _meta.get("bpm")
+                music_engine = _meta.get("music_engine") or "v1"
                 print(f"  [SEO] Aligned to music: genre={concept['genre_label']!r} mood={concept['mood_line']!r}")
             except Exception as _e:
                 print(f"  [SEO] Alignment skipped ({_e})")
@@ -305,13 +372,31 @@ def main():
                                   use_ollama=args.use_ollama, concept=concept,
                                   trends=trends)
 
+    # Stash composition-selection metadata (sub_genre/bpm/music_engine) onto
+    # `seo` -- the same dict pillar/duration already ride on into
+    # upload_log.json -- so scripts/upload_youtube.py's / publish.py's
+    # log-append can read them the same way they read seo.get("pillar", ...).
+    # generate_seo() already wrote `seo` to seo_path before returning, so
+    # re-dump it here too: this is the file a *separate* later
+    # `publish.py upload` process (a different run, reading from disk) would
+    # load, not just this in-process run's in-memory `seo` used below.
+    seo["sub_genre"]    = music_sub_genre
+    seo["bpm"]           = music_bpm
+    seo["music_engine"]  = music_engine
+    try:
+        import json as _json  # may not have been imported yet (e.g. --skip-music)
+        with open(seo_path, "w") as _sf:
+            _json.dump(seo, _sf, indent=2, ensure_ascii=False)
+    except Exception as _se:
+        print(f"  [SEO] Could not persist composition metadata to {seo_path}: {_se}")
+
     # ── STEP 4: Thumbnail ──────────────────────────────────────
     print("\n[4/5] Generating thumbnail...")
     import time
     from scripts.generate_thumbnail_cozy import generate_thumbnail
     thumb_variant = int(time.time()) % 100
     thumb_path, thumb_title = generate_thumbnail(
-        theme_name=suggested_theme or theme,
+        theme_name=theme,
         duration=args.duration,
         title=seo.get("title"),
         variant=thumb_variant
@@ -325,7 +410,7 @@ def main():
     # thumb_file + "_alt" suffix finds it later without any timestamp guessing.
     try:
         alt_raw_path, _ = generate_thumbnail(
-            theme_name=suggested_theme or theme,
+            theme_name=theme,
             duration=args.duration,
             title=seo.get("title"),
             variant=thumb_variant + 1,
@@ -426,6 +511,14 @@ def main():
                 "concept":          seo.get("concept", ""),
                 "seo_ref":          seo.get("ref_id", ""),
                 "video_file":       os.path.basename(video_path),
+                # Composition-selection feedback — see scripts/analytics.py's
+                # sub_genre_weights()/bpm_bucket_weights()/engine_weights().
+                # Defaults mirror sync_analytics()'s container-construction
+                # defaults so an older-format seo dict (missing these keys)
+                # never crashes this log-append.
+                "sub_genre":        seo.get("sub_genre", ""),
+                "bpm":              seo.get("bpm"),
+                "music_engine":     seo.get("music_engine") or "v1",
                 "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
             })
             with open(_log_path, "w") as _f:

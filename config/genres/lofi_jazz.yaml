@@ -1,0 +1,24 @@
+key: lofi_jazz
+family: jazz_soul
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_VIBRAPHONE
+  countermelody_program: GM_MUTED_TRUMPET
+  scales: [dorian, natural_minor]
+  drum_pattern_indices: [1, 3, 10, 13]
+  bpm_range: [70, 84]
+  energy: null
+  # 54/55/56: F#m/Bm/Ebm minor ii-V-i siblings -- research/subgenres/
+  # lofi_jazz.md: "the most harmonically dense... ii-V-I/ii-V-i cadences...
+  # widest chord-extension palette" of the roster -- the natural home for the
+  # more exotic-key minor ii-V-i entries once lofi_jazz's existing Am/Bb/C/F
+  # palette is exhausted.
+  progression_indices: [2, 5, 6, 28, 31, 32, 33, 34, 39, 40, 54, 55, 56]
+swing_range: [0.58, 0.68]
+cozy_bias: false
+texture: {program: GM_GUITAR_JAZZ, style: strum}
+drum_kit_programs: [32, 40]
+drum_sampler_pattern: jazz
+mix: {lpf_hz: 10000, bitcrush_bits: 11, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.18,
+  compress_ratio: 2.8, vinyl_crackle: 0.1, use_ir_reverb: true, sidechain_duck: false}
+song_form: extended

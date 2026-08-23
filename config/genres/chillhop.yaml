@@ -1,0 +1,22 @@
+key: chillhop
+family: hip_hop_beat
+composition:
+  piano_program: GM_RHODES
+  melody_program: GM_GUITAR_NYLON
+  countermelody_program: GM_WARM_PAD
+  scales: [pent, dorian, natural_minor]
+  drum_pattern_indices: [0, 1, 2, 13]
+  bpm_range: [76, 88]
+  energy: null
+  # 57: C major modal interchange (I-bIII-iv-I-bVII) -- research/subgenres/
+  # chillhop.md: "Borrowed chords are used sparingly (occasional bVII or
+  # IV-iv 'plagal' color)" -- literally the two borrowed chords in #57.
+  # 58: Gm minor ii-V-i -- research: "leans directly on jazz's ii-V-I (in a
+  # minor key, ii-V-i)"; chillhop had no Gm-context progression before.
+  progression_indices: [0, 1, 7, 10, 11, 13, 33, 38, 44, 45, 57, 58]
+swing_range: [0.59, 0.67]
+cozy_bias: true
+drum_sampler_pattern: dusty
+mix: {lpf_hz: 9500, bitcrush_bits: 11, reverb_room: 0.35, reverb_wet: 0.2, tape_wobble_depth: 0.18,
+  compress_ratio: 3.0, vinyl_crackle: 0.12, use_ir_reverb: false, sidechain_duck: true}
+song_form: null

@@ -1,0 +1,21 @@
+key: lofi_rnb
+family: jazz_soul
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_MUTED_TRUMPET
+  countermelody_program: GM_CELLO
+  scales: [dorian, pent, mixo, blues]
+  drum_pattern_indices: [2, 5, 8, 12]
+  bpm_range: [70, 84]
+  energy: null
+  # 56: Ebm minor ii-V-i -- research/subgenres/lofi_rnb.md: "the V7b9
+  # functions as the key emotional pivot chord resolving into minor tonics"
+  # -- same device lofi_rnb inherits directly from neo-soul.
+  progression_indices: [10, 11, 3, 0, 6, 27, 38, 40, 45, 56]
+swing_range: [0.59, 0.68]
+cozy_bias: true
+texture: {program: GM_GUITAR_JAZZ, style: strum}
+drum_sampler_pattern: null
+mix: {lpf_hz: 11000, bitcrush_bits: 11, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.18,
+  compress_ratio: 2.8, vinyl_crackle: 0.1, use_ir_reverb: false, sidechain_duck: false}
+song_form: null

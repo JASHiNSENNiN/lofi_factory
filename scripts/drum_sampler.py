@@ -24,6 +24,8 @@ import numpy as np
 import soundfile as sf
 from scipy.signal import butter, sosfilt, lfilter
 
+from scripts import genre_presets
+
 SR = 44_100
 _ASSET_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "drums")
 
@@ -216,14 +218,14 @@ def generate_euclidean_pat_dict(energy: float) -> dict:
 
 _ALL_PATS = [_PAT_STANDARD, _PAT_BOOM_BAP, _PAT_808_TRAP, _PAT_JAZZ, _PAT_DUSTY]
 
-_SUBGENRE_PAT: dict[str, dict] = {
-    "hip_hop_lofi": _PAT_BOOM_BAP, "nujabes": _PAT_BOOM_BAP, "dark_lofi": _PAT_BOOM_BAP,
-    "chillhop": _PAT_DUSTY,        "study_lofi": _PAT_DUSTY,
-    "lofi_phonk": _PAT_808_TRAP,   "vaporwave": _PAT_808_TRAP,   "lofi_drill": _PAT_808_TRAP,
-    "lofi_jazz": _PAT_JAZZ,        "jazz_cafe": _PAT_JAZZ,
-    "bossa_lofi": _PAT_JAZZ,       "ambient": _PAT_JAZZ,
-    "piano_lofi": _PAT_JAZZ,       "lofi_classical": _PAT_JAZZ,
+# Loaded from config/genres/*.yaml (see scripts/genre_presets.py). Subgenres
+# absent from the YAML's drum_sampler_pattern field fall back to a random
+# pick from _ALL_PATS at call time (unchanged).
+_PAT_REGISTRY = {
+    "standard": _PAT_STANDARD, "boom_bap": _PAT_BOOM_BAP,
+    "808_trap": _PAT_808_TRAP, "jazz": _PAT_JAZZ, "dusty": _PAT_DUSTY,
 }
+_SUBGENRE_PAT: dict[str, dict] = genre_presets.build_subgenre_pat(_PAT_REGISTRY)
 
 
 def _mix_at(buf: np.ndarray, src: np.ndarray, pos: int) -> None:

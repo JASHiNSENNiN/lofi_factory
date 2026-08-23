@@ -1323,9 +1323,15 @@ def generate_track(
         except Exception as _aqe:
             print(f"  [audio-quality] Scoring skipped ({_aqe})")
 
+    # music_engine hardcoded "v2" — this is the v2 generator's own sidecar
+    # write (does not reuse generate_music_gemini.generate_track()). See the
+    # matching block there for the "v1" counterpart and why bpm/music_engine
+    # are stashed here (run.py's meta-alignment -> analytics feedback loop).
     with open(out + '.meta.json', 'w', encoding='utf-8') as _mf:
         json.dump({'title': params.get('mood', 'lofi dreams'),
-                   'genre': params.get('sub_genre', 'lo-fi hip hop')}, _mf)
+                   'genre': params.get('sub_genre', 'lo-fi hip hop'),
+                   'bpm': params.get('bpm'),
+                   'music_engine': 'v2'}, _mf)
 
     print(f"  ✓ {out} ({os.path.getsize(out)//1024//1024} MB)")
     return out

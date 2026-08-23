@@ -1,0 +1,18 @@
+key: dark_lofi
+family: dark_moody
+composition:
+  piano_program: GM_RHODES
+  melody_program: GM_GUITAR_JAZZ
+  countermelody_program: GM_CELLO
+  scales: [phryg, pent, natural_minor, harmonic_minor, blues]
+  drum_pattern_indices: [0, 2, 5, 9, 14]
+  bpm_range: [65, 80]
+  energy: null
+  progression_indices: [14, 15, 3, 31, 39, 41, 42, 43]
+swing_range: [0.62, 0.71]
+cozy_bias: false
+drum_kit_programs: [0, 8]
+drum_sampler_pattern: boom_bap
+mix: {lpf_hz: 7500, bitcrush_bits: 9, reverb_room: 0.5, reverb_wet: 0.28, tape_wobble_depth: 0.25,
+  compress_ratio: 3.5, vinyl_crackle: 0.18, use_ir_reverb: false, sidechain_duck: false}
+song_form: null

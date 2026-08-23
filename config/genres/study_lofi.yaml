@@ -1,0 +1,17 @@
+key: study_lofi
+family: cozy_bright
+composition:
+  piano_program: GM_RHODES
+  melody_program: GM_MARIMBA
+  countermelody_program: GM_WARM_PAD
+  scales: [pent, dorian, major_pent, major]
+  drum_pattern_indices: [0, 1, 9, 13]
+  bpm_range: [74, 90]
+  energy: medium
+  progression_indices: [0, 1, 7, 22, 16, 28, 33, 35, 44, 46]
+swing_range: [0.58, 0.66]
+cozy_bias: true
+drum_sampler_pattern: dusty
+mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.38, reverb_wet: 0.2, tape_wobble_depth: 0.14,
+  compress_ratio: 2.5, vinyl_crackle: 0.09, use_ir_reverb: false, sidechain_duck: false}
+song_form: null

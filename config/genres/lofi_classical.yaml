@@ -1,0 +1,23 @@
+key: lofi_classical
+family: acoustic_classical
+composition:
+  piano_program: GM_EP2
+  melody_program: GM_CELLO
+  countermelody_program: GM_STRINGS
+  scales: [major, lydian, major_pent, harmonic_minor]
+  drum_pattern_indices: [7, 9, 13]
+  bpm_range: [58, 78]
+  energy: low
+  # 57: C major modal interchange (I-bIII-iv-I-bVII) -- research/subgenres/
+  # lofi_classical.md: "secondary dominants, borrowed chords from the
+  # parallel minor" is called out as a specifically neoclassical harmonic
+  # fingerprint -- #57's bIII/iv/bVII are exactly parallel-minor borrows.
+  progression_indices: [16, 17, 18, 22, 25, 35, 46, 50, 57]
+swing_range: [0.5, 0.57]
+cozy_bias: true
+texture: {program: GM_FLUTE, style: breath}
+drum_kit_programs: [40, 32]
+drum_sampler_pattern: jazz
+mix: {lpf_hz: 15000, bitcrush_bits: 15, reverb_room: 0.5, reverb_wet: 0.28, tape_wobble_depth: 0.06,
+  compress_ratio: 1.6, vinyl_crackle: 0.03, use_ir_reverb: true, sidechain_duck: false}
+song_form: extended

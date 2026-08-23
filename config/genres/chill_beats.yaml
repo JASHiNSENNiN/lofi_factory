@@ -1,0 +1,18 @@
+key: chill_beats
+family: hip_hop_beat
+composition:
+  piano_program: GM_WARM_PAD
+  melody_program: GM_VIBRAPHONE
+  countermelody_program: GM_WARM_PAD
+  scales: [pent, dorian, natural_minor]
+  drum_pattern_indices: [1, 7, 9, 10, 13]
+  bpm_range: [62, 76]
+  energy: low
+  progression_indices: [7, 12, 13, 19, 20, 33, 35, 36]
+swing_range: [0.58, 0.66]
+cozy_bias: false
+drum_kit_programs: [0, 8]
+drum_sampler_pattern: null
+mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.45, reverb_wet: 0.25, tape_wobble_depth: 0.14,
+  compress_ratio: 2.5, vinyl_crackle: 0.08, use_ir_reverb: false, sidechain_duck: false}
+song_form: ambient

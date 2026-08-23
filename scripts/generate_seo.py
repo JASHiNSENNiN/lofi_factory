@@ -652,9 +652,21 @@ TAGS_DURATION = {
     "all night": ["all night lofi", "lofi all night", "8 hour study music", "overnight lofi", "lofi sleep music"],
 }
 
+# YouTube's Data API rejects (400 invalidTags) any single tag over ~100
+# chars even though the only *documented* limit is the 500-char aggregate
+# budget build_tags() already enforces below -- confirmed 2026-08-13 when a
+# long concept-derived tag tripped this and burned all 5 upload retries on
+# a permanently-invalid payload (see upload_youtube.py's retry loop, which
+# now also stops retrying on this exact error instead of repeating it).
+_MAX_TAG_CHARS = 100
+
+
 def _clean_tag(t: str) -> str:
-    """Strip leading # and collapse spaces — YouTube tags are plain text."""
-    return t.lstrip("#").strip()
+    """Strip leading #, angle brackets (YouTube rejects '<'/'>' in tags), and
+    collapse spaces — YouTube tags are plain text, and (undocumented but
+    consistently enforced) each individual tag must stay under ~100 chars."""
+    t = t.lstrip("#").replace("<", "").replace(">", "").strip()
+    return t[:_MAX_TAG_CHARS].strip()
 
 
 # Theme-tied geographic/cultural tags -- deliberately narrow. The concept
@@ -705,11 +717,18 @@ def build_tags(concept: dict, duration: str, theme_name: str | None = None) -> l
     random.shuffle(longtail_shuffled)
     candidates += longtail_shuffled
 
-    # Dedupe and fill up to 490 chars (YouTube hard limit is 500; 10-char buffer)
+    # Dedupe and fill up to 490 chars (YouTube hard limit is 500; 10-char buffer).
+    # Also enforce the per-tag cap here, not just in _clean_tag() -- the
+    # TAGS_BROAD/TAGS_DURATION/TAGS_MID/TAGS_LONGTAIL static pools don't route
+    # through _clean_tag, so this is the one choke point every candidate,
+    # regardless of source, actually passes through before being sent upstream.
     seen: set[str] = set()
     out: list[str] = []
     total_chars = 0
     for t in candidates:
+        t = t.strip()[:_MAX_TAG_CHARS].strip()
+        if not t:
+            continue
         tl = t.lower()
         char_cost = len(t) + (1 if out else 0)   # +1 for the comma separator
         if tl not in seen and total_chars + char_cost <= 490:
@@ -755,7 +774,7 @@ lo-fi hip hop · {duration} for {activity} · no ads, no interruptions.
 👍 Like if this found you at the right time
 💬 Tell me what you were working on in the comments
 
-Original compositions. All tracks generated fresh for this session.
+Original compositions, freshly composed and mixed for this upload.
 
 #lofi #lofihiphop #{tag1} #{tag2} #{tag3}"""
 
@@ -1290,6 +1309,14 @@ _SUBGENRE_TO_GENRE_LABEL: dict[str, str] = {
     "study_lofi":     "lo-fi hip hop",
     "piano_lofi":     "lofi jazz",
     "lofi_classical": "lofi ambient",
+    # 3 new research-driven subgenres (config/genres/README.md's "add a new
+    # subgenre" step 2). Note: lofi_drill/lofi_world (added in a prior pass)
+    # were never actually added here and silently fall back to "lo-fi hip
+    # hop" -- that looks like an unintentional gap in that pass, not a
+    # pattern worth repeating, so these 3 get real labels instead.
+    "sleep_lofi":     "lofi ambient",
+    "lofi_garage":    "lofi garage",
+    "lofi_synthwave": "synthwave lofi",
 }
 
 

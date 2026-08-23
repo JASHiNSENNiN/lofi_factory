@@ -114,6 +114,20 @@ PRIVACY = ["public", "unlisted", "private"]
 STREAM_QUALITY = ["720p15", "720p", "1080p", "1080p60"]
 
 
+def subgenre_choices() -> list[str]:
+    """Sub-genre keys from config/genres/*.yaml, for the render dialogs' picker.
+
+    Lazy-imported here (not a module-level constant) so this module stays
+    import-light -- webui.config is imported at webui startup, well before
+    any dialog renders, and scripts.genre_presets.load_all() (glob + YAML
+    parse, no soundfont filesystem scan) should only be paid for when a
+    dialog actually needs the list. Mirrors run.py's same lazy-import
+    pattern for its --sub-genre choices.
+    """
+    from scripts.genre_presets import load_all
+    return sorted(load_all().keys())
+
+
 def is_configured() -> bool:
     """True once a password is set — otherwise we run in setup-warning mode."""
     return bool(WEBUI_PASSWORD)

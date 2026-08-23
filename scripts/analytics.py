@@ -298,6 +298,15 @@ def sync_analytics() -> dict:
                     "title_chosen_idx":      entry.get("title_chosen_idx", 0),
                     "title_chosen_strategy": entry.get("title_chosen_strategy"),
                     "duration_secs":         entry.get("duration_secs"),
+                    # Composition-selection feedback (sub-genre/BPM/engine
+                    # bandits -- see sub_genre_weights()/bpm_bucket_weights()/
+                    # engine_weights() below): copied through the same way as
+                    # pillar/duration_secs above, defaulting sensibly for
+                    # older upload_log entries logged before these fields
+                    # existed so a pre-existing log never breaks a sync.
+                    "sub_genre":             entry.get("sub_genre", ""),
+                    "bpm":                   entry.get("bpm"),
+                    "music_engine":          entry.get("music_engine", "v1"),
                     "upload_date":      upload_date,
                     "ab_variant":       random.choice(["A", "B"]),
                     "history":          [],
@@ -732,6 +741,143 @@ def pillar_weights(pillars: list[str] | None = None, analytics: dict | None = No
         by_pillar[p].append(score)
 
     bandit_weights = _bandit_weights(by_pillar, min_samples=5)
+    if bandit_weights is None:
+        return default
+
+    weights = dict(default)
+    weights.update(bandit_weights)
+    return weights
+
+
+# ── Composition-selection feedback (sub-genre / BPM / engine bandits) ───────
+# Extends the same engagement-bandit machinery above (previously wired only
+# into SEO-pillar choice and video duration) to which sub-genre, BPM, and
+# generation engine (v1 vs v2) get used -- see generate_music_gemini.py's
+# _pick_subgenre_weighted()/pick_params() and run.py's engine selection for
+# the call sites. All three below are thin wrappers around
+# composite_engagement_score()/_bandit_weights() -- zero new statistical
+# machinery, same 0.5x-2.0x clamp and >=5-samples-per-arm cold-start
+# behavior as pillar_weights()/duration_weights().
+
+def sub_genre_weights(sub_genres: list[str] | None = None, analytics: dict | None = None) -> dict[str, float]:
+    """
+    Per-sub-genre weight multipliers (0.5x-2.0x), bandit-backed (see
+    _bandit_weights()) using composite_engagement_score() -- identical
+    pattern to pillar_weights(), bucketed on entry['sub_genre'] (which
+    sub-genre a track was actually generated in, e.g. "chillhop") instead of
+    entry['pillar'] (the SEO framing, e.g. "temporal").
+
+    `sub_genres` defaults to every known sub-genre key from
+    scripts.generate_music_gemini._SUBGENRE_CONFIG -- lazy-imported HERE
+    (inside the function body, not at module top) so analytics.py doesn't
+    acquire a hard import-time dependency on the whole music-generation
+    module (which does soundfont/filesystem setup at import time) just for
+    this, its other non-composition callers (pillar/duration/title-variant
+    weighting, the webui Analytics page, etc.) don't need it.
+    """
+    if sub_genres is None:
+        try:
+            from scripts.generate_music_gemini import _SUBGENRE_CONFIG
+            sub_genres = list(_SUBGENRE_CONFIG.keys())
+        except Exception:
+            sub_genres = []
+    sub_genres = list(sub_genres)
+    default = {s: 1.0 for s in sub_genres}
+    if analytics is None:
+        analytics = load_analytics()
+    if not analytics:
+        return default
+
+    from collections import defaultdict as _dd
+    by_sub: dict[str, list[float]] = _dd(list)
+    for entry in analytics.values():
+        s = entry.get("sub_genre")
+        if s not in sub_genres:
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        by_sub[s].append(score)
+
+    bandit_weights = _bandit_weights(by_sub, min_samples=5)
+    if bandit_weights is None:
+        return default
+
+    weights = dict(default)
+    weights.update(bandit_weights)
+    return weights
+
+
+def bpm_bucket_weights(bucket_width: int = 10, analytics: dict | None = None) -> dict[int, float]:
+    """
+    Weight multipliers per BPM bucket (entry['bpm'] floor-divided down to
+    the nearest `bucket_width`, e.g. bpm=82 -> bucket 80), bandit-backed the
+    same way as duration_weights() -- 0.5x-2.0x, needs >=5 samples in a
+    bucket to move off neutral.
+
+    Unlike pillar_weights()/sub_genre_weights(), there's no fixed universe
+    of bucket labels to pre-seed a neutral 1.0 default for (BPM buckets only
+    exist once actually observed) -- callers should treat any bucket key
+    missing from the returned dict as neutral (1.0), the same convention
+    _bandit_weights() already uses for arms below the sample threshold.
+    Returns {} (an empty dict, all-neutral) when there's no/insufficient
+    data, same cold-start meaning as duration_weights()'s all-1.0 default.
+    """
+    if analytics is None:
+        analytics = load_analytics()
+    if not analytics:
+        return {}
+
+    from collections import defaultdict as _dd
+    by_bucket: dict[int, list[float]] = _dd(list)
+    for entry in analytics.values():
+        bpm = entry.get("bpm")
+        if not bpm:
+            continue
+        try:
+            bucket = (int(bpm) // bucket_width) * bucket_width
+        except (TypeError, ValueError):
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        by_bucket[bucket].append(score)
+
+    bandit_weights = _bandit_weights(by_bucket, min_samples=5)
+    return bandit_weights or {}
+
+
+def engine_weights(analytics: dict | None = None) -> dict[str, float]:
+    """
+    Weight multipliers for the {"v1", "v2"} music-generation-engine arms,
+    bandit-backed the same way as pillar_weights() -- 0.5x-2.0x, neutral 1.0
+    default for both arms when data is sparse (run.py's engine selection
+    treats this as a 50/50 coin flip at cold start).
+
+    Entries logged before music_engine tracking existed default to "v1" at
+    the sync_analytics() container-construction step (see there), so older
+    rows contribute to the "v1" arm's sample count rather than being
+    silently dropped.
+    """
+    arms = ["v1", "v2"]
+    default = {a: 1.0 for a in arms}
+    if analytics is None:
+        analytics = load_analytics()
+    if not analytics:
+        return default
+
+    from collections import defaultdict as _dd
+    by_engine: dict[str, list[float]] = _dd(list)
+    for entry in analytics.values():
+        e = entry.get("music_engine") or "v1"
+        if e not in arms:
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        by_engine[e].append(score)
+
+    bandit_weights = _bandit_weights(by_engine, min_samples=5)
     if bandit_weights is None:
         return default
 

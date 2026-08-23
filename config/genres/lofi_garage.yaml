@@ -1,0 +1,39 @@
+key: lofi_garage
+family: hip_hop_beat
+composition:
+  # research/subgenres/lofi_garage.md: "jazzy 7ths and minor 9ths, classic
+  # organ riffs, lo-fi pads, and housey piano chords" -- housey EP chords,
+  # an organ-riff lead (explicitly cited), warm pads underneath.
+  piano_program: GM_EP2
+  melody_program: GM_ORGAN_ROCK
+  countermelody_program: GM_WARM_PAD
+  scales: [dorian, natural_minor, pent]
+  # 2-step/off-grid/broken-pocket patterns are the closest existing
+  # approximation of "removing the kick from every beat" 2-step syncopation:
+  # C (J Dilla drunk, off-grid kick), I (Funk Groove, syncopated kick/ghost
+  # snares), M (Afrobeat 3+3+2 grouping), O (Broken beat, fractured pocket).
+  # Per-hit micro-timing swing is now implemented (see micro_swing below);
+  # this curated-pattern pool is still the best-fit base skeleton it layers
+  # its per-voice timing profile on top of.
+  drum_pattern_indices: [2, 8, 12, 14]
+  bpm_range: [66, 76]
+  energy: null
+  # Minor-leaning, jazzy 9th-chord progressions -- research: "leaning minor
+  # for emotional depth," "jazzy 7ths and minor 9ths."
+  progression_indices: [0, 10, 11, 33, 38]
+# Widest/heaviest swing band in the roster, matching the research's "garage
+# swing lives in the individual hits" claim -- now backed by an actual
+# per-hit micro-timing engine (micro_swing below) rather than approximated
+# by swing_range alone.
+swing_range: [0.66, 0.76]
+cozy_bias: false
+# research/subgenres/lofi_garage.md: "garage swing lives in the individual
+# hits" -- per-voice micro-timing profile (hats widest/latest, snare a
+# smaller consistent late pull, kick near the grid) via
+# build_drums(..., micro_swing=True), layered on top of swing_range above.
+micro_swing: true
+texture: {program: GM_VIBRAPHONE, style: stab}
+drum_sampler_pattern: null
+mix: {lpf_hz: 10000, bitcrush_bits: 11, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.14,
+  compress_ratio: 3.2, vinyl_crackle: 0.08, use_ir_reverb: false, sidechain_duck: true}
+song_form: funk

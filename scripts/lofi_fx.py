@@ -24,6 +24,8 @@ import random
 import os
 from scipy.signal import lfilter as _lfilter
 
+from scripts import genre_presets
+
 # Per-genre FX presets — tuned to feel different, not just be different numbers
 # lpf: Moog ladder LPF cutoff Hz (lower = more muffled/vintage)
 # bits: bitcrusher depth (lower = more grit, 8=MPC2000, 12=Akai S950, 16=clean)
@@ -32,41 +34,8 @@ from scipy.signal import lfilter as _lfilter
 # wobble_depth: tape wobble amount 0-1
 # compress_ratio: compression ratio
 # vinyl: vinyl crackle amplitude
-_GENRE_PRESETS: dict[str, dict] = {
-    # ── Dark / moody ─────────────────────────────────────────────────────────
-    "dark_lofi":     {"lpf": 7500,  "bits": 9,  "room": 0.5, "wet": 0.28, "wobble_depth": 0.25, "compress_ratio": 3.5, "vinyl": 0.18},
-    "lofi_phonk":    {"lpf": 7000,  "bits": 8,  "room": 0.4, "wet": 0.22, "wobble_depth": 0.30, "compress_ratio": 4.0, "vinyl": 0.22},
-    "vaporwave":     {"lpf": 8000,  "bits": 9,  "room": 0.6, "wet": 0.35, "wobble_depth": 0.28, "compress_ratio": 3.0, "vinyl": 0.14},
-    "ambient":       {"lpf": 12000, "bits": 13, "room": 0.7, "wet": 0.40, "wobble_depth": 0.12, "compress_ratio": 2.0, "vinyl": 0.05},
-    # ── Jazz / soul ───────────────────────────────────────────────────────────
-    "lofi_jazz":     {"lpf": 10000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
-    "jazz_cafe":     {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 2.5, "vinyl": 0.08},
-    "nujabes":       {"lpf": 10000, "bits": 11, "room": 0.45,"wet": 0.25, "wobble_depth": 0.20, "compress_ratio": 2.8, "vinyl": 0.12},
-    "neo_soul":      {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.22, "wobble_depth": 0.16, "compress_ratio": 2.5, "vinyl": 0.09},
-    "bossa_lofi":    {"lpf": 12500, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "lofi_rnb":      {"lpf": 11000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
-    # ── Hip-hop / beat ───────────────────────────────────────────────────────
-    "chillhop":      {"lpf": 9500,  "bits": 11, "room": 0.35,"wet": 0.20, "wobble_depth": 0.18, "compress_ratio": 3.0, "vinyl": 0.12},
-    "hip_hop_lofi":  {"lpf": 9000,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.20, "compress_ratio": 3.5, "vinyl": 0.15},
-    "lo_fi_funk":    {"lpf": 9500,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.22, "compress_ratio": 3.5, "vinyl": 0.14},
-    "chill_beats":   {"lpf": 11000, "bits": 12, "room": 0.45,"wet": 0.25, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.08},
-    "lofi_house":    {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 3.0, "vinyl": 0.09},
-    # ── Cozy / bright ────────────────────────────────────────────────────────
-    "cozy_cafe":     {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "morning_lofi":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.05},
-    "anime_lofi":    {"lpf": 13500, "bits": 14, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.04},
-    "summer_vibes":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.11, "compress_ratio": 2.0, "vinyl": 0.05},
-    "bedroom_pop":   {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.13, "compress_ratio": 2.2, "vinyl": 0.06},
-    "city_pop":      {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "study_lofi":    {"lpf": 11000, "bits": 12, "room": 0.38,"wet": 0.20, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.09},
-    # ── Acoustic / classical ─────────────────────────────────────────────────
-    "piano_lofi":    {"lpf": 14000, "bits": 14, "room": 0.45,"wet": 0.25, "wobble_depth": 0.08, "compress_ratio": 1.8, "vinyl": 0.04},
-    "lofi_classical":{"lpf": 15000, "bits": 15, "room": 0.50,"wet": 0.28, "wobble_depth": 0.06, "compress_ratio": 1.6, "vinyl": 0.03},
-    # ── Drill / trap-adjacent ─────────────────────────────────────────────────
-    "lofi_drill":    {"lpf": 7200,  "bits": 8,  "room": 0.35,"wet": 0.20, "wobble_depth": 0.28, "compress_ratio": 4.2, "vinyl": 0.20},
-    # ── World / ethnic-fusion ─────────────────────────────────────────────────
-    "lofi_world":    {"lpf": 10500, "bits": 12, "room": 0.42,"wet": 0.24, "wobble_depth": 0.16, "compress_ratio": 2.6, "vinyl": 0.09},
-}
+# Loaded from config/genres/*.yaml (see scripts/genre_presets.py).
+_GENRE_PRESETS: dict[str, dict] = genre_presets.build_genre_fx_presets()
 
 _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.12}
 
@@ -84,7 +53,7 @@ _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_
 # dependency (see requirements.txt) — previously imported here but never
 # actually declared, so this path was unreachable even before the files
 # were missing.
-_IR_GENRES = {"lofi_jazz", "jazz_cafe", "piano_lofi", "lofi_classical", "bossa_lofi", "neo_soul", "lofi_world"}
+_IR_GENRES = genre_presets.build_ir_genres()
 _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 
 # Genres that want a kick-triggered sidechain "pump" (see
@@ -93,7 +62,7 @@ _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 # do NOT want this, matching the existing _GSM_GENRES/_IR_GENRES pattern of
 # a small opt-in membership set rather than a per-preset flag on all 22
 # entries in _GENRE_PRESETS.
-_SIDECHAIN_DUCK_GENRES = {"lofi_house", "lo_fi_funk", "hip_hop_lofi", "chillhop", "lofi_drill"}
+_SIDECHAIN_DUCK_GENRES = genre_presets.build_sidechain_duck_genres()
 
 # Per-track mastering LUFS target (see _apply_lufs_mastering). Deliberately
 # set BELOW assemble_video.py's final video-level loudnorm target of -14

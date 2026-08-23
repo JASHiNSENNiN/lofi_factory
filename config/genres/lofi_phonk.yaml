@@ -1,0 +1,29 @@
+key: lofi_phonk
+family: dark_moody
+composition:
+  piano_program: GM_RHODES
+  melody_program: GM_ORGAN_ROCK
+  countermelody_program: GM_CELLO
+  scales: [phryg, pent, natural_minor]
+  # 16: new pattern Q "Phonk hat-roll cell" (research/theory/rhythm-groove.md
+  # Task 5) -- straight-8th hat base + roll burst on the back-quarter of the
+  # bar + cowbell-style RIM accents, the genre-defining texture this
+  # subgenre's pool was previously missing entirely.
+  drum_pattern_indices: [0, 2, 5, 9, 11, 14, 16]
+  # research/subgenres/lofi_phonk.md: real lofi-phonk sits at its own 75-90
+  # BPM tempo tier (distinct from drift-phonk's 140-160 and OG/Memphis
+  # phonk's 130-145) -- old (65,78) undershot even that. Raised to the
+  # research file's recommended [75, 90], which stays within the 55-105 lofi
+  # tempo test envelope so no test change is needed here.
+  bpm_range: [75, 90]
+  energy: null
+  progression_indices: [14, 15, 3, 7, 41, 42, 43]
+swing_range: [0.62, 0.73]
+cozy_bias: false
+drum_kit_programs: [24, 25]
+drum_sampler_pattern: 808_trap
+mix: {lpf_hz: 7000, bitcrush_bits: 8, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.3,
+  compress_ratio: 4.0, vinyl_crackle: 0.22, use_ir_reverb: false, sidechain_duck: false}
+# research/theory/arrangement-structure.md #6: lofi_phonk is buildup/release-
+# driven, not wallpaper music, and was silently falling back to 'standard'.
+song_form: build

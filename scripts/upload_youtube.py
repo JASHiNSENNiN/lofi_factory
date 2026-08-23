@@ -169,8 +169,11 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None)
 
     print("  Uploading (this may take a while)...")
     import time
+    from googleapiclient.errors import HttpError
+
     response = None
     retries  = 0
+    tags_fallback_used = False
     while response is None:
         try:
             status, response = request.next_chunk()
@@ -180,6 +183,34 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None)
                 mb  = int(status.resumable_progress / 1024 / 1024)
                 print(f"  Progress: {pct}%  ({mb} MB)", end="\r")
         except Exception as e:
+            # A 4xx here (bad request/rejected field/permission) means the
+            # request itself is invalid -- identical retries can only ever
+            # fail identically, so blindly retrying it 5x with backoff (as
+            # this loop used to) just burns ~1 minute guaranteed-failing
+            # before giving up. Confirmed 2026-08-13: an invalidTags 400
+            # did exactly this. Reserve the retry/backoff loop below for
+            # genuinely transient errors (network blips, 5xx, timeouts).
+            status_code = getattr(getattr(e, "resp", None), "status", None)
+            if isinstance(e, HttpError) and status_code is not None and 400 <= status_code < 500:
+                body_text = str(getattr(e, "content", b"")) + str(e)
+                if not tags_fallback_used and "invalidTags" in body_text and body.get("snippet", {}).get("tags"):
+                    # One-shot fallback: this shouldn't happen anymore now that
+                    # generate_seo.py caps individual tag length before it gets
+                    # here, but if some other tag source ever slips one past
+                    # that, drop tags entirely (title/description still carry
+                    # the SEO value) and retry once rather than losing the
+                    # whole finished render over a metadata field.
+                    print(f"\n  Upload error (invalidTags) — retrying once with tags "
+                          f"dropped (was {len(body['snippet']['tags'])} tags)...")
+                    body["snippet"]["tags"] = []
+                    tags_fallback_used = True
+                    request = youtube.videos().insert(
+                        part="snippet,status", body=body, media_body=media)
+                    continue
+                raise RuntimeError(
+                    f"Upload rejected ({status_code}): {e} — not retrying, "
+                    f"this is a permanent request error, not a transient one."
+                ) from e
             retries += 1
             if retries > 5:
                 raise RuntimeError(f"Upload failed after 5 retries: {e}") from e
@@ -302,6 +333,14 @@ def main():
         "concept":          seo.get("concept", ""),
         "seo_ref":          seo.get("ref_id", ""),
         "video_file":       os.path.basename(video_path),
+        # Composition-selection feedback (which sub-genre/BPM/generation
+        # engine got used) — see scripts/analytics.py's sub_genre_weights()/
+        # bpm_bucket_weights()/engine_weights(). Defaults keep this log-append
+        # from crashing on an older-format `seo` dict that predates these
+        # fields (e.g. a seo_*.json file generated before this feature).
+        "sub_genre":        seo.get("sub_genre", ""),
+        "bpm":              seo.get("bpm"),
+        "music_engine":     seo.get("music_engine") or "v1",
         "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
     })
     with open(log_path, "w") as f:

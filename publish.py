@@ -50,6 +50,7 @@ DEPENDENCIES
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -259,6 +260,112 @@ def cmd_lofi_inator(args):
 
 # ── AUTO (generate + upload) ────────────────────────────────────────────────
 
+# Unattended `auto` runs (systemd timer, no one present to watch/cancel) size
+# their own duration dynamically instead of drawing from a fixed pool.
+# History: first a hardcoded [1,2,3 hour] cap (2026-08-16, after an
+# unconstrained pick drew "8 hours" and wedged the box for 23+ hours), then
+# tightened to [45min,1hour] once a real run showed this box's encode only
+# manages ~0.57x realtime -- but that number was itself just a guess baked
+# into a constant, no different in kind from the mistake it was fixing.
+# Confirmed 2026-08-17 the box can flip between VAAPI/software paths and
+# real speed drifts with filter-chain complexity/load, so ANY hardcoded
+# speed constant goes stale. Now fully dynamic: scripts/assemble_video.py
+# measures and persists the real encode speed from every run's own ffmpeg
+# -stats output (assets/.encode_speed_history.json), and _pick_auto_duration
+# below reads that plus the *live* systemd TimeoutStartSec to compute
+# whatever the biggest duration is that this box can actually finish right
+# now -- self-corrects automatically if the box gets faster/slower/busier,
+# no more manual re-tuning of a constant every time reality changes.
+AUTO_FALLBACK_DURATION = "30 min"   # forced tier after repeated failures, below
+AUTO_FALLBACK_AFTER_FAILURES = 2
+# Reserve for everything in a run that ISN'T the final encode: music/visual/
+# SEO/thumbnail generation (~25-30min observed) plus upload time plus a
+# margin of error. Deliberately generous -- better to undershoot the
+# possible duration than blow the timeout again.
+_AUTO_NON_ENCODE_OVERHEAD_SECS = 2400
+_AUTO_SAFETY_FACTOR = 0.75   # extra margin below the raw computed budget
+
+_AUTO_STATE_FILE = os.path.join(ROOT, "assets", ".auto_run_state.json")
+
+
+def _load_auto_state() -> dict:
+    try:
+        with open(_AUTO_STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"consecutive_failures": 0}
+
+
+def _save_auto_state(state: dict) -> None:
+    os.makedirs(os.path.dirname(_AUTO_STATE_FILE), exist_ok=True)
+    with open(_AUTO_STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
+def _record_auto_result(success: bool) -> None:
+    state = _load_auto_state()
+    state["consecutive_failures"] = 0 if success else state.get("consecutive_failures", 0) + 1
+    _save_auto_state(state)
+
+
+def _live_timeout_start_secs(default: int = 14400) -> int:
+    """The *actual currently-configured* TimeoutStartSec for lofi-auto.service,
+    read live from systemd rather than assumed -- so this stays correct even
+    if the unit file's timeout is ever re-tuned without touching this file.
+    Falls back to `default` if systemd can't be queried (e.g. running outside
+    the deploy, or in a test)."""
+    try:
+        out = subprocess.run(
+            ["systemctl", "--user", "show", "lofi-auto.service", "-p", "TimeoutStartUSec"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        # Format is "TimeoutStartUSec=4h" / "...=1min 30s" / "...=infinity" etc.
+        val = out.split("=", 1)[1] if "=" in out else ""
+        if not val or val == "infinity":
+            return default
+        secs = 0
+        for num, unit in re.findall(r"(\d+)(h|min|s|ms|us)", val):
+            secs += int(num) * {"h": 3600, "min": 60, "s": 1, "ms": 0, "us": 0}[unit]
+        return secs or default
+    except Exception:
+        return default
+
+
+def _dynamic_max_safe_duration() -> str:
+    """The biggest duration tier this box can actually finish encoding
+    within the live systemd timeout, given its own real recently-measured
+    encode speed -- see the module comment above AUTO_FALLBACK_DURATION."""
+    from scripts.assemble_video import DURATION_MAP, estimated_encode_speed, _vaapi_available
+    speed = estimated_encode_speed(used_vaapi=_vaapi_available())
+    budget_secs = (_live_timeout_start_secs() - _AUTO_NON_ENCODE_OVERHEAD_SECS) * _AUTO_SAFETY_FACTOR
+    max_safe_target_secs = max(budget_secs, 0) * speed
+    tiers = sorted(
+        ((label, secs) for label, secs in DURATION_MAP.items()
+         if label not in ("single", "all night")),
+        key=lambda kv: kv[1],
+    )
+    fitting = [label for label, secs in tiers if secs <= max_safe_target_secs]
+    chosen = fitting[-1] if fitting else tiers[0][0]  # smallest tier as last resort
+    print(f"[AUTO] Dynamic duration: measured speed {speed:.2f}x, "
+          f"safe budget {max_safe_target_secs / 60:.0f}min → picked {chosen!r}")
+    return chosen
+
+
+def _pick_auto_duration() -> str:
+    """Duration for an unattended `auto` run: the biggest tier this box's
+    own recently-measured encode speed says it can actually finish within
+    the live timeout, or the single lightest tier after
+    AUTO_FALLBACK_AFTER_FAILURES consecutive auto-run failures -- a real
+    degrade-gracefully fallback rather than repeatedly re-computing a
+    budget that's already been failing for some other reason."""
+    state = _load_auto_state()
+    if state.get("consecutive_failures", 0) >= AUTO_FALLBACK_AFTER_FAILURES:
+        print(f"[AUTO] {state['consecutive_failures']} consecutive failures — "
+              f"falling back to {AUTO_FALLBACK_DURATION} until a run succeeds.")
+        return AUTO_FALLBACK_DURATION
+    return _dynamic_max_safe_duration()
+
+
 def _run_auto_once(args) -> bool:
     """Run the full generation pipeline then upload the result once. Returns True on success."""
     import glob as _glob
@@ -272,16 +379,25 @@ def _run_auto_once(args) -> bool:
     before_thumbs = set(_glob.glob(os.path.join(assets_dir, "thumb_*.jpg")))
 
     run_script = os.path.join(ROOT, "run.py")
-    cmd = [sys.executable, run_script, "--skip-upload"]
+    duration = getattr(args, "duration", None) or _pick_auto_duration()
+    cmd = [sys.executable, run_script, "--skip-upload", "--duration", duration]
     if getattr(args, "theme", None):
         cmd += ["--theme", args.theme]
-    if getattr(args, "duration", None):
-        cmd += ["--duration", args.duration]
+    if getattr(args, "sub_genre", None):
+        cmd += ["--sub-genre", args.sub_genre]
+    if getattr(args, "mood", None):
+        cmd += ["--mood", args.mood]
+    music_v2 = getattr(args, "music_v2", None)
+    if music_v2 is True:
+        cmd += ["--music-v2"]
+    elif music_v2 is False:
+        cmd += ["--no-music-v2"]
 
     print("[AUTO] Running generation pipeline (full — new music, visual, SEO, thumbnail)...")
     result = subprocess.run(cmd)
     if result.returncode != 0:
         print("[AUTO] Generation failed — aborting upload")
+        _record_auto_result(success=False)
         if not getattr(args, "loop", False):
             sys.exit(result.returncode)
         return False
@@ -293,6 +409,7 @@ def _run_auto_once(args) -> bool:
 
     if not new_videos:
         print("[AUTO] No new video was created — aborting to avoid re-uploading old content.")
+        _record_auto_result(success=False)
         if not getattr(args, "loop", False):
             sys.exit(1)
         return False
@@ -312,7 +429,12 @@ def _run_auto_once(args) -> bool:
         schedule_at=getattr(args, "schedule_at", None),
         force=False,
     )
-    cmd_upload(upload_args)
+    try:
+        cmd_upload(upload_args)
+    except Exception:
+        _record_auto_result(success=False)
+        raise
+    _record_auto_result(success=True)
     return True
 
 
@@ -738,6 +860,12 @@ def cmd_upload(args):
         "concept":          seo.get("concept", ""),
         "seo_ref":          seo.get("ref_id", ""),
         "video_file":       os.path.basename(video_path),
+        # Composition-selection feedback — see scripts/analytics.py's
+        # sub_genre_weights()/bpm_bucket_weights()/engine_weights(). Defaults
+        # keep this from crashing on an older-format seo dict.
+        "sub_genre":        seo.get("sub_genre", ""),
+        "bpm":              seo.get("bpm"),
+        "music_engine":     seo.get("music_engine") or "v1",
         # Which thumbnail actually got uploaded -- needed so
         # analytics.swap_low_ctr_thumbnails() can find the matching
         # thumb_*_alt.jpg by exact name instead of guessing.
@@ -1469,6 +1597,19 @@ def main():
     p_auto.add_argument("--interval", default="6h",
                         help="Sleep between loop iterations, e.g. '90m', '6h', '2d' (default: 6h). "
                              "Only used with --loop")
+    # Composition overrides, forwarded straight through to the run.py subprocess
+    # call in _run_auto_once() -- kept in sync with run.py's own --sub-genre/
+    # --mood/--music-v2 flags so the webui's "Render + Upload" path (which
+    # shells out to `publish.py auto`) can expose the same controls as
+    # "Render only" (which shells out to run.py directly).
+    p_auto.add_argument("--sub-genre",   dest="sub_genre", default=None,
+                        help="Force a specific sub-genre (default: auto). See config/genres/.")
+    p_auto.add_argument("--mood",        default=None,
+                        help="Free-text mood/concept phrase override for the music generator")
+    p_auto.add_argument("--music-v2",    dest="music_v2", action=argparse.BooleanOptionalAction,
+                        default=None,
+                        help="Force v2 (beta) or v1 (--no-music-v2) music generator; "
+                             "omit to let the engagement-analytics bandit choose")
 
     # ── upload ───────────────────────────────────────────────────
     p_up = sub.add_parser("upload", help="Upload video as a regular YouTube video")
