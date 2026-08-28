@@ -16,4 +16,4 @@ drum_kit_programs: [32, 40]
 drum_sampler_pattern: jazz
 mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.4, reverb_wet: 0.2, tape_wobble_depth: 0.15,
   compress_ratio: 2.5, vinyl_crackle: 0.08, use_ir_reverb: true, sidechain_duck: false}
-song_form: null
+song_form: aaba

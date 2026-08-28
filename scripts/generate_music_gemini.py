@@ -18,7 +18,8 @@ Math: 14 keys × 51 progressions × BPM/swing ranges per sub-genre
       = effectively infinite unique tracks
 """
 
-import os, sys, time, random, json, subprocess, tempfile
+import os, sys, time, random, json, subprocess, tempfile, math
+from itertools import product as _iproduct
 
 try:
     from dotenv import load_dotenv
@@ -91,9 +92,15 @@ CRASH = 49
 # This alone guarantees no two bars sound identical.
 
 VOICING_OPTIONS = {
-    'Am7':   [[57,60,64,67], [60,64,67,69], [52,57,64,67], [57,60,64,67,71], [64,67,69,72]],
+    # 'q' suffix = a quartal (4ths-stacked) voicing appended as an alternate
+    # choice for this existing chord, not a new chord symbol -- research/
+    # theory/harmony-voicings.md's quartal-harmony finding: minor chords
+    # voice quartally most naturally, idiomatic McCoy Tyner/modal-jazz and
+    # neo-soul texture the repo's nujabes/neo-soul-flavored progressions
+    # already lean toward.
+    'Am7':   [[57,60,64,67], [60,64,67,69], [52,57,64,67], [57,60,64,67,71], [64,67,69,72], [57,62,67,72]],
     'Am9':   [[57,60,64,67,71], [60,64,67,71], [52,60,64,71], [57,64,69,71]],
-    'Dm7':   [[50,53,57,60], [53,57,60,62], [50,53,57,60,64], [45,50,57,60], [53,57,62,65]],
+    'Dm7':   [[50,53,57,60], [53,57,60,62], [50,53,57,60,64], [45,50,57,60], [53,57,62,65], [50,55,60,65]],
     'Dm9':   [[50,53,57,60,64], [53,57,60,64], [50,57,60,64], [53,60,62,65]],
     'Em7':   [[52,55,59,62], [55,59,62,64], [52,59,62,67], [55,59,64,67]],
     'Gm7':   [[55,58,62,65], [58,62,65,67], [55,62,65,70], [50,55,62,65], [58,65,67,70]],
@@ -150,6 +157,25 @@ VOICING_OPTIONS = {
     # Bb7 previously served double duty as both a tritone-sub target *and*
     # Eb's diatonic V7 -- Db7 disambiguates true tritone-sub usage.
     'Db7':    [[61,65,68,71], [65,68,71,73], [61,68,71,77], [65,71,73,77]],
+
+    # Extended dominant/minor-11th/6th-chord vocabulary (research/theory/
+    # harmony-voicings.md "Concrete additions" table -- the remaining gaps
+    # after the modal-interchange/minor-ii-V-i/tritone-sub work above).
+    'G13':    [[55,59,62,64,69], [59,62,64,69,71]],   # dominant 13, cheap _CHORD_EXTEND_UP tension option
+    'G7alt':  [[55,59,63,66], [59,63,66,68]],          # b9/#9/b5/b7 compressed altered-dominant voicing
+    'Am11':   [[57,60,64,67,72], [60,64,67,72,74]],    # minor 11ths are consonant, no #11 needed
+    'Dm11':   [[50,53,57,60,65]],
+    'Am6':    [[57,60,64,66], [60,64,66,69]],          # 6th-chord color: softer than maj7/m7, common Rhodes voicing
+    'Cmaj6':  [[60,64,67,69]],
+
+    # Sparse modal drone chords (research/subgenres/lofi_world.md, Phase 11
+    # step 1): world-fusion harmony sources are explicit that chords should
+    # stay minimal/modal -- a held drone or simple sus/add9 vamp rather than
+    # jazz ii-V-I turnarounds, to preserve raga/maqam melodic color instead
+    # of competing with it. Previously absent -- every existing progression
+    # in this table is built from jazz 7th/9th-family chords.
+    'Amadd9': [[57,60,64,71]],   # A minor triad + 9th, no 7th -- open, modal, not jazz-functional
+    'Dmsus4': [[50,55,57,62]],   # D + sus4 (no 3rd at all) -- ambiguous, drone-like
 }
 
 # Bass root notes (octave 2)
@@ -169,6 +195,11 @@ BASS_ROOTS = {
     'C#m7b5':49,'F#7b9':42,'Bm7':47,'Fm7b5':41,'Bb7b9':46,'Ebm7':51,
     'Am7b5':45,'D7b9':38,
     'Db7':49,
+    # Extended dominant/minor-11th/6th-chord vocabulary (see VOICING_OPTIONS
+    # comment above) -- same root pitch class as the existing 7th/9th chord
+    # on that root (G13/G7alt share G7's root 43; Am11 shares Am7's 45; etc).
+    'G13':43,'G7alt':43,'Am11':45,'Dm11':38,'Am6':45,'Cmaj6':48,
+    'Amadd9':45,'Dmsus4':38,
 }
 
 # Guide tone offsets from root: (3rd_semitones, 7th_semitones)
@@ -194,6 +225,18 @@ _GUIDE_TONES = {
     'Fm7b5':  (3, 10), 'Bb7b9': (4, 10),
     'Ebm7':   (3, 10), 'Am7b5': (3, 10), 'D7b9': (4, 10),
     'Db7':    (4, 10),
+    # Extended dominant/minor-11th/6th-chord vocabulary. G13/G7alt/Am11/Dm11
+    # keep the standard (3rd, 7th) shape -- they're still 7th-family chords
+    # with extensions layered on top. Am6/Cmaj6 have no 7th at all, so the
+    # second slot holds the 6th's semitone offset (9) in that position
+    # instead, per the research doc's "(3,9)-style (6th not 7th)" note.
+    'G13':    (4, 10), 'G7alt': (4, 10),
+    'Am11':   (3, 10), 'Dm11':  (3, 10),
+    'Am6':    (3, 9),  'Cmaj6': (4, 9),
+    # Sus/add9 drone chords -- no real "3rd defines quality" for a sus
+    # chord, but a (interval, 9th) tuple keeps every VOICING_OPTIONS key
+    # consistently present in this table.
+    'Amadd9': (3, 14), 'Dmsus4': (5, 14),
 }
 
 # Tension-driven chord-extension escalation (build_chords()'s `tension` param):
@@ -289,6 +332,14 @@ PROGRESSIONS = [
     [('Fm7b5',1),('Bb7b9',1),('Ebm7',2)],                   # 56 Ebm minor ii-V-i
     [('Cmaj9',2),('Ebmaj7',1),('Fm7',1),('Cmaj9',2),('Bbmaj7',2)],  # 57 C major: I-bIII-iv-I-bVII (research example, verbatim)
     [('Am7b5',1),('D7b9',1),('Gm7',2)],                     # 58 Gm minor ii-V-i (second sibling, research example)
+
+    # ── Sparse modal drone (research/subgenres/lofi_world.md, Phase 11) ──
+    # Long-held sus/add9 vamp instead of a jazz turnaround -- lets a
+    # phrygian-dominant/dorian melodic line (sitar/koto) carry the
+    # expressive weight instead of chord movement, per that doc's harmony
+    # guidance. Long durations (4+4 bars) are deliberate -- a drone holds,
+    # it doesn't cycle through changes.
+    [('Amadd9',4),('Dmsus4',4)],                            # 59 sparse modal drone vamp
 ]
 
 # Real tonal center of each PROGRESSIONS entry (functional-harmony read: which
@@ -309,6 +360,7 @@ PROGRESSION_KEY = [
     'C',  'Cm', 'Bb', 'Am', 'G',  'G',  'C',  'Bb', 'C',  'C',    # 40-49
     'Eb',                                                        # 50
     'A',  'D',  'Em', 'F#m', 'Bm', 'Ebm', 'C', 'Gm',             # 51-58
+    'Am',                                                        # 59 (sparse modal drone -- Amadd9-centered)
 ]
 assert len(PROGRESSION_KEY) == len(PROGRESSIONS)
 
@@ -475,6 +527,11 @@ _EUCL_HATS = {
     'cinquillo': (_bjorklund(5,  8) * 2),   # dense Cuban feel
     'bossa16':   (_bjorklund(3, 16)),        # sparse bossa
     'clave':     (_bjorklund(5, 16)),        # clave approximation
+    # Dembow (reggaeton) -- research/theory/rhythm-groove.md: tresillo-
+    # family pattern, kick-equivalent onsets on steps 0/6, snare-equivalent
+    # on steps 2/8 in a 16-step bar. A natural fit for lofi_world's existing
+    # elevated swing range ("organic percussive feel, not stiff-straight").
+    'dembow':    [1,0,1,0,0,0,1,0, 1,0,0,0,0,0,0,0],
 }
 
 _DRUM_ENERGY_TO_FLOAT = {'low': 0.25, 'medium': 0.55, 'high': 0.85}
@@ -563,7 +620,14 @@ def generate_euclidean_drum_pattern(energy: float, complexity: float = 0.5,
 #         good for hi-hat texture
 #   110 — proven Turing-complete; complex but structured, mid-density
 #   184 — traffic/particle-hopping rule; produces steady, roughly-even flow
-_CA_RULE_POOL = (30, 90, 110, 184)
+#   126 — chaotic, high-density, related to rule 30 by left-right reflection
+#         (research/theory/rhythm-groove.md: added for hat texture
+#         specifically, evaluated for whether its growth curve clusters
+#         into burst-like density spikes rather than even density -- a
+#         phonk-roll-like shape. Genuinely tuning this by ear is future
+#         work; included as a real additional option now, not yet
+#         preferentially weighted over the other 4.)
+_CA_RULE_POOL = (30, 90, 110, 184, 126)
 
 
 def _ca_step(rule: int, row: list[int]) -> list[int]:
@@ -666,6 +730,52 @@ def generate_ca_drum_pattern(energy: float, complexity: float = 0.5,
         CHH:   _ioi_velocities(hat_row,   38, 68, n),
         OHH:   [0] * n,
         RIM:   _ioi_velocities(rim_row,   24, 40, n),
+    }
+
+
+def generate_polyrhythm_pattern(energy: float = 0.55, ratio: tuple[int, int] = (3, 4),
+                                 seed: int | None = None) -> dict:
+    """
+    A THIRD procedural rhythm-pattern source, alongside (not replacing) the
+    Euclidean and cellular-automaton generators above -- same
+    {DRUM_NOTE: [16 velocities]} output shape, so it's an equally valid
+    drop-in for params['drum_pattern_a_generated']/['drum_pattern_b_generated'].
+
+    Implements a genuine 3-against-4 cross-rhythm (not a time-signature
+    change -- see the module's odd-meter discussion elsewhere): KICK/SNARE
+    stay on the standard 4-pulse quarter-note grid (steps 0/4/8/12), while
+    CHH follows an INDEPENDENT `ratio[0]`-pulse cycle spaced evenly across
+    the same 16-step bar via modulo arithmetic -- two simultaneous cyclic
+    pulse trains at a 3:4 period ratio, the standard definition of a
+    cross-rhythm/hemiola (research/theory/rhythm-groove.md: "not currently
+    represented and is a distinct technique from what's implemented" --
+    the existing _EUCL_HATS presets fold everything into one 16-step
+    additive grouping instead of two independently-cycling pulse trains).
+    """
+    n = 16
+    rng = random.Random(seed) if seed is not None else random
+    pulses, base = ratio
+
+    kick_row = [0] * n
+    for i in range(base):
+        kick_row[round(i * n / base) % n] = 1
+
+    snare_row = [0] * n
+    snare_row[n // 2] = 1   # backbeat anchor, independent of either pulse train
+
+    # The cross-rhythm layer: `pulses` evenly-spaced onsets across the same
+    # 16-step bar as the 4-pulse kick above -- lands off the quarter-note
+    # grid by construction whenever pulses/base isn't itself a multiple of 4.
+    hat_row = [0] * n
+    for i in range(pulses):
+        hat_row[round(i * n / pulses) % n] = 1
+
+    return {
+        KICK:  _ioi_velocities(kick_row,  int(60 + energy * 30), int(82 + energy * 13), n),
+        SNARE: _ioi_velocities(snare_row, 65, 88, n),
+        CHH:   _ioi_velocities(hat_row,   42, 66, n),
+        OHH:   [0] * n,
+        RIM:   [0] * n,
     }
 
 
@@ -1108,6 +1218,108 @@ def vary_motif(motif, scale_notes, variation):
     return [scale_notes[max(0, min(len(scale_notes)-1, _idx(n)+shift))] for n in motif]
 
 
+# ── L-system motif generator ────────────────────────────────────────────────
+# Lindenmayer-system generative grammar (Prusinkiewicz & Lindenmayer, "The
+# Algorithmic Beauty of Plants") applied to melody instead of plant geometry:
+# an axiom string is iteratively expanded via per-symbol production rules,
+# then the resulting symbol string is interpreted as a sequence of melodic
+# operations on a scale-degree cursor. Ported from generate_music_v2.py
+# (Aug 13 "Stage 3"), which had this working and tested but only in the beta
+# engine -- v1 gets it here as an ADDITIONAL probabilistic source alongside
+# generate_motif() (see its call sites), not a replacement.
+
+# Melodic alphabet:
+#   U - step up one scale degree      D - step down one scale degree
+#   S - repeat (sustain) current note T - transpose (toggle +1 octave)
+#   [ - push (save) cursor state      ] - pop (restore) cursor state —
+#       classic Lindenmayer bracketed-branching notation, giving the
+#       melody a "return to a home note" character instead of a pure
+#       one-way random walk.
+_LSYSTEM_PRESETS: list[tuple[str, dict[str, str]]] = [
+    ('U', {'U': 'UDU', 'D': 'DUD'}),            # symmetric zigzag fractal
+    ('U', {'U': 'U[D]U', 'D': 'D[U]D'}),        # branching zigzag, returns to branch point
+    ('US', {'U': 'US', 'D': 'DS', 'S': 'US'}),  # terraced ascending steps with sustains
+    ('U', {'U': 'UUD', 'D': 'DDU'}),            # asymmetric climb
+    ('T', {'T': 'UTD', 'U': 'U', 'D': 'D'}),    # octave-anchored motif
+]
+
+
+def _lsystem_expand(axiom: str, rules: dict[str, str], iterations: int, max_len: int = 64) -> str:
+    """
+    Iteratively expand an L-system axiom via per-symbol production rules.
+    Bounded: stops expanding (keeping the last valid generation) once the
+    NEXT expansion would exceed `max_len`, so output length stays musically
+    bounded rather than growing exponentially the way raw L-system expansion
+    normally does (that unbounded growth is the point for plant geometry,
+    but a melodic phrase needs a sane, bounded length).
+    """
+    s = axiom
+    for _ in range(max(0, iterations)):
+        nxt = ''.join(rules.get(ch, ch) for ch in s)
+        if len(nxt) > max_len:
+            break
+        s = nxt
+    return s
+
+
+def _lsystem_to_pitches(symbols: str, scale_notes: list[int], start_idx: int) -> list[int]:
+    """Interpret an L-system symbol string as melodic operations on a
+    scale-degree cursor (see the alphabet comment above). Non-melodic
+    symbols other than U/D/S/T/[/] are ignored. Emits one pitch per U/D/S/T
+    symbol encountered (push/pop only affect state, they emit nothing)."""
+    n = len(scale_notes)
+    if n == 0:
+        return []
+    idx = max(0, min(n - 1, start_idx))
+    octave_offset = 0
+    stack: list[tuple[int, int]] = []
+    pitches: list[int] = []
+    for ch in symbols:
+        if ch == 'U':
+            idx = min(n - 1, idx + 1)
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == 'D':
+            idx = max(0, idx - 1)
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == 'S':
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == 'T':
+            octave_offset = 12 if octave_offset == 0 else 0   # toggle; avoids runaway octave drift
+            pitches.append(scale_notes[idx] + octave_offset)
+        elif ch == '[':
+            stack.append((idx, octave_offset))
+        elif ch == ']':
+            if stack:
+                idx, octave_offset = stack.pop()
+    return pitches
+
+
+def generate_lsystem_motif(scale_notes: list[int], length: int = 8,
+                            seed: int | None = None) -> list[int]:
+    """
+    Generate a melodic motif via L-system string expansion (see module
+    comment above). Picks one of a small pool of axiom+production-rule
+    presets, expands it a bounded number of iterations, then walks the
+    resulting symbol string as scale-degree operations. Deterministic given
+    `seed` (uses a local Random instance so it never disturbs the pipeline's
+    global random stream when called with an explicit seed).
+
+    Returns a plain pitch list -- matches generate_motif()'s convention
+    (v1 doesn't use v2's Motif wrapper class anywhere).
+    """
+    if not scale_notes:
+        return []
+    rng = random.Random(seed) if seed is not None else random
+    axiom, rules = rng.choice(_LSYSTEM_PRESETS)
+    iterations = rng.choice([2, 3, 3, 4])
+    symbols = _lsystem_expand(axiom, rules, iterations, max_len=max(8, length * 4))
+    start_idx = rng.randrange(len(scale_notes))
+    pitches = _lsystem_to_pitches(symbols, scale_notes, start_idx)
+    if not pitches:
+        pitches = [scale_notes[start_idx]]
+    return pitches[:max(1, length)]
+
+
 # ─── UTILITY ──────────────────────────────────────────────────────────────────
 
 def grid_tick(grid_16th, swing):
@@ -1364,9 +1576,258 @@ def _chord_name_at_bar(progression, bar, prog_bars):
     return None
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+#  WHOLE-PROGRESSION VOICE LEADING (GA / simulated annealing, species
+#  counterpoint) -- ported from generate_music_v2.py's Stage-3 work so v1
+#  (the primary/default-weighted engine) gets the same real optimizer v2 has
+#  always had, instead of only the greedy nearest-top-note heuristic below.
+#  Pure functions, no v2-specific state -- VOICING_OPTIONS is defined right
+#  here in v1; v2 only ever imported it from this module.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_DISSONANT_INTERVAL_CLASSES = {1, 2, 6}
+
+
+def _voicing_transition_cost(prev_voicing: list[int], shifted_voicing: list[int]) -> float:
+    """
+    Species-counterpoint-inspired cost of moving from prev_voicing to
+    shifted_voicing (shifted_voicing already has any octave shifts applied).
+    Hand-rolled classical voice-leading rules (no neural net, no LLM), all
+    scored PER VOICE PAIR independently (every pair of voices is checked on
+    its own — not folded into one aggregate adjacent-pairs-only penalty):
+      - total semitone displacement from prev_voicing
+      - a parallel-fifths/octaves penalty for EVERY pair of voices (not just
+        adjacent ones) moving in the same direction and landing on the same
+        perfect 5th/octave interval class both before and after — the
+        classic part-writing error, same rule Palestrina-style species
+        counterpoint forbids between any two voices, not only neighbors
+      - a small per-pair bonus for contrary motion between voices
+      - a per-pair dissonance/suspension-resolution check: a dissonant
+        interval (m2/M2/tritone) present between a voice pair in
+        prev_voicing is rewarded if it resolves to a consonant interval by
+        STEP (each voice moves <=2 semitones) in shifted_voicing — the
+        standard "suspension resolves down/up by step" rule — and penalized
+        if it is left hanging (still dissonant) or "resolved" by a leap
+      - a spacing penalty for inner-voice gaps outside a natural
+        close-position range (~3-12 semitones)
+    Shared by _voice_lead_v2 (greedy, per-chord) and _voice_lead_progression_ga
+    (whole-progression optimizer) so both apply identical rules — this
+    function is a drop-in replacement, no restructuring needed on either
+    caller's side.
+    """
+    n = min(len(shifted_voicing), len(prev_voicing))
+    if n == 0:
+        return 0.0
+    displacement = sum(abs(shifted_voicing[i] - prev_voicing[i]) for i in range(n))
+    moves = [shifted_voicing[i] - prev_voicing[i] for i in range(n)]
+
+    parallel_penalty = 0.0
+    contrary_bonus = 0.0
+    dissonance_cost = 0.0
+
+    for a in range(n):
+        for b in range(a + 1, n):
+            move_a, move_b = moves[a], moves[b]
+            interval_prev = abs(prev_voicing[b] - prev_voicing[a]) % 12
+            interval_now = abs(shifted_voicing[b] - shifted_voicing[a]) % 12
+
+            if move_a != 0 and move_b != 0:
+                same_direction = (move_a > 0) == (move_b > 0)
+                if same_direction and interval_prev in (0, 7) and interval_now in (0, 7):
+                    parallel_penalty += 8.0
+                if not same_direction:
+                    contrary_bonus += 1.0
+
+            if interval_prev in _DISSONANT_INTERVAL_CLASSES:
+                resolved_by_step = (
+                    interval_now not in _DISSONANT_INTERVAL_CLASSES
+                    and abs(move_a) <= 2 and abs(move_b) <= 2
+                )
+                dissonance_cost += -1.5 if resolved_by_step else 3.0
+
+    spacing_penalty = 0.0
+    for a in range(len(shifted_voicing) - 1):
+        gap = shifted_voicing[a + 1] - shifted_voicing[a]
+        if gap < 3:
+            spacing_penalty += (3 - gap) * 1.5
+        elif gap > 12:
+            spacing_penalty += (gap - 12) * 1.0
+
+    return displacement + parallel_penalty + spacing_penalty + dissonance_cost - contrary_bonus
+
+
+def _enumerate_shift_options(voicing: list[int]) -> list[list[int]]:
+    """All valid (ascending-order-preserving) ±12-semitone octave-shift
+    variants of a voicing."""
+    n = len(voicing)
+    out = []
+    for shifts in _iproduct([-12, 0, 12], repeat=n):
+        shifted = [voicing[i] + shifts[i] for i in range(n)]
+        if shifted == sorted(shifted):
+            out.append(shifted)
+    return out or [voicing]
+
+
+def _build_voicing_gene_pools(chord_names: list[str]) -> list[list[list[int]]]:
+    """Per-chord list of candidate voicings (every octave-shift variant of
+    every curated VOICING_OPTIONS entry for that chord)."""
+    gene_pools: list[list[list[int]]] = []
+    for chord_name in chord_names:
+        options = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])
+        variants: list[list[int]] = []
+        for base in options:
+            variants.extend(_enumerate_shift_options(base))
+        gene_pools.append(variants or [options[0]])
+    return gene_pools
+
+
+def _chromosome_cost(gene_pools: list[list[list[int]]], chromosome: list[int]) -> float:
+    """Total _voicing_transition_cost across an entire chromosome's chord sequence."""
+    total = 0.0
+    prev = None
+    for i, gene_idx in enumerate(chromosome):
+        voicing = gene_pools[i][gene_idx]
+        if prev is not None:
+            total += _voicing_transition_cost(prev, voicing)
+        prev = voicing
+    return total
+
+
+def _voice_lead_progression_ga(progression: list[tuple[str, int]],
+                                pop_size: int = 24, generations: int = 40) -> list[list[int]]:
+    """
+    Evolve voicing+octave-shift choices for an ENTIRE progression
+    simultaneously (unlike a greedy per-chord choice), via a genetic
+    algorithm: tournament selection, single-point crossover, mutation,
+    elitism. Solves the real limitation of greedy selection, which can get
+    locally stuck (like greedy TSP) — global fitness considers every
+    transition in the progression at once. Hand-rolled GA, no neural net, no
+    LLM. Returns one shifted voicing (list[int]) per chord in `progression`,
+    in order.
+    """
+    chord_names = [c for c, _ in progression]
+    gene_pools = _build_voicing_gene_pools(chord_names)
+
+    def _random_chromosome() -> list[int]:
+        return [random.randrange(len(pool)) for pool in gene_pools]
+
+    def _fitness(chromosome: list[int]) -> float:
+        return _chromosome_cost(gene_pools, chromosome)
+
+    population = [_random_chromosome() for _ in range(pop_size)]
+    best = min(population, key=_fitness)
+    best_fit = _fitness(best)
+
+    def _tournament(k: int = 3) -> list[int]:
+        contenders = random.sample(population, min(k, len(population)))
+        return min(contenders, key=_fitness)
+
+    for _ in range(generations):
+        next_gen = [best]   # elitism: never lose the best chromosome found so far
+        while len(next_gen) < pop_size:
+            parent_a, parent_b = _tournament(), _tournament()
+            cut = random.randrange(1, len(chord_names)) if len(chord_names) > 1 else 0
+            child = parent_a[:cut] + parent_b[cut:]
+            if random.random() < 0.15:
+                idx = random.randrange(len(child))
+                child[idx] = random.randrange(len(gene_pools[idx]))
+            next_gen.append(child)
+        population = next_gen
+        candidate = min(population, key=_fitness)
+        candidate_fit = _fitness(candidate)
+        if candidate_fit < best_fit:
+            best, best_fit = candidate, candidate_fit
+
+    return [gene_pools[i][gene_idx] for i, gene_idx in enumerate(best)]
+
+
+def _voice_lead_progression_annealing(
+    progression: list[tuple[str, int]],
+    iterations: int = 600, start_temp: float = 12.0, cooling: float = 0.99,
+    seed: int | None = None,
+) -> list[list[int]]:
+    """
+    Simulated-annealing ALTERNATIVE to _voice_lead_progression_ga: same goal
+    (minimize total _voicing_transition_cost across the whole chord
+    sequence, same gene pools) and same cost function, but a different
+    search strategy — a single temperature-scheduled random-restart local
+    search instead of a population-based evolutionary search. Standard
+    published algorithm (Kirkpatrick et al. 1983): start from a random
+    voicing choice per chord, repeatedly propose a random neighbor move
+    (re-pick one chord's voicing), accept it unconditionally if it improves
+    total cost, or with probability exp(-delta/T) if it doesn't (escapes
+    local minima), and geometrically cool T over the run so late iterations
+    behave like plain hill-climbing.
+
+    Returns one shifted voicing (list[int]) per chord in `progression`, in
+    order — same return shape as _voice_lead_progression_ga.
+    """
+    chord_names = [c for c, _ in progression]
+    gene_pools = _build_voicing_gene_pools(chord_names)
+    rng = random.Random(seed) if seed is not None else random
+
+    current = [rng.randrange(len(pool)) for pool in gene_pools]
+    current_cost = _chromosome_cost(gene_pools, current)
+    best, best_cost = current[:], current_cost
+
+    temp = start_temp
+    for _ in range(iterations):
+        movable = [i for i, pool in enumerate(gene_pools) if len(pool) > 1]
+        if not movable:
+            break
+        idx = rng.choice(movable)
+        neighbor = current[:]
+        choices = [g for g in range(len(gene_pools[idx])) if g != current[idx]]
+        neighbor[idx] = rng.choice(choices)
+        neighbor_cost = _chromosome_cost(gene_pools, neighbor)
+
+        delta = neighbor_cost - current_cost
+        accept = delta <= 0 or rng.random() < math.exp(-delta / max(temp, 1e-6))
+        if accept:
+            current, current_cost = neighbor, neighbor_cost
+            if current_cost < best_cost:
+                best, best_cost = current[:], current_cost
+
+        temp *= cooling
+
+    return [gene_pools[i][gene_idx] for i, gene_idx in enumerate(best)]
+
+
+def _voice_lead_progression_best(
+    progression: list[tuple[str, int]],
+    pop_size: int = 24, generations: int = 40, annealing_iterations: int = 600,
+) -> tuple[list[list[int]], str]:
+    """
+    Run BOTH the genetic-algorithm optimizer and the simulated-annealing
+    optimizer on the same progression and keep whichever finds the
+    lower (better) total transition cost. Returns (voicings, winner) where
+    winner is 'ga' or 'annealing'.
+    """
+    ga_voicings = _voice_lead_progression_ga(progression, pop_size=pop_size, generations=generations)
+    sa_voicings = _voice_lead_progression_annealing(progression, iterations=annealing_iterations)
+
+    def _total_cost(voicings: list[list[int]]) -> float:
+        total = 0.0
+        prev = None
+        for v in voicings:
+            if prev is not None:
+                total += _voicing_transition_cost(prev, v)
+            prev = v
+        return total
+
+    ga_cost = _total_cost(ga_voicings)
+    sa_cost = _total_cost(sa_voicings)
+    if sa_cost < ga_cost:
+        return sa_voicings, 'annealing'
+    return ga_voicings, 'ga'
+
+
 def _voice_lead_choice(chord_name, prev_top=None):
     """Pick the voicing whose top note is closest to prev_top (smooth voice leading).
-    Falls back to random choice if prev_top is None or chord has no voicings."""
+    Falls back to random choice if prev_top is None or chord has no voicings.
+    Greedy per-chord fallback -- build_chords() prefers the whole-progression
+    _voice_lead_progression_best() above and only falls back to this on
+    failure."""
     options = VOICING_OPTIONS.get(chord_name, [[60, 64, 67]])
     if prev_top is None:
         return random.choice(options)
@@ -1376,7 +1837,11 @@ def _voice_lead_choice(chord_name, prev_top=None):
 def build_chords(progression, start_bar, num_loops, swing, bpm, tension: float = 0.5):
     """
     Chords with:
-    - Voice-leading voicing: top note moves minimally between chords
+    - Voice-leading voicing: the whole resolved progression is optimized at
+      once by _voice_lead_progression_best() (GA + simulated annealing,
+      species-counterpoint cost function -- see that function and
+      _voicing_transition_cost() above), falling back to the greedy
+      nearest-top-note heuristic (_voice_lead_choice) if that ever fails.
     - Strum effect (5-12ms spread)
     - Top note louder (melody voice)
     - 50% comp hit on beat 3
@@ -1385,44 +1850,88 @@ def build_chords(progression, start_bar, num_loops, swing, bpm, tension: float =
       9th-family extension (_CHORD_EXTEND_UP) — part of the storytelling arc,
       additive to the existing substitution roll below.
     """
-    events = []
-    cursor = start_bar
-    prev_top = None
-    for _ in range(max(1, num_loops)):
+    loops = max(1, num_loops)
+
+    # ── Resolve pass: pin down the actual chord_name played at every
+    # (loop, chord_idx) position first. maybe_sub_chord()/the tension
+    # escalation roll both draw fresh randomness on every pass through
+    # `progression`, so the sequence isn't fixed ahead of time -- the
+    # whole-progression voice-leading optimizers below need a concrete,
+    # already-resolved chord sequence to work on.
+    resolved: list[tuple[str, int]] = []   # (chord_name, dur_bars), flat across all loops
+    for _ in range(loops):
         for chord_idx, (chord_name, dur_bars) in enumerate(progression):
-            # Occasional secondary dominant or tritone substitution
             chord_name = maybe_sub_chord(chord_name, chord_idx)
             if tension > 0.75 and chord_name in _CHORD_EXTEND_UP \
                     and random.random() < (tension - 0.75) * 4:
                 chord_name = _CHORD_EXTEND_UP[chord_name]
-            # Voice-leading: pick voicing with top note closest to previous chord top note
-            voicing  = _voice_lead_choice(chord_name, prev_top)
+            resolved.append((chord_name, dur_bars))
+
+    # ── Voice-leading pass: optimize the WHOLE resolved sequence at once
+    # (this also gives correct voice-leading continuity across loop-pass
+    # boundaries, which the old per-chord prev_top carry-over only
+    # approximated). Falls back to the original greedy per-chord choice on
+    # any failure -- optional-layer pattern used throughout this codebase,
+    # must never block a render.
+    #
+    # _voice_lead_progression_ga/annealing's default params (pop_size=24,
+    # generations=40, iterations=600) were tuned against short progressions
+    # -- cost scales roughly linearly with len(resolved), and a long-duration
+    # render (many num_loops repeats) can flatten out to hundreds of chords.
+    # Measured 2026-08-26: an 8-chord progression at num_loops=20
+    # (resolved len 160) took ~7.4s at the defaults. Scale params down for
+    # longer sequences so total optimizer cost stays roughly bounded instead
+    # of growing without limit for long-duration videos -- floors keep
+    # quality reasonable even at the low end (v2's own unit tests get good
+    # results from pop_size=8/generations=5-10).
+    _VOICE_LEAD_BASE_LEN = 40
+    _scale = min(1.0, _VOICE_LEAD_BASE_LEN / max(1, len(resolved)))
+    _pop_size     = max(8, int(24 * _scale))
+    _generations  = max(10, int(40 * _scale))
+    _sa_iterations = max(100, int(600 * _scale))
+    try:
+        voicings, _winner = _voice_lead_progression_best(
+            resolved, pop_size=_pop_size, generations=_generations,
+            annealing_iterations=_sa_iterations,
+        )
+        if len(voicings) != len(resolved):
+            raise ValueError("voice-leading pass returned a mismatched length")
+    except Exception as e:
+        print(f"  [chords] whole-progression voice-leading failed ({e}) — using greedy fallback")
+        voicings = []
+        prev_top = None
+        for chord_name, _dur in resolved:
+            voicing = _voice_lead_choice(chord_name, prev_top)
             prev_top = voicing[-1]
+            voicings.append(voicing)
 
-            base_t   = grid_tick(cursor * 16, swing)
-            note_dur = int(dur_bars * BAR * 0.88)
+    events = []
+    cursor = start_bar
+    for (chord_name, dur_bars), voicing in zip(resolved, voicings):
+        base_t   = grid_tick(cursor * 16, swing)
+        note_dur = int(dur_bars * BAR * 0.88)
 
-            for i, note in enumerate(voicing):
-                strum_t = int(i * random.uniform(5,12) * (PPQN*bpm)/60000)
-                t = _gauss_jitter(base_t, 14, bpm) + strum_t
-                if i == len(voicing)-1: vel_val = _gauss_velocity(78, 10)   # top note
-                elif i == 0:            vel_val = _gauss_velocity(58,  8)   # bottom
-                else:                   vel_val = _gauss_velocity(66, 10)   # inner
-                events.append((t, note, vel_val, note_dur))
+        for i, note in enumerate(voicing):
+            strum_t = int(i * random.uniform(5,12) * (PPQN*bpm)/60000)
+            t = _gauss_jitter(base_t, 14, bpm) + strum_t
+            if i == len(voicing)-1: vel_val = _gauss_velocity(78, 10)   # top note
+            elif i == 0:            vel_val = _gauss_velocity(58,  8)   # bottom
+            else:                   vel_val = _gauss_velocity(66, 10)   # inner
+            events.append((t, note, vel_val, note_dur))
 
-            # Comp hit beat 3 (50%)
-            if dur_bars >= 2 and random.random() < 0.5:
-                b3_t = grid_tick(cursor*16 + 8, swing)
-                for note in voicing[-3:]:
-                    events.append((_gauss_jitter(b3_t,16,bpm), note, _gauss_velocity(50,10), int(BAR*0.45)))
+        # Comp hit beat 3 (50%)
+        if dur_bars >= 2 and random.random() < 0.5:
+            b3_t = grid_tick(cursor*16 + 8, swing)
+            for note in voicing[-3:]:
+                events.append((_gauss_jitter(b3_t,16,bpm), note, _gauss_velocity(50,10), int(BAR*0.45)))
 
-            # Occasional beat 2 comp hit (25%)
-            if dur_bars >= 2 and random.random() < 0.25:
-                b2_t = grid_tick(cursor*16 + 4, swing)
-                for note in voicing[-2:]:
-                    events.append((_gauss_jitter(b2_t,16,bpm), note, _gauss_velocity(44,8), int(BAR*0.30)))
+        # Occasional beat 2 comp hit (25%)
+        if dur_bars >= 2 and random.random() < 0.25:
+            b2_t = grid_tick(cursor*16 + 4, swing)
+            for note in voicing[-2:]:
+                events.append((_gauss_jitter(b2_t,16,bpm), note, _gauss_velocity(44,8), int(BAR*0.30)))
 
-            cursor += dur_bars
+        cursor += dur_bars
     return events
 
 
@@ -1628,7 +2137,15 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
         return []
 
     if motif is None:
-        motif = generate_motif(notes_scale, length=random.randint(3, 5))
+        # L-system motif generation as an ADDITIONAL source alongside the
+        # stepwise-motion generator, not a replacement -- keeps the
+        # channel's established melodic character as the majority case
+        # while adding real fractal/structural variety some of the time.
+        motif_len = random.randint(3, 5)
+        if random.random() < 0.28:
+            motif = generate_lsystem_motif(notes_scale, length=motif_len)
+        else:
+            motif = generate_motif(notes_scale, length=motif_len)
 
     VARIATIONS = ['retrograde', 'transpose_up', 'invert', 'augment', 'fragment', 'default', 'default']
     var_idx = 0
@@ -1647,6 +2164,7 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
             var_idx += 1
             phrase_len   = len(phrase_notes)
             phrase_start = bar * 16 + random.randint(0, 5)
+            prev_step = 0   # leap-then-step-reversal lookback, see below
 
             for i, note in enumerate(phrase_notes):
                 g = phrase_start + i * random.randint(2, 5)
@@ -1663,13 +2181,27 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                 else:
                     step = random.choices([-2, -1, 0],
                                           weights=[1 + 3 * tension, 3, 2], k=1)[0]
+                # Leap-then-step-reversal (research/theory/melody-techniques.md):
+                # a leap of a 3rd+ should typically be followed by stepwise
+                # motion in the OPPOSITE direction to keep the line balanced
+                # -- classical melodic-motion convention, previously
+                # unenforced (each note's step was chosen independent of the
+                # prior note's). Only kicks in after an actual leap; a plain
+                # step or repeated note leaves the phi-point weighting alone.
+                if abs(prev_step) >= 2:
+                    step = (-1 if prev_step > 0 else 1) * random.choice([1, 2])
+                prev_step = step
                 idx = notes_scale.index(note) if note in notes_scale else len(notes_scale)//2
                 idx = max(0, min(len(notes_scale)-1, idx + step))
                 note = notes_scale[idx]
 
                 # Chord-aware phrase start: snap first note to nearest chord tone (60%).
                 # Ensures each phrase "lands" on a note that fits the active harmony.
-                if i == 0 and progression and prog_bars and random.random() < 0.60:
+                # Interior notes (i > 0) get the same treatment at a lower
+                # probability (25%) -- research/theory/melody-techniques.md:
+                # chord-tone awareness previously only applied at phrase-start.
+                _snap_prob = 0.60 if i == 0 else 0.25
+                if progression and prog_bars and random.random() < _snap_prob:
                     chord_scale = None
                     # Altered-scale / tritone-sub pairing: when the chord
                     # sounding at this bar is itself a secondary-dominant or
@@ -1714,6 +2246,17 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                     n_idx = notes_scale.index(note) if note in notes_scale else len(notes_scale)//2
                     gn_idx = max(0, n_idx - 1)
                     grace_note = notes_scale[gn_idx]
+                    grace_t = max(0, t - int(S16 * 0.35))
+                    events.append((grace_t, grace_note, _gauss_velocity(38, 6), int(S16 * 0.30)))
+                # Chromatic approach-tone grace note: half-step below the
+                # main note regardless of scale membership, bypassing
+                # notes_scale entirely -- an alternative to the scale-step
+                # acciaccatura above (mutually exclusive on any given note,
+                # research/theory/melody-techniques.md: idiomatic in
+                # bebop-adjacent jazz/lofi melody, previously impossible
+                # since grace notes only ever drew from notes_scale).
+                elif i == 0 and random.random() < 0.08:
+                    grace_note = note - 1
                     grace_t = max(0, t - int(S16 * 0.35))
                     events.append((grace_t, grace_note, _gauss_velocity(38, 6), int(S16 * 0.30)))
                 dur = int(BAR * random.uniform(0.22, 0.72) * phrase_dur_scale)
@@ -2397,12 +2940,24 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
     # embellishment.
     energy_f = _DRUM_ENERGY_TO_FLOAT.get(drum_energy, 0.55)
     complexity_f = round(random.uniform(0.3, 0.8), 2)
+    # 3-against-4 cross-rhythm (see generate_polyrhythm_pattern) -- gated to
+    # subgenres a genuine polyrhythmic layer actually suits (research/
+    # theory/rhythm-groove.md's new-this-session finding: lofi_world's
+    # tala-cycle-inspired percussion identity, and nujabes-style jazzier
+    # genres), not offered to every genre the way Euclidean/CA are.
+    _polyrhythm_genres = {'lofi_world', 'nujabes'}
     if random.random() < 0.35:
         try:
             params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
             params['drum_pattern_a_source'] = 'euclidean'
         except Exception as e:
             print(f"  [params] Euclidean drum A generation failed ({e}) — using curated table")
+    elif sub in _polyrhythm_genres and random.random() < 0.25:
+        try:
+            params['drum_pattern_a_generated'] = generate_polyrhythm_pattern(energy_f)
+            params['drum_pattern_a_source'] = 'polyrhythm'
+        except Exception as e:
+            print(f"  [params] Polyrhythm drum A generation failed ({e}) — using curated table")
     elif random.random() < 0.20:
         # Cellular-automaton pattern (see generate_ca_drum_pattern) — a
         # second procedural rhythm source, mutually exclusive with the
@@ -2420,6 +2975,12 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
             params['drum_pattern_b_source'] = 'euclidean'
         except Exception as e:
             print(f"  [params] Euclidean drum B generation failed ({e}) — using curated table")
+    elif sub in _polyrhythm_genres and random.random() < 0.25:
+        try:
+            params['drum_pattern_b_generated'] = generate_polyrhythm_pattern(energy_f)
+            params['drum_pattern_b_source'] = 'polyrhythm'
+        except Exception as e:
+            print(f"  [params] Polyrhythm drum B generation failed ({e}) — using curated table")
     elif random.random() < 0.20:
         try:
             params['drum_pattern_b_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
@@ -2620,6 +3181,92 @@ def generate_song_form(seed: int | None = None) -> list[tuple[str, int]]:
     outro_loops = _loops('O')
     form.append(('O', outro_loops))
     return form
+
+
+# Section-boundary transition FX (research/theory/arrangement-structure.md
+# "Genuine gap #1: section-boundary transition FX are entirely unmodeled" --
+# confirmed via grep, zero existing code for this before now). Keyed by
+# (from_label, to_label); the 3 values name real DSP effects implemented in
+# scripts/lofi_fx.py (_apply_vinyl_stop/_apply_reverse_riser/
+# _apply_filter_sweep) -- a well-documented, distinct layer of lofi/hip-hop
+# production the form tuples alone don't touch (they only encode section
+# duration, never the handoff between sections).
+#
+# NOTE (scope): this dict + the 3 audio-domain FX functions in lofi_fx.py
+# are real and independently tested. Wiring them into the live per-track
+# pipeline requires build_midi() to expose each section's absolute bar
+# offset (currently internal-only) so it can be converted to a sample
+# position and threaded through to apply_lofi_fx() -- flagged as follow-up
+# integration work rather than risking a change to build_midi()'s
+# established return contract this late in a large change set.
+_SECTION_TRANSITION_FX: dict[tuple[str, str], str] = {
+    ('A', 'BR'):  'filter_lowpass_sweep',
+    ('BR', 'A'):  'vinyl_stop',
+    ('A', 'B'):   'reverse_riser',
+    ('B', 'O'):   'filter_lowpass_sweep',
+    ('BR', 'B'):  'reverse_riser',
+}
+
+
+def section_transition_fx_for(from_label: str, to_label: str) -> str | None:
+    """Look up the transition FX (if any) for a section-boundary hand-off.
+    Returns None for boundary pairs with no defined transition (most pairs
+    -- this is deliberately sparse, not every hand-off needs an FX)."""
+    return _SECTION_TRANSITION_FX.get((from_label, to_label))
+
+
+# In-track key modulation (new research this session -- no existing
+# research/theory/*.md doc covers this). The "truck driver modulation": an
+# abrupt whole-step (occasionally half-step) key rise with no pivot chord,
+# conventionally landing on the final full statement of the theme for a
+# lift/energy effect. Deliberately rare and form-gated -- most lofi loop-
+# and-vamp tracks shouldn't modulate; this is an occasional device, not a
+# universal effect, so it's only offered to forms with a real "final
+# statement" section to modulate into.
+#
+# NOTE (scope): decision logic + the transpose helper below are real and
+# independently tested. Wiring `_transpose_events()` into build_midi()'s
+# per-section event-accumulation loop (piano_ev/bass_ev/mel_ev/pad_ev/
+# cmelo_ev/texture_ev/sustain_ev are each appended to from many different
+# section-label branches across a long, already-complex loop body) is
+# flagged as follow-up integration work rather than attempted this late in
+# a large change set, for the same reason as _SECTION_TRANSITION_FX's
+# wiring above -- the building blocks are real, the last-mile wiring into
+# an already-large, heavily-relied-on function is the remaining risk.
+_MODULATION_ELIGIBLE_FORMS = {'build', 'aaba', 'standard'}
+_MODULATION_PROB = 0.12
+
+
+def maybe_modulate_key(form: list[tuple[str, int]], form_name: str,
+                       seed: int | None = None) -> tuple[int, int] | None:
+    """
+    Decide whether this track gets an in-track key modulation. Returns
+    (section_index, semitone_shift) -- modulation would apply from that
+    section index (the LAST 'A' section in `form`, i.e. the final full
+    theme statement) through the end of the track -- or None if this track
+    doesn't modulate (the common case; most tracks return None).
+    """
+    rng = random.Random(seed) if seed is not None else random
+    if form_name not in _MODULATION_ELIGIBLE_FORMS:
+        return None
+    a_indices = [i for i, (label, _) in enumerate(form) if label == 'A']
+    if len(a_indices) < 2:
+        return None
+    if rng.random() >= _MODULATION_PROB:
+        return None
+    semitones = rng.choice([1, 2, 2, 2])   # whole-step is the more common/distinctive convention
+    return a_indices[-1], semitones
+
+
+def _transpose_events(events: list[tuple], semitones: int) -> list[tuple]:
+    """Shift every real note in an (abs_tick, note, velocity, duration)
+    events list by `semitones` -- used for in-track key-modulation tail
+    sections. Pitchwheel sentinel events (_PITCHWHEEL_NOTE) are left
+    untouched, they're not real notes."""
+    if semitones == 0:
+        return events
+    return [ev if ev[1] == _PITCHWHEEL_NOTE else (ev[0], ev[1] + semitones, ev[2], ev[3])
+            for ev in events]
 
 
 # Secondary genre-specific instrument texture layer
@@ -2886,7 +3533,11 @@ def build_midi(params, output_path):
         if random.random() < 0.35 and scale in _SCALE_MODAL_LIFT:
             break_scale    = _SCALE_MODAL_LIFT[scale]
             break_key_root = key_root + 3   # relative major (+3 semitones: Am→C, Dm→F)
-        track_motif = generate_motif(_motif_scale) if _motif_scale else None
+        if _motif_scale:
+            track_motif = (generate_lsystem_motif(_motif_scale) if random.random() < 0.28
+                           else generate_motif(_motif_scale))
+        else:
+            track_motif = None
 
         piano_ev    = []
         bass_ev     = []
@@ -3400,7 +4051,6 @@ def generate_tracks(count=3, concept_hint: str = None, genre_hint: str = None, s
     # Parallel generation — FluidSynth and ffmpeg are subprocess calls so
     # threads release the GIL; 3 workers caps CPU without overwhelming Groq.
     workers = min(count, 3)
-    paths = []
 
     def _run(i):
         dna = param_sets[i] if param_sets else song_dna
@@ -3409,20 +4059,30 @@ def generate_tracks(count=3, concept_hint: str = None, genre_hint: str = None, s
         return generate_track(i, concept_hint=chint, genre_hint=ghint, song_dna=dna)
 
     if workers <= 1:
+        paths = []
         for i in range(count):
             try:
                 paths.append(_run(i))
             except Exception as e:
                 print(f"  [ERROR] Track {i}: {e}")
     else:
+        # Threads complete in whatever order they finish, not submission
+        # order -- write into a fixed-size slot per index (not append) so
+        # the returned list stays in the planned/submission order
+        # (matching the "Track plan: X -> Y -> Z" printed above). Callers
+        # (e.g. run.py's SEO-alignment step, which reads paths[0]'s
+        # .meta.json as "the" track) depend on slot 0 meaning the first
+        # planned track, not whichever thread happened to finish first.
+        slots: list[str | None] = [None] * count
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(_run, i): i for i in range(count)}
             for fut in concurrent.futures.as_completed(futs):
                 i = futs[fut]
                 try:
-                    paths.append(fut.result())
+                    slots[i] = fut.result()
                 except Exception as e:
                     print(f"  [ERROR] Track {i}: {e}")
+        paths = [p for p in slots if p is not None]
 
     print(f"\n[MUSIC] {len(paths)}/{count} tracks ready.")
     return paths

@@ -35,5 +35,6 @@ micro_swing: true
 texture: {program: GM_VIBRAPHONE, style: stab}
 drum_sampler_pattern: null
 mix: {lpf_hz: 10000, bitcrush_bits: 11, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.14,
-  compress_ratio: 3.2, vinyl_crackle: 0.08, use_ir_reverb: false, sidechain_duck: true}
+  compress_ratio: 3.2, vinyl_crackle: 0.08, use_ir_reverb: false, sidechain_duck: true,
+  duck_profile: house}
 song_form: funk

@@ -638,7 +638,7 @@ def duration_weights(duration_map: dict[str, int], analytics: dict | None = None
 def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, float]]:
     """
     Per-pillar weights for title HOOK STRATEGIES (see generate_seo.py's
-    HOOK_STRATEGIES: "statement", "curiosity_gap", "spec_led"), same
+    HOOK_STRATEGIES: "statement", "benefit_list", "spec_led"), same
     0.5x-2.0x/>=5-samples pattern, bandit-backed (see _bandit_weights())
     using composite_engagement_score() (falls back to CTR-only when that's
     all a logged entry has, which is the common case for older rows).
@@ -649,7 +649,7 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
     specific hook family, so a naive positional key was really only ever
     learning "which slot index tends to get clicked" -- keying by the
     strategy name itself makes the bandit learn something creatively
-    meaningful ("curiosity_gap outperforms statement for the 'emotional'
+    meaningful ("benefit_list outperforms statement for the 'emotional'
     pillar"), which also survives generate_title_variants() reordering or
     resizing its variant slots in the future. Callers should fall back to
     1.0 for any strategy not present in the returned per-pillar dict (no
@@ -703,6 +703,94 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
         if bandit_weights:
             result[pillar] = bandit_weights
     return result
+
+
+_TITLE_BENEFIT_VOCAB = {"study", "focus", "relax", "sleep", "chill", "unwind"}
+
+
+def title_features(title: str) -> dict[str, str]:
+    """Bucket a title string into a few coarse, cheap surface-text features
+    -- feeds title_feature_weights()/title_feature_bandit_posteriors() below,
+    which let the bandit learn from actual title *wording* (length/emoji/
+    benefit-list-shape) instead of only which hook-strategy family was used
+    (see title_variant_weights()). Buckets, not raw values, so the bandit
+    keeps a small, stable arm set per dimension instead of one arm per
+    unique title. Public (no leading underscore) because generate_seo.py's
+    generate_seo() also calls this directly to bucket each unpublished title
+    candidate before applying title_feature_weights() to it.
+    """
+    length = len(title)
+    length_bucket = ("short_lt45" if length < 45 else
+                      "target_45_70" if length <= 70 else "long_gt70")
+    has_emoji = any(ord(c) > 0x2600 for c in title)
+    benefit_hits = sum(1 for w in _TITLE_BENEFIT_VOCAB if w in title.lower())
+    return {
+        "length_bucket": length_bucket,
+        "has_emoji": "emoji" if has_emoji else "no_emoji",
+        "benefit_list": "benefit_list" if benefit_hits >= 2 else "no_benefit_list",
+    }
+
+
+def _title_feature_buckets(analytics: dict | None) -> dict[str, dict[str, list[float]]]:
+    """{feature_dim: {bucket: [scores]}} over every logged video's actual
+    published `title` -- shared by title_feature_weights() and
+    title_feature_bandit_posteriors() below. Only the CHOSEN title is logged
+    per video (same as title_variant_weights()'s inputs), so this mines the
+    same already-logged text, not new data collection.
+    """
+    if analytics is None:
+        analytics = load_analytics()
+    from collections import defaultdict as _dd
+    by_dim: dict[str, dict[str, list[float]]] = _dd(lambda: _dd(list))
+    for entry in (analytics or {}).values():
+        title = entry.get("title")
+        if not title:
+            continue
+        score = composite_engagement_score(entry)
+        if score is None:
+            continue
+        for dim, bucket in title_features(title).items():
+            by_dim[dim][bucket].append(score)
+    return by_dim
+
+
+def title_feature_weights(analytics: dict | None = None) -> dict[str, dict[str, float]]:
+    """
+    {feature_dim: {bucket: weight}} -- same 0.5x-2.0x/>=5-samples bandit
+    pattern as title_variant_weights(), but keyed by surface-text features
+    mined from the already-logged `title` field (see title_features())
+    instead of hook-strategy identity. title_variant_weights() only ever
+    learns "which of the 3 named hook families wins"; this mines the same
+    logged title text for finer-grained signal: does a target-length title
+    outperform a long one, does an emoji help, does the benefit-list
+    phrasing actually work.
+
+    Returns {} if analytics_log.json has no entries with usable data yet
+    (e.g. a brand new channel) -- callers should fall back to 1.0 per bucket.
+    """
+    result: dict[str, dict[str, float]] = {}
+    for dim, buckets in _title_feature_buckets(analytics).items():
+        weights = _bandit_weights(dict(buckets), min_samples=5)
+        if weights:
+            result[dim] = weights
+    return result
+
+
+def title_feature_bandit_posteriors(analytics: dict | None = None) -> dict:
+    """
+    {feature_dim: {bucket: {alpha, beta, n, mean}}} -- the raw posteriors
+    behind title_feature_weights(), for the webui Analytics page's
+    "Title-feature bandit posteriors" panel (mirrors
+    pillar_bandit_posteriors()). Unlike pillar_bandit_posteriors(), the
+    dim/bucket universe isn't a small fixed list passed in by the caller --
+    it's whatever title_features() actually produced for the logged
+    titles, so this can return {} (not a zero-sample-per-arm dict) when
+    analytics_log.json has no title data yet.
+    """
+    return {
+        dim: _build_bucket_bandit(buckets).posterior_stats()
+        for dim, buckets in _title_feature_buckets(analytics).items()
+    }
 
 
 def pillar_weights(pillars: list[str] | None = None, analytics: dict | None = None) -> dict[str, float]:

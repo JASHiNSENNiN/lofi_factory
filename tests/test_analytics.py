@@ -56,7 +56,7 @@ def test_title_variant_weights_empty():
 def test_title_variant_weights_prefers_higher_ctr_variant():
     # Keyed by hook-strategy identity (not raw slot index) -- see
     # generate_seo.py's HOOK_STRATEGIES. "statement" (idx 0) outperforms
-    # "curiosity_gap" (idx 1) here, so its weight should end up higher.
+    # "benefit_list" (idx 1) here, so its weight should end up higher.
     fake = {}
     for i in range(6):
         fake[f"t0_{i}"] = {"pillar": "temporal", "title_chosen_idx": 0,
@@ -65,7 +65,7 @@ def test_title_variant_weights_prefers_higher_ctr_variant():
         fake[f"t1_{i}"] = {"pillar": "temporal", "title_chosen_idx": 1,
                             "videoThumbnailImpressionsClickRate": 0.02}
     result = title_variant_weights(fake)
-    assert result["temporal"]["statement"] > result["temporal"]["curiosity_gap"]
+    assert result["temporal"]["statement"] > result["temporal"]["benefit_list"]
 
 
 def test_title_variant_weights_keys_by_explicit_strategy_when_present():
@@ -99,14 +99,14 @@ def test_title_variant_weights_is_deterministic_and_keyed_by_hook_strategy():
     # exactly on an arm's value and produce a spurious tie between arms.
     spec_led_ctrs     = [0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.095]
     statement_ctrs    = [0.05, 0.048, 0.052, 0.045, 0.05, 0.049, 0.051, 0.047]
-    curiosity_gap_ctrs = [0.02, 0.015, 0.025, 0.01, 0.02, 0.018, 0.022, 0.017]
+    benefit_list_ctrs = [0.02, 0.015, 0.025, 0.01, 0.02, 0.018, 0.022, 0.017]
 
     fake = {}
     for i, v in enumerate(spec_led_ctrs):
         fake[f"a{i}"] = {"pillar": "activity", "title_chosen_strategy": "spec_led",
                           "videoThumbnailImpressionsClickRate": v}
-    for i, v in enumerate(curiosity_gap_ctrs):
-        fake[f"b{i}"] = {"pillar": "activity", "title_chosen_strategy": "curiosity_gap",
+    for i, v in enumerate(benefit_list_ctrs):
+        fake[f"b{i}"] = {"pillar": "activity", "title_chosen_strategy": "benefit_list",
                           "videoThumbnailImpressionsClickRate": v}
     for i, v in enumerate(statement_ctrs):
         fake[f"c{i}"] = {"pillar": "activity", "title_chosen_strategy": "statement",
@@ -117,9 +117,9 @@ def test_title_variant_weights_is_deterministic_and_keyed_by_hook_strategy():
     assert result_1 == result_2  # deterministic
 
     weights = result_1["activity"]
-    assert set(weights.keys()) <= {"statement", "curiosity_gap", "spec_led"}
+    assert set(weights.keys()) <= {"statement", "benefit_list", "spec_led"}
     assert all(isinstance(k, str) for k in weights)  # keyed by strategy name, not int
-    assert weights["spec_led"] > weights["statement"] > weights["curiosity_gap"]
+    assert weights["spec_led"] > weights["statement"] > weights["benefit_list"]
 
 
 def test_title_variant_weights_falls_back_to_idx_mapped_strategy_for_old_rows():
@@ -138,6 +138,66 @@ def test_title_variant_weights_falls_back_to_idx_mapped_strategy_for_old_rows():
     assert HOOK_STRATEGIES[0] in result["temporal"]
     assert HOOK_STRATEGIES[1] in result["temporal"]
     assert result["temporal"][HOOK_STRATEGIES[0]] > result["temporal"][HOOK_STRATEGIES[1]]
+
+
+# ── title_features() / title_feature_weights() ──────────────────────────────
+# Finer-grained than title_variant_weights(): mines the already-logged title
+# *text* (length/emoji/benefit-list-shape) instead of only hook-strategy
+# identity, so the bandit can eventually learn "does a target-length title
+# outperform a long one" independent of which hook family it came from.
+def test_title_features_buckets_length_and_benefit_list():
+    short_title = "lofi beats"
+    features = analytics_mod.title_features(short_title)
+    assert features["length_bucket"] == "short_lt45"
+    assert features["benefit_list"] == "no_benefit_list"
+    assert features["has_emoji"] == "no_emoji"
+
+    target_title = "lofi hip hop mix for study focus and relax sessions"
+    assert 45 <= len(target_title) <= 70
+    features2 = analytics_mod.title_features(target_title)
+    assert features2["length_bucket"] == "target_45_70"
+    assert features2["benefit_list"] == "benefit_list"  # 3 vocab hits: study, focus, relax
+
+    long_title = "x" * 80
+    assert analytics_mod.title_features(long_title)["length_bucket"] == "long_gt70"
+
+
+def test_title_features_detects_emoji():
+    assert analytics_mod.title_features("lofi beats \U0001F319 for sleep")["has_emoji"] == "emoji"
+    assert analytics_mod.title_features("lofi beats for sleep")["has_emoji"] == "no_emoji"
+
+
+def test_title_feature_weights_empty():
+    assert analytics_mod.title_feature_weights({}) == {}
+
+
+def test_title_feature_weights_rewards_target_length_bucket():
+    fake = {}
+    for i in range(6):
+        fake[f"short_{i}"] = {"title": "lofi beats",  # short_lt45
+                               "videoThumbnailImpressionsClickRate": 0.01}
+    for i in range(6):
+        fake[f"target_{i}"] = {"title": "lofi hip hop mix for a long study focus session tonight",  # target_45_70
+                                "videoThumbnailImpressionsClickRate": 0.08}
+    result = analytics_mod.title_feature_weights(fake)
+    assert result["length_bucket"]["target_45_70"] > result["length_bucket"]["short_lt45"]
+
+
+def test_title_feature_weights_rewards_benefit_list_titles():
+    fake = {}
+    for i in range(6):
+        fake[f"nobenefit_{i}"] = {"title": "lofi hip hop late night session tonight only",
+                                   "videoThumbnailImpressionsClickRate": 0.01}
+    for i in range(6):
+        fake[f"benefit_{i}"] = {"title": "lofi hip hop mix - study, focus, relax and sleep tonight",
+                                 "videoThumbnailImpressionsClickRate": 0.09}
+    result = analytics_mod.title_feature_weights(fake)
+    assert result["benefit_list"]["benefit_list"] > result["benefit_list"]["no_benefit_list"]
+
+
+def test_title_feature_weights_skips_entries_without_title():
+    fake = {f"v{i}": {"videoThumbnailImpressionsClickRate": 0.05} for i in range(6)}
+    assert analytics_mod.title_feature_weights(fake) == {}
 
 
 # ── thumbnail A/B swap: alt-file lookup ────────────────────────────────────

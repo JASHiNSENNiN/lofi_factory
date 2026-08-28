@@ -25,5 +25,6 @@ cozy_bias: true
 texture: {program: GM_ORGAN_ROCK, style: stab}
 drum_sampler_pattern: null
 mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.4, reverb_wet: 0.2, tape_wobble_depth: 0.15,
-  compress_ratio: 3.0, vinyl_crackle: 0.09, use_ir_reverb: false, sidechain_duck: true}
+  compress_ratio: 3.0, vinyl_crackle: 0.09, use_ir_reverb: false, sidechain_duck: true,
+  duck_profile: house}
 song_form: funk

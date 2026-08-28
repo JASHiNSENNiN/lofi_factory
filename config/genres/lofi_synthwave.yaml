@@ -33,5 +33,6 @@ melody_style: continuous_arp
 texture: {program: GM_MARIMBA, style: pop}
 drum_sampler_pattern: standard
 mix: {lpf_hz: 13500, bitcrush_bits: 13, reverb_room: 0.5, reverb_wet: 0.28, tape_wobble_depth: 0.08,
-  compress_ratio: 3.5, vinyl_crackle: 0.05, use_ir_reverb: true, sidechain_duck: true}
+  compress_ratio: 3.5, vinyl_crackle: 0.05, use_ir_reverb: true, sidechain_duck: true,
+  duck_profile: hiphop}
 song_form: funk

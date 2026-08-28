@@ -160,7 +160,8 @@ EXPECTED_SUBGENRE_CONFIG = {
     'lofi_world':   {'piano': GM_RHODES,    'melody': GM_SITAR,     'cmelo': GM_KOTO,
                      'scale': ['dorian','phryg_dom','pent','natural_minor'],
                      'drum_pats': [12,4,3,9], 'bpm': (70,86), 'energy': None,
-                     'progs': [13,0,7,3,38,10,32,39]},
+                     # 59 = sparse modal drone (Amadd9/Dmsus4), added Phase 11 2026-08-26
+                     'progs': [13,0,7,3,38,10,32,39,59]},
     # 3 new research-driven subgenres (config/genres/sleep_lofi.yaml,
     # lofi_garage.yaml, lofi_synthwave.yaml) -- not "pre-refactor" (they never
     # existed pre-refactor), added here following the same precedent as
@@ -279,8 +280,11 @@ EXPECTED_FORM_BY_SUBGENRE = {
     'nujabes':        'extended',
     'lofi_jazz':      'extended',
     # New song forms from research/theory/arrangement-structure.md -- see
-    # comments in the corresponding config/genres/*.yaml.
+    # comments in the corresponding config/genres/*.yaml. jazz_cafe was
+    # recommended alongside bossa_lofi (both jazz-standard-rooted) but was
+    # missed in that pass -- fixed 2026-08-26.
     'bossa_lofi':     'aaba',
+    'jazz_cafe':      'aaba',
     'lofi_drill':     'build',
     'lofi_phonk':     'build',
     'sleep_lofi':     'ambient',
@@ -289,41 +293,48 @@ EXPECTED_FORM_BY_SUBGENRE = {
 }
 
 # ─── lofi_fx._GENRE_PRESETS (pre-refactor literal) ───────────────────────────
+# presence_db/warmth_db (research/theory/mixing-texture.md item 8, added
+# 2026-08-26): 0.0/0.0 (no-op) for every genre except the boom-bap-leaning
+# ones the research specifically calls out, which get a small 3-5kHz cut /
+# 100-200Hz boost -- see config/genres/{genre}.yaml's mix: block.
 EXPECTED_GENRE_FX_PRESETS = {
-    "dark_lofi":     {"lpf": 7500,  "bits": 9,  "room": 0.5, "wet": 0.28, "wobble_depth": 0.25, "compress_ratio": 3.5, "vinyl": 0.18},
-    "lofi_phonk":    {"lpf": 7000,  "bits": 8,  "room": 0.4, "wet": 0.22, "wobble_depth": 0.30, "compress_ratio": 4.0, "vinyl": 0.22},
-    "vaporwave":     {"lpf": 8000,  "bits": 9,  "room": 0.6, "wet": 0.35, "wobble_depth": 0.28, "compress_ratio": 3.0, "vinyl": 0.14},
-    "ambient":       {"lpf": 12000, "bits": 13, "room": 0.7, "wet": 0.40, "wobble_depth": 0.12, "compress_ratio": 2.0, "vinyl": 0.05},
-    "lofi_jazz":     {"lpf": 10000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
-    "jazz_cafe":     {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 2.5, "vinyl": 0.08},
-    "nujabes":       {"lpf": 10000, "bits": 11, "room": 0.45,"wet": 0.25, "wobble_depth": 0.20, "compress_ratio": 2.8, "vinyl": 0.12},
-    "neo_soul":      {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.22, "wobble_depth": 0.16, "compress_ratio": 2.5, "vinyl": 0.09},
-    "bossa_lofi":    {"lpf": 12500, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "lofi_rnb":      {"lpf": 11000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10},
-    "chillhop":      {"lpf": 9500,  "bits": 11, "room": 0.35,"wet": 0.20, "wobble_depth": 0.18, "compress_ratio": 3.0, "vinyl": 0.12},
-    "hip_hop_lofi":  {"lpf": 9000,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.20, "compress_ratio": 3.5, "vinyl": 0.15},
-    "lo_fi_funk":    {"lpf": 9500,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.22, "compress_ratio": 3.5, "vinyl": 0.14},
-    "chill_beats":   {"lpf": 11000, "bits": 12, "room": 0.45,"wet": 0.25, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.08},
-    "lofi_house":    {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 3.0, "vinyl": 0.09},
-    "cozy_cafe":     {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "morning_lofi":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.05},
-    "anime_lofi":    {"lpf": 13500, "bits": 14, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.04},
-    "summer_vibes":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.11, "compress_ratio": 2.0, "vinyl": 0.05},
-    "bedroom_pop":   {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.13, "compress_ratio": 2.2, "vinyl": 0.06},
-    "city_pop":      {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06},
-    "study_lofi":    {"lpf": 11000, "bits": 12, "room": 0.38,"wet": 0.20, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.09},
-    "piano_lofi":    {"lpf": 14000, "bits": 14, "room": 0.45,"wet": 0.25, "wobble_depth": 0.08, "compress_ratio": 1.8, "vinyl": 0.04},
-    "lofi_classical":{"lpf": 15000, "bits": 15, "room": 0.50,"wet": 0.28, "wobble_depth": 0.06, "compress_ratio": 1.6, "vinyl": 0.03},
-    "lofi_drill":    {"lpf": 7200,  "bits": 8,  "room": 0.35,"wet": 0.20, "wobble_depth": 0.28, "compress_ratio": 4.2, "vinyl": 0.20},
-    "lofi_world":    {"lpf": 10500, "bits": 12, "room": 0.42,"wet": 0.24, "wobble_depth": 0.16, "compress_ratio": 2.6, "vinyl": 0.09},
-    "sleep_lofi":    {"lpf": 7000,  "bits": 10, "room": 0.75,"wet": 0.45, "wobble_depth": 0.10, "compress_ratio": 1.8, "vinyl": 0.04},
-    "lofi_garage":   {"lpf": 10000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.14, "compress_ratio": 3.2, "vinyl": 0.08},
-    "lofi_synthwave":{"lpf": 13500, "bits": 13, "room": 0.5, "wet": 0.28, "wobble_depth": 0.08, "compress_ratio": 3.5, "vinyl": 0.05},
+    "dark_lofi":     {"lpf": 7500,  "bits": 9,  "room": 0.5, "wet": 0.28, "wobble_depth": 0.25, "compress_ratio": 3.5, "vinyl": 0.18, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_phonk":    {"lpf": 7000,  "bits": 8,  "room": 0.4, "wet": 0.22, "wobble_depth": 0.30, "compress_ratio": 4.0, "vinyl": 0.22, "presence_db": -2.0, "warmth_db": 1.5},
+    "vaporwave":     {"lpf": 8000,  "bits": 9,  "room": 0.6, "wet": 0.35, "wobble_depth": 0.28, "compress_ratio": 3.0, "vinyl": 0.14, "presence_db": 0.0, "warmth_db": 0.0},
+    "ambient":       {"lpf": 12000, "bits": 13, "room": 0.7, "wet": 0.40, "wobble_depth": 0.12, "compress_ratio": 2.0, "vinyl": 0.05, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_jazz":     {"lpf": 10000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10, "presence_db": 0.0, "warmth_db": 0.0},
+    "jazz_cafe":     {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 2.5, "vinyl": 0.08, "presence_db": 0.0, "warmth_db": 0.0},
+    "nujabes":       {"lpf": 10000, "bits": 11, "room": 0.45,"wet": 0.25, "wobble_depth": 0.20, "compress_ratio": 2.8, "vinyl": 0.12, "presence_db": 0.0, "warmth_db": 0.0},
+    "neo_soul":      {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.22, "wobble_depth": 0.16, "compress_ratio": 2.5, "vinyl": 0.09, "presence_db": 0.0, "warmth_db": 0.0},
+    "bossa_lofi":    {"lpf": 12500, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_rnb":      {"lpf": 11000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.18, "compress_ratio": 2.8, "vinyl": 0.10, "presence_db": 0.0, "warmth_db": 0.0},
+    "chillhop":      {"lpf": 9500,  "bits": 11, "room": 0.35,"wet": 0.20, "wobble_depth": 0.18, "compress_ratio": 3.0, "vinyl": 0.12, "presence_db": -1.0, "warmth_db": 1.0},
+    "hip_hop_lofi":  {"lpf": 9000,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.20, "compress_ratio": 3.5, "vinyl": 0.15, "presence_db": -1.5, "warmth_db": 1.5},
+    "lo_fi_funk":    {"lpf": 9500,  "bits": 10, "room": 0.35,"wet": 0.18, "wobble_depth": 0.22, "compress_ratio": 3.5, "vinyl": 0.14, "presence_db": -1.5, "warmth_db": 1.5},
+    "chill_beats":   {"lpf": 11000, "bits": 12, "room": 0.45,"wet": 0.25, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.08, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_house":    {"lpf": 11000, "bits": 12, "room": 0.4, "wet": 0.20, "wobble_depth": 0.15, "compress_ratio": 3.0, "vinyl": 0.09, "presence_db": 0.0, "warmth_db": 0.0},
+    "cozy_cafe":     {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06, "presence_db": 0.0, "warmth_db": 0.0},
+    "morning_lofi":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.05, "presence_db": 0.0, "warmth_db": 0.0},
+    "anime_lofi":    {"lpf": 13500, "bits": 14, "room": 0.3, "wet": 0.15, "wobble_depth": 0.10, "compress_ratio": 2.0, "vinyl": 0.04, "presence_db": 0.0, "warmth_db": 0.0},
+    "summer_vibes":  {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.11, "compress_ratio": 2.0, "vinyl": 0.05, "presence_db": 0.0, "warmth_db": 0.0},
+    "bedroom_pop":   {"lpf": 13000, "bits": 13, "room": 0.35,"wet": 0.18, "wobble_depth": 0.13, "compress_ratio": 2.2, "vinyl": 0.06, "presence_db": 0.0, "warmth_db": 0.0},
+    "city_pop":      {"lpf": 13000, "bits": 13, "room": 0.3, "wet": 0.16, "wobble_depth": 0.12, "compress_ratio": 2.2, "vinyl": 0.06, "presence_db": 0.0, "warmth_db": 0.0},
+    "study_lofi":    {"lpf": 11000, "bits": 12, "room": 0.38,"wet": 0.20, "wobble_depth": 0.14, "compress_ratio": 2.5, "vinyl": 0.09, "presence_db": 0.0, "warmth_db": 0.0},
+    "piano_lofi":    {"lpf": 14000, "bits": 14, "room": 0.45,"wet": 0.25, "wobble_depth": 0.08, "compress_ratio": 1.8, "vinyl": 0.04, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_classical":{"lpf": 15000, "bits": 15, "room": 0.50,"wet": 0.28, "wobble_depth": 0.06, "compress_ratio": 1.6, "vinyl": 0.03, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_drill":    {"lpf": 7200,  "bits": 8,  "room": 0.35,"wet": 0.20, "wobble_depth": 0.28, "compress_ratio": 4.2, "vinyl": 0.20, "presence_db": -1.5, "warmth_db": 1.5},
+    "lofi_world":    {"lpf": 10500, "bits": 12, "room": 0.42,"wet": 0.24, "wobble_depth": 0.16, "compress_ratio": 2.6, "vinyl": 0.09, "presence_db": 0.0, "warmth_db": 0.0},
+    "sleep_lofi":    {"lpf": 7000,  "bits": 10, "room": 0.75,"wet": 0.45, "wobble_depth": 0.10, "compress_ratio": 1.8, "vinyl": 0.04, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_garage":   {"lpf": 10000, "bits": 11, "room": 0.4, "wet": 0.22, "wobble_depth": 0.14, "compress_ratio": 3.2, "vinyl": 0.08, "presence_db": 0.0, "warmth_db": 0.0},
+    "lofi_synthwave":{"lpf": 13500, "bits": 13, "room": 0.5, "wet": 0.28, "wobble_depth": 0.08, "compress_ratio": 3.5, "vinyl": 0.05, "presence_db": 0.0, "warmth_db": 0.0},
 }
 
 # ─── lofi_fx._IR_GENRES / _SIDECHAIN_DUCK_GENRES (pre-refactor literal) ─────
+# Grew by 5 (chillhop, hip_hop_lofi, lo_fi_funk, lofi_drill, lofi_phonk) when
+# research/theory/mixing-texture.md item 7 (2026-08-26) gave those genres
+# use_ir_reverb: true so they can use the new procedural plate IR.
 EXPECTED_IR_GENRES = {"lofi_jazz", "jazz_cafe", "piano_lofi", "lofi_classical", "bossa_lofi", "neo_soul", "lofi_world",
-                      "sleep_lofi", "lofi_synthwave"}
+                      "sleep_lofi", "lofi_synthwave", "chillhop", "hip_hop_lofi", "lo_fi_funk", "lofi_drill", "lofi_phonk"}
 EXPECTED_SIDECHAIN_DUCK_GENRES = {"lofi_house", "lo_fi_funk", "hip_hop_lofi", "chillhop", "lofi_drill",
                                   "lofi_garage", "lofi_synthwave"}
 

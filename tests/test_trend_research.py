@@ -184,3 +184,31 @@ def test_get_trend_snapshot_migrates_old_format_file_on_disk(tmp_path, monkeypat
     saved = json.loads(cache.read_text())
     assert isinstance(saved, list)
     assert len(saved) == 2  # old dict-format snapshot wrapped + new one appended
+
+
+# ── extract_title_benefit_signals ───────────────────────────────────────────
+def test_extract_title_benefit_signals_ranks_by_frequency():
+    snapshot = _snapshot("2026-01-01T00:00:00+00:00", [
+        {"title": "lofi hip hop radio - beats to sleep and relax to"},
+        {"title": "1 A.M study session - lofi beats to sleep to"},
+        {"title": "chill lofi mix to relax to"},
+    ])
+    ranked = tr.extract_title_benefit_signals(snapshot, top_k=2)
+    # "sleep" appears twice, "relax" twice, "study"/"chill" once each --
+    # both top hits must outrank the once-only words.
+    assert set(ranked) == {"sleep", "relax"}
+
+
+def test_extract_title_benefit_signals_falls_back_without_trend_data():
+    empty_snapshot = _snapshot("2026-01-01T00:00:00+00:00", [])
+    assert tr.extract_title_benefit_signals({}, top_k=3) == ["study", "focus", "relax"]
+    assert tr.extract_title_benefit_signals(empty_snapshot, top_k=3) == ["study", "focus", "relax"]
+
+
+def test_extract_title_benefit_signals_falls_back_when_vocab_absent():
+    # Real titles exist, but none mention any benefit-keyword -- still a
+    # graceful fallback to the static vocabulary rather than an empty list.
+    snapshot = _snapshot("2026-01-01T00:00:00+00:00", [
+        {"title": "lofi hip hop radio for coding and gaming sessions"},
+    ])
+    assert tr.extract_title_benefit_signals(snapshot, top_k=3) == ["study", "focus", "relax"]

@@ -551,6 +551,78 @@ def _job_details_dialog(j) -> None:
     dlg.open()
 
 
+def _read_title_variants(seo_path: str) -> tuple[str, list[str], list[str]]:
+    """(current_title, variants, strategies) parsed from a seo_*.json file.
+    Falls back to a single-item variants list (just the chosen title) if the
+    file predates title_variants being logged, or is missing/unreadable."""
+    try:
+        with open(seo_path) as f:
+            seo = json.load(f)
+    except Exception:
+        return "", [], []
+    title = seo.get("title", "")
+    variants = seo.get("title_variants") or ([title] if title else [])
+    strategies = seo.get("title_variant_strategies") or []
+    return title, variants, strategies
+
+
+def _upload_with_title_dialog(j) -> None:
+    """Pre-publish review checkpoint for a completed "Render only" job: shows
+    the 3 title variants generate_seo.py already generated for this render
+    (job.artifacts["seo"], parsed by jobs.py from run.py's [RESULT] line),
+    lets you pick one or edit it freely, then uploads with that exact title.
+
+    Manual-path only, by design: the scheduled/unattended `publish.py auto`
+    run (lofi-auto.timer) never goes through the webui at all and stays
+    fully autonomous -- this dialog only exists for when a human is here at
+    the dashboard reviewing a job they just triggered.
+    """
+    art = j.artifacts
+    seo_path, video_path = art.get("seo"), art.get("video")
+    if not seo_path or not video_path:
+        ui.notify("No SEO/video artifacts recorded for this job.", type="warning")
+        return
+
+    current_title, variants, strategies = _read_title_variants(seo_path)
+    if not variants:
+        ui.notify("No title variants found in this job's SEO file.", type="warning")
+        return
+    labels = list(strategies) + ["custom"] * (len(variants) - len(strategies))
+    options = {v: f"({label}) {v}" for v, label in zip(variants, labels)}
+
+    with ui.dialog() as dlg, theme.card(title="Upload with title", classes="w-full gap-3 max-w-2xl"):
+        ui.label(os.path.basename(video_path)).classes(theme.SUB)
+        variant_sel = ui.select(options, value=variants[0], label="Generated variant")\
+            .classes("w-full")
+        title_in = ui.input("Title (editable)", value=variants[0])\
+            .classes("w-full").props("maxlength=100 counter")
+        variant_sel.on_value_change(lambda e: setattr(title_in, "value", e.value))
+
+        with ui.row().classes("w-full justify-end gap-2 mt-1"):
+            ui.button("Cancel", on_click=dlg.close).props("flat color=primary")
+
+            async def do_upload() -> None:
+                chosen = (title_in.value or "").strip()
+                if not chosen:
+                    ui.notify("Title can't be empty.", type="warning")
+                    return
+                if jobs.manager.is_busy():
+                    ui.notify("Another job is already running.", type="warning")
+                    return
+                await jobs.manager.run(
+                    "upload",
+                    ["publish.py", "upload", "--video", video_path,
+                     "--seo", seo_path, "--title", chosen],
+                )
+                dlg.close()
+                ui.notify("Started: upload", type="positive")
+                set_view("studio")
+
+            ui.button("Upload", icon="cloud_upload", on_click=do_upload)\
+                .props("unelevated color=primary")
+    dlg.open()
+
+
 def _runs_table(history: list) -> None:
     if not history:
         ui.label("No runs yet this session.").classes(theme.SUB + " mt-1")
@@ -573,6 +645,10 @@ def _runs_table(history: list) -> None:
                     ui.button("Retry", icon="replay",
                               on_click=lambda j=j: _retry_job(j.id))\
                         .props("flat dense color=secondary")
+                if j.status == "success" and j.name == "render" and j.artifacts.get("seo"):
+                    ui.button("Upload with title…", icon="cloud_upload",
+                              on_click=lambda j=j: _upload_with_title_dialog(j))\
+                        .props("flat dense color=primary")
 
             # Reason column right after status (not after duration) -- on a
             # narrow/mobile viewport the columns past what fits need a
@@ -1275,6 +1351,36 @@ def view_analytics(root) -> None:
                                 ui.label(f"α={st['alpha']:.0f} β={st['beta']:.0f}")\
                                     .classes(f"{theme.SUB} col-md")
                                 ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
+
+                # ── Title-feature bandit posteriors ─────────────────────────────────
+                with ui.element("div").classes("studio-card w-full"):
+                    ui.label("Title-feature bandit posteriors").classes(theme.H)
+                    ui.label("Same Beta-Bernoulli Thompson Sampling machinery as the pillar "
+                             "posteriors above, but mined from the actual published title TEXT "
+                             "(scripts/analytics.py's title_features()) instead of which pillar or "
+                             "hook-strategy was used — length bucket, emoji presence, and whether "
+                             "the benefit-list keyword format (study/focus/relax/sleep) was used. "
+                             "generate_seo.py's title-variant pick multiplies this in alongside the "
+                             "hook-strategy weighting above.")\
+                        .classes(theme.SUB)
+                    feature_posteriors = analytics_mod.title_feature_bandit_posteriors(analytics=data_dict)
+                    if not feature_posteriors:
+                        ui.label("No title performance data logged yet — needs synced analytics "
+                                 "on at least a few published videos.").classes(theme.SUB + " mt-3")
+                    else:
+                        with ui.column().classes("w-full gap-3 mt-2"):
+                            for dim, buckets in sorted(feature_posteriors.items()):
+                                ui.label(dim.replace("_", " ")).classes("text-sm font-semibold")
+                                with ui.column().classes("w-full gap-1"):
+                                    for bucket, st in sorted(buckets.items(), key=lambda kv: -kv[1]["mean"]):
+                                        with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
+                                            ui.label(bucket).classes("text-sm font-medium col-md")
+                                            ui.linear_progress(value=st["mean"], show_value=False)\
+                                                .classes("grow").props("rounded color=primary")
+                                            ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm col-xs")
+                                            ui.label(f"α={st['alpha']:.0f} β={st['beta']:.0f}")\
+                                                .classes(f"{theme.SUB} col-md")
+                                            ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
 
                 # ── Cohort growth curves + forecast + viral-moment flags ────────────
                 _TOP_N = 6

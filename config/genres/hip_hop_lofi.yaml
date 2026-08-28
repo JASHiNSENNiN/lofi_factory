@@ -17,5 +17,6 @@ cozy_bias: false
 drum_kit_programs: [0, 24, 25]
 drum_sampler_pattern: boom_bap
 mix: {lpf_hz: 9000, bitcrush_bits: 10, reverb_room: 0.35, reverb_wet: 0.18, tape_wobble_depth: 0.2,
-  compress_ratio: 3.5, vinyl_crackle: 0.15, use_ir_reverb: false, sidechain_duck: true}
+  compress_ratio: 3.5, vinyl_crackle: 0.15, use_ir_reverb: true, sidechain_duck: true,
+  duck_profile: hiphop, presence_db: -1.5, warmth_db: 1.5}
 song_form: funk

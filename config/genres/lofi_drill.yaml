@@ -18,7 +18,8 @@ bass_style: glide_808
 texture: {program: GM_ORGAN_ROCK, style: stab}
 drum_sampler_pattern: 808_trap
 mix: {lpf_hz: 7200, bitcrush_bits: 8, reverb_room: 0.35, reverb_wet: 0.2, tape_wobble_depth: 0.28,
-  compress_ratio: 4.2, vinyl_crackle: 0.2, use_ir_reverb: false, sidechain_duck: true}
+  compress_ratio: 4.2, vinyl_crackle: 0.2, use_ir_reverb: true, sidechain_duck: true,
+  duck_profile: hiphop, presence_db: -1.5, warmth_db: 1.5}
 # research/theory/arrangement-structure.md #6: lofi_drill is buildup/release-
 # driven, not wallpaper music, and was silently falling back to 'standard'.
 song_form: build

@@ -12,6 +12,8 @@ procedural — no neural nets, nothing trained on a corpus. LLM calls
 (Groq/Gemini) exist only as an explicit opt-in failsafe — see
 [Environment variables](#environment-variables).
 
+AI is trash. Algorithm is art.
+
 The channel-growth side is similarly procedural/statistical rather than
 black-box: a Thompson Sampling bandit picks concept pillars, durations,
 title variants, and thumbnails; a two-proportion z-test gates thumbnail

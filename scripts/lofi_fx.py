@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import random
 import os
-from scipy.signal import lfilter as _lfilter
+from scipy.signal import lfilter as _lfilter, resample_poly as _resample_poly
 
 from scripts import genre_presets
 
@@ -63,6 +63,10 @@ _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 # a small opt-in membership set rather than a per-preset flag on all 22
 # entries in _GENRE_PRESETS.
 _SIDECHAIN_DUCK_GENRES = genre_presets.build_sidechain_duck_genres()
+# {genre_key: 'house' | 'hiphop'} for genres in _SIDECHAIN_DUCK_GENRES --
+# which duck character each wants (see _DUCK_PROFILES near
+# _apply_kick_sidechain_duck for the attack/release/depth values).
+_DUCK_PROFILES_BY_GENRE = genre_presets.build_duck_profiles()
 
 # Per-track mastering LUFS target (see _apply_lufs_mastering). Deliberately
 # set BELOW assemble_video.py's final video-level loudnorm target of -14
@@ -136,7 +140,7 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     from pedalboard import (
         Pedalboard, Bitcrush, Compressor, Reverb,
         HighpassFilter, LowpassFilter, Gain, Resample,
-        GSMFullRateCompressor,
+        GSMFullRateCompressor, PeakFilter,
     )
 
     preset = dict(_GENRE_PRESETS.get(sub_genre or "", _DEFAULT_PRESET))
@@ -149,12 +153,25 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     depth    = min(0.45, preset["wobble_depth"] + random.uniform(-0.03, 0.03))
     c_ratio  = preset["compress_ratio"]
     vinyl_vol = preset["vinyl"]   + random.uniform(-0.02, 0.02)
+    presence_db = preset.get("presence_db", 0.0)
+    warmth_db   = preset.get("warmth_db", 0.0)
     sr_target = _SR_TARGET.get(sub_genre or "", _SR_DEFAULT)
 
     # Energy scales wow/flutter depth (more wobble = more energy) and compression
     energy_scale = {"low": 0.65, "medium": 1.0, "high": 1.35}.get(energy, 1.0)
     depth  = round(min(0.45, depth * energy_scale), 3)
     c_ratio = c_ratio * energy_scale
+
+    # Full-band tape saturation wet mix (research/theory/mixing-texture.md
+    # item 6): derived from the genre's existing "grit" signal (lower
+    # bitcrush bits / lower lowpass cutoff both already vary by genre, dark/
+    # hip-hop genres already sitting lower on both per item 8's analysis)
+    # rather than a new hardcoded genre list -- boom-bap-leaning genres land
+    # near 20% wet, clean/ambient genres near 5%.
+    _bits_grit = 1.0 - (bits - 6) / (16 - 6)
+    _lpf_grit  = 1.0 - min(1.0, max(0.0, (lpf - 4000) / (12000 - 4000)))
+    _grit = max(0.0, min(1.0, (_bits_grit + _lpf_grit) / 2))
+    tape_sat_mix = 0.05 + _grit * (0.20 - 0.05)
 
     # Chain is split around _apply_wow_flutter (a hand-rolled variable-delay
     # effect, not a Pedalboard plugin — Pedalboard has no wow/flutter unit)
@@ -182,6 +199,13 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
             dry_level=1.0 - wet,
             width=0.7,
         ),
+        # Per-subgenre EQ conventions (research/theory/mixing-texture.md
+        # item 8): presence_db is a 3-5kHz cut (boom-bap/hip-hop genres get
+        # a small negative value to tame digital harshness), warmth_db is a
+        # 100-200Hz boost (same genres). Both default to 0.0 (no-op
+        # PeakFilter) for any genre that doesn't set them.
+        PeakFilter(cutoff_frequency_hz=4000, gain_db=presence_db, q=1.0),
+        PeakFilter(cutoff_frequency_hz=150,  gain_db=warmth_db,   q=0.9),
         Gain(gain_db=-1.5),
     ])
 
@@ -191,6 +215,11 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
 
     processed = board_pre(audio_in, sr, reset=True)
     processed = _apply_wow_flutter(processed, sr, depth)
+    # Static tape-head EQ coloration, distinct from the time-varying
+    # wow/flutter modulation just above (research/theory/mixing-texture.md
+    # item 1's second finding) -- same "tape transport character" family,
+    # applied together before the broader lowpass/reverb shaping below.
+    processed = _apply_head_bump(processed, sr, depth)
     processed = board_post(processed, sr, reset=True)
 
     # GSM codec artifacts for dark/phonk/vaporwave — old Nokia phone grit.
@@ -200,13 +229,20 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
         gsm_out = gsm_board(processed, sr, reset=True)
         processed = processed * 0.75 + gsm_out * 0.25
 
-    # IR convolution reverb for jazz/piano genres — replaces algorithmic Reverb above
-    # when real room IR files are present in assets/ir/.
-    # 40% wet: adds authentic room acoustics without washing out the dry signal.
-    if sub_genre in _IR_GENRES:
-        ir_wet = _apply_ir_reverb(processed, sr)
+    # IR convolution reverb for jazz/piano genres (room/hall character) and
+    # boom-bap/hip-hop-lofi genres (procedural plate character, see
+    # _PLATE_IR_GENRES) — replaces algorithmic Reverb above when a genre-
+    # appropriate IR is present in assets/ir/. 40% wet: adds authentic
+    # room/hardware-reverb acoustics without washing out the dry signal.
+    if sub_genre in _IR_GENRES or sub_genre in _PLATE_IR_GENRES:
+        ir_wet = _apply_ir_reverb(processed, sr, sub_genre=sub_genre)
         if ir_wet is not None:
             processed = processed * 0.60 + ir_wet * 0.40
+
+    # Gated reverb -- 80s-drum-machine punch for lofi_synthwave specifically
+    # (see _GATED_REVERB_GENRES / _apply_gated_reverb).
+    if sub_genre in _GATED_REVERB_GENRES:
+        processed = _apply_gated_reverb(processed, sr)
 
     # Stereo widening (mid-side) -- the main chain above has no dry-signal
     # stereo-field control beyond Reverb's wet-tail width.
@@ -215,19 +251,32 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     # Sub-bass warmth/saturation, parallel-mixed under the low end.
     processed = _apply_sub_bass_saturation(processed, sr)
 
+    # Full-band tape saturation (research/theory/mixing-texture.md item 6)
+    # -- genuinely distinct in scope from the sub-bass-only stage just
+    # above (full spectrum vs. <150Hz); mix % derived from genre grit, see
+    # tape_sat_mix above.
+    processed = _apply_tape_saturation(processed, sr, tape_sat_mix)
+
     # Kick-triggered sidechain "pump" -- gated per-genre (see
-    # _SIDECHAIN_DUCK_GENRES): only genres that actually want the
-    # house/hip-hop pumping character get it. Applied before the vinyl
-    # crackle layer (crackle shouldn't itself get ducked) and before
-    # LUFS mastering (so loudness is measured/targeted on the final
+    # _SIDECHAIN_DUCK_GENRES) with a genre-appropriate profile (see
+    # _DUCK_PROFILES_BY_GENRE / _DUCK_PROFILES: house wants an audible
+    # pump, hip-hop wants the duck inaudible-as-an-effect). Applied before
+    # the vinyl crackle layer (crackle shouldn't itself get ducked) and
+    # before LUFS mastering (so loudness is measured/targeted on the final
     # dynamics, not pre-duck).
     if sub_genre in _SIDECHAIN_DUCK_GENRES:
-        processed = _apply_kick_sidechain_duck(processed, sr)
+        duck_profile = _DUCK_PROFILES_BY_GENRE.get(sub_genre, 'hiphop')
+        processed = _apply_kick_sidechain_duck(processed, sr, profile=duck_profile)
 
     # Add vinyl crackle (white noise shaped like old record surface)
     if vinyl_vol > 0.01:
-        crackle = _make_crackle(processed.shape[1], vinyl_vol)
+        crackle = _make_crackle(processed.shape[1], vinyl_vol, sr)
         processed = processed + crackle
+
+    # Multiband + parallel mastering glue (see _apply_multiband_glue) --
+    # runs before the LUFS/peak-ceiling stage below, matching the
+    # "multiband after EQ, before the limiter" mastering-chain convention.
+    processed = _apply_multiband_glue(processed, sr)
 
     # Per-track mastering: target a conservative LUFS level (see
     # _TRACK_LUFS_TARGET for why -17 and not -14) rather than only
@@ -256,13 +305,53 @@ _WOW_HZ_RANGE     = (0.6, 1.4)
 _FLUTTER_HZ_RANGE = (5.0, 9.0)
 _WOW_FLUTTER_MIX  = 0.65   # wow (slow) vs flutter (fast) blend, wow-dominant
 
+# %WRMS (weighted RMS speed deviation, DIN/NAB/CCIR/JIS standard) anchor
+# points for the depth mapping below -- research/theory/mixing-texture.md
+# item 1. Real specs: hi-fi cassette decks <=+-0.2% WRMS, non-hi-fi cassette
+# <=+-0.4%, a studio reel-to-reel (Otari MX5050-III-2 @ 15ips) ~0.09%,
+# consumer reel-to-reel (60s/70s @ 7.5ips) ~0.25%. "Clean" preset character
+# anchors to the hi-fi/studio end; "gritty consumer cassette" anchors to the
+# non-hi-fi end.
+_WRMS_CLEAN_PCT  = 0.125   # midpoint of 0.1-0.15% WRMS
+_WRMS_GRITTY_PCT = 0.35    # midpoint of 0.3-0.4% WRMS
+# %WRMS translates to raw peak pitch/speed deviation at roughly 2-3x the RMS
+# figure (real-world tape-spec convention cited in the research) -- use the
+# midpoint of that cited range.
+_WRMS_TO_PEAK_RATIO = 2.5
+
+
+def _wow_flutter_depth_ms(depth: float) -> float:
+    """
+    Map the genre preset's 0-0.45 wobble_depth knob onto a %WRMS-anchored
+    delay-line depth in ms, instead of the previous flat, unanchored
+    0.5-3.5ms curve (research/theory/mixing-texture.md item 1: "the depth
+    range isn't anchored to any real spec").
+
+    `depth` linearly selects a %WRMS value between the clean and gritty
+    anchor points above, converts to peak speed deviation via
+    _WRMS_TO_PEAK_RATIO, then maps that onto ms -- calibrated so gritty-
+    cassette character (depth near 0.45) lands in the same ms ballpark the
+    prior flat mapping's upper end did (the research doc's own cross-check:
+    ~0.3-0.4% WRMS implies ~0.8-1.2% peak deviation, "the same ballpark the
+    code already targets"). The audible result is intentionally similar to
+    before -- what changes is that the curve is now derived from a
+    documented real-world spec instead of being an arbitrary constant.
+    """
+    d = min(0.45, max(0.0, depth))
+    wrms_pct = _WRMS_CLEAN_PCT + (d / 0.45) * (_WRMS_GRITTY_PCT - _WRMS_CLEAN_PCT)
+    peak_pct = wrms_pct * _WRMS_TO_PEAK_RATIO
+    peak_pct_min = _WRMS_CLEAN_PCT * _WRMS_TO_PEAK_RATIO
+    peak_pct_max = _WRMS_GRITTY_PCT * _WRMS_TO_PEAK_RATIO
+    frac = (peak_pct - peak_pct_min) / (peak_pct_max - peak_pct_min)
+    return 0.5 + max(0.0, min(1.0, frac)) * 3.0
+
 
 def _apply_wow_flutter(audio: "np.ndarray", sr: int, depth: float) -> "np.ndarray":
     """
     `audio` is (channels, samples). `depth` is the genre preset's
     wobble_depth value (0-0.45, already energy-scaled by the caller) —
-    mapped to a 0.5-3.5ms modulation depth, the range real tape wow/flutter
-    actually sits at.
+    mapped to a %WRMS-anchored modulation depth via _wow_flutter_depth_ms()
+    (see that function for the real-tape-spec derivation).
 
     Implementation: offset the read position (in fractional samples) by the
     wow+flutter LFO blend, then linearly interpolate the signal at that
@@ -276,7 +365,7 @@ def _apply_wow_flutter(audio: "np.ndarray", sr: int, depth: float) -> "np.ndarra
     if n_samples < 4:
         return audio
 
-    depth_ms = 0.5 + min(0.45, max(0.0, depth)) * 6.5
+    depth_ms = _wow_flutter_depth_ms(depth)
     depth_samples = depth_ms / 1000.0 * sr
 
     wow_hz     = random.uniform(*_WOW_HZ_RANGE)
@@ -299,6 +388,138 @@ def _apply_wow_flutter(audio: "np.ndarray", sr: int, depth: float) -> "np.ndarra
     out = np.empty_like(audio)
     for ch in range(audio.shape[0]):
         out[ch] = audio[ch, idx_floor] * (1.0 - frac) + audio[ch, idx_ceil] * frac
+    return out.astype(np.float32)
+
+
+# ── Section-boundary transition FX ───────────────────────────────────────────
+# research/theory/arrangement-structure.md: vinyl stop / reverse riser /
+# filter sweep, the standard lofi/hip-hop section-transition vocabulary,
+# previously entirely unmodeled anywhere in this codebase. Each function
+# applies its effect to a short window of `audio` ending at `at_sample` (the
+# section-boundary point) -- content at/after `at_sample` is left untouched
+# so the next section picks up normally; only the window leading into the
+# boundary is affected. See generate_music_gemini.py's
+# _SECTION_TRANSITION_FX for which effect pairs with which section-boundary
+# label pair, and that module's note on the remaining per-track pipeline
+# wiring (converting a section's bar offset to `at_sample` and calling
+# these) that's follow-up work beyond this session.
+
+def _apply_vinyl_stop(audio: "np.ndarray", sr: int, at_sample: int,
+                      duration_s: float = 0.6) -> "np.ndarray":
+    """
+    Record-player-losing-power effect: the `duration_s` window ending at
+    `at_sample` is read at a progressively slowing rate (playback speed
+    eases from 1.0 down to ~0.15 -- real vinyl physics pulls pitch AND
+    tempo down together, not just a volume fade), via the same fractional-
+    sample variable-delay-line interpolation _apply_wow_flutter uses,
+    fading to near-silence over the final ~15% of the window (the needle
+    lifting). Audio at/after `at_sample` is untouched -- the next section
+    resumes normally, this only affects the hand-off into it.
+    """
+    import numpy as np
+
+    n_samples = audio.shape[1]
+    at_sample = max(0, min(n_samples, at_sample))
+    win = min(int(duration_s * sr), at_sample)
+    if win < 4:
+        return audio
+
+    start = at_sample - win
+    out = audio.copy()
+
+    # Speed curve: 1.0 (normal) at window start -> ~0.15 (nearly stopped) at
+    # at_sample, eased (not linear) so the slowdown accelerates toward the
+    # end, matching how a stopping turntable actually decelerates.
+    t = np.linspace(0.0, 1.0, win, dtype=np.float64)
+    speed = 1.0 - 0.85 * (t ** 2)
+    read_pos = start + np.cumsum(speed)
+    read_pos = np.clip(read_pos, 0, n_samples - 1)
+    idx_floor = np.floor(read_pos).astype(np.int64)
+    idx_ceil  = np.minimum(idx_floor + 1, n_samples - 1)
+    frac = (read_pos - idx_floor).astype(np.float32)
+
+    fade_len = max(1, int(win * 0.15))
+    fade = np.concatenate([np.ones(win - fade_len, dtype=np.float32),
+                           np.linspace(1.0, 0.0, fade_len, dtype=np.float32)])
+
+    for ch in range(audio.shape[0]):
+        stretched = audio[ch, idx_floor] * (1.0 - frac) + audio[ch, idx_ceil] * frac
+        out[ch, start:at_sample] = stretched * fade
+    return out.astype(np.float32)
+
+
+def _apply_reverse_riser(audio: "np.ndarray", sr: int, at_sample: int,
+                         duration_s: float = 1.0, amplitude: float = 0.25) -> "np.ndarray":
+    """
+    Reversed filtered-noise swell building INTO the transition point: a
+    highpassed noise burst whose amplitude ramps up from silence to
+    `amplitude` across `duration_s`, landing right at `at_sample` -- the
+    standard hip-hop/electronic "riser" pulling the listener into the next
+    section, added under (not replacing) the existing audio in that window.
+    """
+    import numpy as np
+
+    n_samples = audio.shape[1]
+    at_sample = max(0, min(n_samples, at_sample))
+    win = min(int(duration_s * sr), at_sample)
+    if win < 4:
+        return audio
+
+    start = at_sample - win
+    noise = np.random.randn(win).astype(np.float32)
+    # Highpass (remove content below ~800Hz) for the bright "swoosh"
+    # character risers conventionally have, via the same one-pole technique
+    # used elsewhere in this module (here as a high-pass: signal minus its
+    # own lowpassed version).
+    alpha = float(np.exp(-2.0 * np.pi * 800.0 / sr))
+    lowpassed = _lfilter([1.0 - alpha], [1.0, -alpha], noise).astype(np.float32)
+    highpassed = noise - lowpassed
+
+    ramp = np.linspace(0.0, 1.0, win, dtype=np.float32) ** 1.5   # accelerating build
+    riser = highpassed * ramp * amplitude
+
+    out = audio.copy()
+    for ch in range(audio.shape[0]):
+        out[ch, start:at_sample] = out[ch, start:at_sample] + riser
+    return out.astype(np.float32)
+
+
+def _apply_filter_sweep(audio: "np.ndarray", sr: int, at_sample: int,
+                        duration_s: float = 1.5, direction: str = "down") -> "np.ndarray":
+    """
+    Automated lowpass-cutoff sweep leading into the transition point:
+    `direction='down'` (the common breakdown-entry sweep) ramps the cutoff
+    from wide-open down to a muffled ~400Hz by `at_sample`; `'up'` does the
+    reverse (building out of a breakdown). Block-based (not a continuously
+    modulated single filter) -- short overlapping chunks each get their own
+    static one-pole lowpass coefficient and are crossfaded, a simpler and
+    more numerically robust approximation of a swept filter than modulating
+    IIR coefficients sample-by-sample.
+    """
+    import numpy as np
+
+    n_samples = audio.shape[1]
+    at_sample = max(0, min(n_samples, at_sample))
+    win = min(int(duration_s * sr), at_sample)
+    if win < 64:
+        return audio
+
+    start = at_sample - win
+    n_blocks = max(4, win // 1024)
+    block_len = win // n_blocks
+    cutoffs = np.linspace(12000.0, 400.0, n_blocks)
+    if direction == "up":
+        cutoffs = cutoffs[::-1]
+
+    out = audio.copy()
+    for ch in range(audio.shape[0]):
+        segment = audio[ch, start:start + block_len * n_blocks].copy()
+        filtered = np.empty_like(segment)
+        for b in range(n_blocks):
+            lo, hi = b * block_len, (b + 1) * block_len
+            alpha = float(np.exp(-2.0 * np.pi * cutoffs[b] / sr))
+            filtered[lo:hi] = _lfilter([1.0 - alpha], [1.0, -alpha], segment[lo:hi])
+        out[ch, start:start + block_len * n_blocks] = filtered
     return out.astype(np.float32)
 
 
@@ -338,6 +559,77 @@ def _apply_sub_bass_saturation(audio: "np.ndarray", sr: int) -> "np.ndarray":
     saturated = (np.tanh(lowpassed * drive) / np.tanh(drive)).astype(np.float32)
 
     return (audio + (saturated - lowpassed) * _SUB_BASS_MIX).astype(np.float32)
+
+
+def _apply_head_bump(audio: "np.ndarray", sr: int, wobble_depth: float) -> "np.ndarray":
+    """
+    Static (non-time-varying) resonant EQ boost around 50-70Hz simulating
+    tape playback "head bump" -- real tape-head pole-piece/gap-length
+    geometry interacting with wavelengths near the gap length (research/
+    theory/mixing-texture.md item 1), a currently-missing effect distinct
+    from the time-varying wow/flutter modulation above.
+
+    Center frequency/gain are implied by the same wobble_depth the genre
+    preset already sets: a higher wobble depth implies a lower/more
+    consumer-grade implied tape speed, whose head bump sits lower (nearer
+    50Hz) and more pronounced (nearer +4dB) than a cleaner, higher-speed
+    transport's (nearer 70Hz / +2dB).
+    """
+    from pedalboard import Pedalboard, PeakFilter
+
+    d = min(0.45, max(0.0, wobble_depth))
+    center_hz = 70.0 - (d / 0.45) * 20.0   # clean (d~0) -> 70Hz, gritty (d~0.45) -> 50Hz
+    gain_db   = 2.0 + (d / 0.45) * 2.0     # +2dB clean -> +4dB gritty
+    board = Pedalboard([PeakFilter(cutoff_frequency_hz=center_hz, gain_db=gain_db, q=1.2)])
+    return board(audio, sr, reset=True)
+
+
+# Full-band tape saturation: gentler drive than the sub-bass-only stage
+# since it's applied across the whole spectrum, not a band-limited signal.
+_TAPE_SATURATION_DRIVE_DB   = 8.0
+_TAPE_SATURATION_OVERSAMPLE = 2
+
+
+def _apply_tape_saturation(audio: "np.ndarray", sr: int, mix: float) -> "np.ndarray":
+    """
+    Full-band tape saturation -- a genuinely distinct effect from
+    _apply_sub_bass_saturation (band-limited to <150Hz): tape's magnetic
+    hysteresis behaves as a broadly symmetric soft clipper (tanh-like),
+    producing mostly odd harmonics that read as warmth/presence rather than
+    "buzz," unlike tube saturation's asymmetric even-harmonic character
+    (research/theory/mixing-texture.md item 6). Same tanh-drive pattern as
+    the sub-bass function, but applied full-spectrum instead of pre-filtered.
+
+    `mix` is the wet blend (0-1) -- research doc: ~10-20% for boom-bap-
+    leaning genres, ~5-10% for ambient/piano genres; the caller decides
+    which based on genre.
+
+    Full-band waveshaping can generate harmonics above Nyquist that alias
+    back as inharmonic noise -- the sub-bass function mostly dodges this by
+    only driving already-lowpassed content, so this one oversamples 2x
+    (polyphase resampling) before the tanh nonlinearity and downsamples
+    back afterward, specifically to avoid that.
+    """
+    import numpy as np
+
+    if mix <= 0.0:
+        return audio
+
+    up = _resample_poly(audio, _TAPE_SATURATION_OVERSAMPLE, 1, axis=-1)
+    drive = 10 ** (_TAPE_SATURATION_DRIVE_DB / 20.0)
+    saturated_up = (np.tanh(up * drive) / np.tanh(drive)).astype(np.float32)
+    saturated = _resample_poly(saturated_up, 1, _TAPE_SATURATION_OVERSAMPLE, axis=-1)
+
+    # resample_poly's up/down round-trip can differ by a sample or two from
+    # the input length -- trim/pad so the blend below stays sample-aligned.
+    n = audio.shape[-1]
+    if saturated.shape[-1] > n:
+        saturated = saturated[..., :n]
+    elif saturated.shape[-1] < n:
+        pad = n - saturated.shape[-1]
+        saturated = np.pad(saturated, ((0, 0), (0, pad)), mode='edge')
+
+    return (audio * (1.0 - mix) + saturated * mix).astype(np.float32)
 
 
 # ── Per-track LUFS mastering ─────────────────────────────────────────────────
@@ -383,16 +675,71 @@ def _apply_lufs_mastering(audio: "np.ndarray", sr: int,
     return (audio * gain_linear).astype(np.float32)
 
 
+# ── Multiband + parallel mastering-chain compression ─────────────────────────
+# New research this session (no prior research/theory/*.md doc covers the
+# mastering chain beyond mixing-texture.md's 7 scoped items): a 2-band
+# crossover at 120-200Hz (isolating kick/bass from everything above) is a
+# common mastering-chain multiband setup, used as a problem-solving/glue
+# tool after EQ and before the limiter -- here, before the LUFS-mastering +
+# peak-ceiling stage that already plays that "limiter" role. Parallel
+# compression (blending a compressed copy back under the dry signal) adds
+# density without fully sacrificing transient dynamics. NOTE: unlike
+# presence_db/warmth_db, the research found no genre-specific guidance for
+# these parameters -- applied gently/universally (light ratios, modest
+# parallel blend) as a subtle mastering "glue" rather than genre-tuned;
+# real listening-test iteration to differentiate by genre is legitimate
+# follow-up work, flagged rather than guessed at here.
+_MULTIBAND_CROSSOVER_HZ = 150.0
+
+
+def _apply_multiband_glue(audio: "np.ndarray", sr: int,
+                          low_ratio: float = 3.0, high_ratio: float = 2.0,
+                          parallel_mix: float = 0.25) -> "np.ndarray":
+    """
+    Split at _MULTIBAND_CROSSOVER_HZ, compress each band independently
+    (Pedalboard Compressor), recombine, then parallel-blend the compressed
+    signal back under the original dry signal at `parallel_mix`.
+    """
+    import numpy as np
+    from pedalboard import Pedalboard, Compressor
+    from scipy.signal import butter, sosfilt
+
+    sos_low = butter(2, _MULTIBAND_CROSSOVER_HZ, btype='lowpass', fs=sr, output='sos')
+    low_band = sosfilt(sos_low, audio, axis=-1).astype(np.float32)
+    high_band = (audio - low_band).astype(np.float32)
+
+    low_board = Pedalboard([Compressor(threshold_db=-18, ratio=low_ratio,
+                                        attack_ms=15, release_ms=150)])
+    high_board = Pedalboard([Compressor(threshold_db=-16, ratio=high_ratio,
+                                         attack_ms=8, release_ms=120)])
+
+    low_compressed = low_board(low_band, sr, reset=True)
+    high_compressed = high_board(high_band, sr, reset=True)
+    compressed = low_compressed + high_compressed
+
+    return (audio * (1.0 - parallel_mix) + compressed * parallel_mix).astype(np.float32)
+
+
 # ── Kick-triggered sidechain ducking ─────────────────────────────────────────
 
 _DUCK_KICK_BAND_HZ   = (45.0, 120.0)  # kick fundamental range
-_DUCK_ATTACK_MS      = 6.0            # fast: catches the kick transient promptly
-_DUCK_RELEASE_MS     = 180.0          # slow: the classic audible "pump" decay
-_DUCK_AMOUNT_DB      = 4.0            # how far the ducked gain dips
 _DUCK_TRIGGER_FRAC   = 0.22           # fraction of the kick envelope's own peak needed to trigger
 
+# Two duck profiles instead of one shared hardcoded triple (research/theory/
+# mixing-texture.md item 4): house wants an audible rhythmic pump (slower
+# release, deeper duck, commonly timed to a quarter note); hip-hop wants the
+# duck inaudible-as-an-effect, just kick/bass punch and separation (fast
+# attack, much shorter release, shallower duck). 'hiphop' also serves as the
+# fallback for any genre that opts into sidechain_duck without picking a
+# profile (see genre_presets.build_duck_profiles()), matching this module's
+# original single hardcoded character.
+_DUCK_PROFILES: dict[str, dict[str, float]] = {
+    'house':  {'attack_ms': 2.0, 'release_ms': 200.0, 'duck_db': 5.5},
+    'hiphop': {'attack_ms': 3.0, 'release_ms': 60.0,  'duck_db': 2.5},
+}
 
-def _kick_envelope(mono: "np.ndarray", sr: int) -> "np.ndarray":
+
+def _kick_envelope(mono: "np.ndarray", sr: int, attack_ms: float, release_ms: float) -> "np.ndarray":
     """
     Fast-attack/slow-release envelope of the kick-band content in `mono`:
     bandpass to the kick fundamental range, rectify, then take the
@@ -410,15 +757,15 @@ def _kick_envelope(mono: "np.ndarray", sr: int) -> "np.ndarray":
     band = sosfilt(sos, mono)
     rectified = np.abs(band)
 
-    alpha_attack  = np.exp(-1.0 / (_DUCK_ATTACK_MS  / 1000.0 * sr))
-    alpha_release = np.exp(-1.0 / (_DUCK_RELEASE_MS / 1000.0 * sr))
+    alpha_attack  = np.exp(-1.0 / (attack_ms  / 1000.0 * sr))
+    alpha_release = np.exp(-1.0 / (release_ms / 1000.0 * sr))
     fast = _lfilter([1.0 - alpha_attack],  [1.0, -alpha_attack],  rectified)
     slow = _lfilter([1.0 - alpha_release], [1.0, -alpha_release], rectified)
     return np.maximum(fast, slow).astype(np.float32)
 
 
 def _apply_kick_sidechain_duck(audio: "np.ndarray", sr: int,
-                               duck_db: float = _DUCK_AMOUNT_DB) -> "np.ndarray":
+                               profile: str = 'hiphop') -> "np.ndarray":
     """
     Self-sidechain "pump": detect kick-band transients from the mix itself
     and duck the FULL mix gain briefly after each one -- the classic
@@ -430,12 +777,16 @@ def _apply_kick_sidechain_duck(audio: "np.ndarray", sr: int,
     (_SIDECHAIN_DUCK_GENRES) since the pumping character is wrong for
     anything meant to sound spacious/unpumped.
 
+    `profile` selects attack/release/depth from _DUCK_PROFILES ('house' or
+    'hiphop' -- see that dict's comment for the genre-convention rationale).
+
     `audio` is (channels, samples). Returns the same shape.
     """
     import numpy as np
 
+    params = _DUCK_PROFILES.get(profile, _DUCK_PROFILES['hiphop'])
     mono = audio.mean(axis=0)
-    envelope = _kick_envelope(mono, sr)
+    envelope = _kick_envelope(mono, sr, params['attack_ms'], params['release_ms'])
     env_peak = float(np.max(envelope)) + 1e-9
     env_norm = envelope / env_peak
 
@@ -446,26 +797,138 @@ def _apply_kick_sidechain_duck(audio: "np.ndarray", sr: int,
         return audio
 
     duck_depth = triggered / (float(np.max(triggered)) + 1e-9)   # renormalize 0..1 on trigger content
-    gain_floor = 10 ** (-duck_db / 20.0)
+    gain_floor = 10 ** (-params['duck_db'] / 20.0)
     gain_curve = (1.0 - duck_depth * (1.0 - gain_floor)).astype(np.float32)
 
     return (audio * gain_curve[np.newaxis, :]).astype(np.float32)
 
 
-def _apply_ir_reverb(audio: "np.ndarray", sr: int) -> "np.ndarray | None":
+# Vintage-hardware-reverb IR (plate character) -- procedurally synthesized
+# (see _synthesize_plate_ir()) rather than sourced from a third-party pack
+# (the research doc names Convology XT's free set as an alternative), to
+# stay dependency-free/procedural, matching this project's no-external-
+# black-box-assets posture. Distinct, historically-correct reference
+# texture for boom-bap/SP-1200-era production (research/theory/
+# mixing-texture.md items 5+7), vs. the existing acoustic-room/hall IRs
+# (assets/ir/*.wav from Voxengo's pack) the original jazz/piano-gated
+# _IR_GENRES set already uses -- kept as a separate pool so boom-bap genres
+# never randomly draw a salon/hall IR and jazz/piano genres never draw the
+# plate.
+_PLATE_IR_FILENAME = "procedural_plate.wav"
+_PLATE_IR_GENRES = {"hip_hop_lofi", "chillhop", "lo_fi_funk", "lofi_drill", "lofi_phonk"}
+
+
+def _synthesize_plate_ir(sr: int = 44100, duration_s: float = 1.1) -> "np.ndarray":
     """
-    Apply convolution reverb using a randomly chosen IR file from assets/ir/.
-    Returns the wet signal (same shape as input), or None if no IR files exist
-    or audiomentations is unavailable.
+    Procedurally synthesize a basic plate-reverb-style impulse response:
+    dense exponentially-decaying filtered noise, a standard, well-understood
+    approximation of plate-reverb character (bright, dense, fast-decaying,
+    with the low end rolled off since a real metal plate doesn't reproduce
+    it well) -- see the module-level comment above _PLATE_IR_FILENAME for
+    why this is synthesized rather than sourced from a third-party pack.
+    """
+    import numpy as np
+    n = int(sr * duration_s)
+    t = np.arange(n, dtype=np.float64) / sr
+    noise = np.random.randn(n).astype(np.float64)
+    decay = np.exp(-t / 0.35)   # shorter/denser decay than a room/hall IR
+    ir = noise * decay
+    alpha = np.exp(-2.0 * np.pi * 300.0 / sr)   # gentle ~300Hz high-pass
+    ir = ir - _lfilter([1.0 - alpha], [1.0, -alpha], ir)
+    ir = ir / (float(np.max(np.abs(ir))) + 1e-9) * 0.9
+    return ir.astype(np.float32)
+
+
+def _ensure_plate_ir_file() -> str:
+    """Write the procedural plate IR to assets/ir/ once (idempotent -- skips
+    synthesis if the file already exists on disk) and return its path, so
+    _apply_ir_reverb()'s file-based selection can pick it up like any other
+    IR file in that directory."""
+    import soundfile as sf
+    path = os.path.join(_IR_DIR, _PLATE_IR_FILENAME)
+    if not os.path.exists(path):
+        os.makedirs(_IR_DIR, exist_ok=True)
+        sf.write(path, _synthesize_plate_ir(), 44100, subtype="PCM_16")
+    return path
+
+
+# Gated reverb (research/theory/rhythm-groove.md follow-up research this
+# session closed for lofi_synthwave's self-flagged gap: "would benefit from
+# a follow-up research pass, particularly on gated-reverb drum-machine
+# production technique"). The single most identity-defining 80s/synthwave
+# drum effect (Phil Collins "In the Air Tonight"-style): a loud reverb send
+# on transients, cut short by a noise gate instead of left to decay
+# naturally. Genre-gated -- wrong character for anything not going for that
+# specific punchy-80s-drum-machine sound.
+_GATED_REVERB_GENRES = {"lofi_synthwave"}
+_GATE_HOLD_MS = 120.0   # how long the gated reverb tail stays open before hard-cutting
+
+
+def _apply_gated_reverb(audio: "np.ndarray", sr: int, mix: float = 0.35) -> "np.ndarray":
+    """
+    Detect transients (snare/clap frequency band), build a full/wet reverb
+    tail via Pedalboard's Reverb, then hard-gate that WET signal only to
+    _GATE_HOLD_MS after each transient onset before blending back under the
+    dry signal -- the gate is what makes this "gated reverb" rather than
+    just "a lot of reverb."
+    """
+    import numpy as np
+    from pedalboard import Pedalboard, Reverb
+    from scipy.signal import butter, sosfilt
+
+    mono = audio.mean(axis=0)
+    sos = butter(2, [1500.0, 6000.0], btype='bandpass', fs=sr, output='sos')
+    band = np.abs(sosfilt(sos, mono))
+    alpha_attack  = np.exp(-1.0 / (3.0  / 1000.0 * sr))
+    alpha_release = np.exp(-1.0 / (25.0 / 1000.0 * sr))
+    fast = _lfilter([1.0 - alpha_attack],  [1.0, -alpha_attack],  band)
+    slow = _lfilter([1.0 - alpha_release], [1.0, -alpha_release], band)
+    envelope = np.maximum(fast, slow)
+    peak = float(np.max(envelope)) + 1e-9
+    env_norm = envelope / peak
+    triggered = env_norm > 0.3
+    onset_idx = np.where(triggered & ~np.roll(triggered, 1))[0]
+
+    reverb_board = Pedalboard([Reverb(room_size=0.9, damping=0.2,
+                                       wet_level=1.0, dry_level=0.0, width=1.0)])
+    wet = reverb_board(audio, sr, reset=True)
+
+    hold_samples = int(_GATE_HOLD_MS / 1000.0 * sr)
+    gate = np.zeros(audio.shape[1], dtype=np.float32)
+    for idx in onset_idx:
+        gate[idx:idx + hold_samples] = 1.0
+
+    gated_wet = wet * gate[np.newaxis, :]
+    return (audio * (1.0 - mix) + gated_wet * mix).astype(np.float32)
+
+
+def _apply_ir_reverb(audio: "np.ndarray", sr: int,
+                     sub_genre: str | None = None) -> "np.ndarray | None":
+    """
+    Apply convolution reverb using an IR file from assets/ir/. `sub_genre`
+    in _PLATE_IR_GENRES uses the procedural plate IR specifically
+    (synthesizing it on first use); every other genre randomly picks among
+    the remaining (room/hall/salon-character) files, excluding the plate --
+    keeps the two IR "pools" from mixing across the boom-bap/jazz-piano
+    genre split they're each tuned for. Returns the wet signal (same shape
+    as input), or None if no IR files exist or audiomentations is
+    unavailable.
     """
     import glob as _glob
-    ir_files = _glob.glob(os.path.join(_IR_DIR, "*.wav")) + _glob.glob(os.path.join(_IR_DIR, "*.flac"))
-    if not ir_files:
-        return None
+
+    if sub_genre in _PLATE_IR_GENRES:
+        ir_path = _ensure_plate_ir_file()
+    else:
+        all_files = (_glob.glob(os.path.join(_IR_DIR, "*.wav"))
+                     + _glob.glob(os.path.join(_IR_DIR, "*.flac")))
+        ir_files = [f for f in all_files if os.path.basename(f) != _PLATE_IR_FILENAME]
+        if not ir_files:
+            return None
+        ir_path = random.choice(ir_files)
+
     try:
         import numpy as np
         from audiomentations import ApplyImpulseResponse
-        ir_path = random.choice(ir_files)
         # ApplyImpulseResponse expects (channels, samples) float32 numpy array.
         # Constructor param is `ir_path` (singular, accepts a str/Path or a
         # list) -- the previous `ir_paths=[...]` kwarg here doesn't exist on
@@ -478,20 +941,39 @@ def _apply_ir_reverb(audio: "np.ndarray", sr: int) -> "np.ndarray | None":
         return None
 
 
-def _make_crackle(n_samples: int, amplitude: float) -> "np.ndarray":
-    """Generate sparse vinyl crackle as impulses + pink-ish noise."""
+def _make_crackle(n_samples: int, amplitude: float, sr: int = 44100) -> "np.ndarray":
+    """
+    Generate vinyl crackle as 3 additive layers instead of the previous 2
+    (research/theory/mixing-texture.md item 2's documented academic
+    gramophone-noise-synthesis decomposition): hiss (parametric-EQ-filtered
+    white noise, here a ~1kHz one-pole lowpass), pops (sparse impulses,
+    unchanged), and rumble (a new extra-lowpassed sub-40Hz noise layer
+    tracking turntable wow -- pairs naturally with the sub-bass saturation
+    stage's <150Hz band).
+    """
     import numpy as np
-    noise = np.random.randn(n_samples).astype(np.float32)
-    # 1-pole LP at ~1kHz via scipy (54× faster than Python loop for long audio)
-    alpha = 0.92
-    noise = _lfilter([1.0 - alpha], [1.0, -alpha], noise).astype(np.float32)
-    # Sparse crackle impulses (pops)
+
+    # Hiss: ~1kHz-lowpassed noise floor.
+    hiss = np.random.randn(n_samples).astype(np.float32)
+    alpha_hiss = 0.92
+    hiss = _lfilter([1.0 - alpha_hiss], [1.0, -alpha_hiss], hiss).astype(np.float32)
+
+    # Pops: sparse crackle impulses.
     n_pops = max(1, int(n_samples / 44100 * random.randint(3, 12)))
     for _ in range(n_pops):
         pos = random.randint(0, n_samples - 1)
         width = random.randint(2, 8)
-        noise[pos:pos + width] += random.uniform(0.3, 0.9)
-    return noise.reshape(1, -1) * amplitude
+        hiss[pos:pos + width] += random.uniform(0.3, 0.9)
+
+    # Rumble: sub-40Hz lowpassed noise, mixed in modestly under the hiss/pop
+    # layer -- rumble is felt more than heard on most playback systems, per
+    # the documented 3-layer decomposition.
+    rumble = np.random.randn(n_samples).astype(np.float32)
+    alpha_rumble = float(np.exp(-2.0 * np.pi * 40.0 / sr))
+    rumble = _lfilter([1.0 - alpha_rumble], [1.0, -alpha_rumble], rumble).astype(np.float32)
+
+    combined = hiss + rumble * 0.5
+    return combined.reshape(1, -1) * amplitude
 
 
 def _apply_ffmpeg_fallback(wav_in: str, wav_out: str, sub_genre: str | None,

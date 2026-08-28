@@ -23,7 +23,8 @@ cozy_bias: false
 drum_kit_programs: [24, 25]
 drum_sampler_pattern: 808_trap
 mix: {lpf_hz: 7000, bitcrush_bits: 8, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.3,
-  compress_ratio: 4.0, vinyl_crackle: 0.22, use_ir_reverb: false, sidechain_duck: false}
+  compress_ratio: 4.0, vinyl_crackle: 0.22, use_ir_reverb: true, sidechain_duck: false,
+  presence_db: -2.0, warmth_db: 1.5}
 # research/theory/arrangement-structure.md #6: lofi_phonk is buildup/release-
 # driven, not wallpaper music, and was silently falling back to 'standard'.
 song_form: build

@@ -8,7 +8,10 @@ composition:
   drum_pattern_indices: [12, 4, 3, 9]
   bpm_range: [70, 86]
   energy: null
-  progression_indices: [13, 0, 7, 3, 38, 10, 32, 39]
+  # 59 = sparse modal drone (Amadd9/Dmsus4 vamp) added Phase 11 --
+  # research/subgenres/lofi_world.md: harmony should stay minimal/modal
+  # rather than jazz turnarounds, to preserve raga/maqam melodic color.
+  progression_indices: [13, 0, 7, 3, 38, 10, 32, 39, 59]
 swing_range: [0.58, 0.68]
 cozy_bias: false
 texture: {program: GM_KALIMBA, style: pop}

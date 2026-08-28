@@ -18,5 +18,6 @@ swing_range: [0.59, 0.67]
 cozy_bias: true
 drum_sampler_pattern: dusty
 mix: {lpf_hz: 9500, bitcrush_bits: 11, reverb_room: 0.35, reverb_wet: 0.2, tape_wobble_depth: 0.18,
-  compress_ratio: 3.0, vinyl_crackle: 0.12, use_ir_reverb: false, sidechain_duck: true}
+  compress_ratio: 3.0, vinyl_crackle: 0.12, use_ir_reverb: true, sidechain_duck: true,
+  duck_profile: hiphop, presence_db: -1.0, warmth_db: 1.0}
 song_form: null

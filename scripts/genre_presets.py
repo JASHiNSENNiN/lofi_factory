@@ -273,7 +273,12 @@ def build_subgenre_drum_kits() -> dict:
 
 
 def build_genre_fx_presets() -> dict:
-    """Exact shape of the old lofi_fx._GENRE_PRESETS."""
+    """Exact shape of the old lofi_fx._GENRE_PRESETS, plus two additive
+    fields from research/theory/mixing-texture.md item 8 (per-subgenre EQ
+    conventions): 'presence_db' (a 3-5kHz bell/shelf cut, boom-bap-leaning
+    genres only) and 'warmth_db' (a 100-200Hz boost, same genres). Both
+    default to 0.0 (no-op) for any YAML that doesn't set them, so this is
+    backward-compatible with every existing genre config."""
     out = {}
     for key, doc in load_all().items():
         m = doc.get('mix')
@@ -287,6 +292,8 @@ def build_genre_fx_presets() -> dict:
             'wobble_depth': m['tape_wobble_depth'],
             'compress_ratio': m['compress_ratio'],
             'vinyl': m['vinyl_crackle'],
+            'presence_db': m.get('presence_db', 0.0),
+            'warmth_db': m.get('warmth_db', 0.0),
         }
     return out
 
@@ -300,6 +307,19 @@ def build_ir_genres() -> set:
 def build_sidechain_duck_genres() -> set:
     """Exact shape of the old lofi_fx._SIDECHAIN_DUCK_GENRES."""
     return {key for key, doc in load_all().items()
+            if (doc.get('mix') or {}).get('sidechain_duck')}
+
+
+def build_duck_profiles() -> dict:
+    """{genre_key: 'house' | 'hiphop'} for every genre with sidechain_duck
+    enabled -- research/theory/mixing-texture.md item 4: house wants an
+    audible rhythmic pump (slower release, deeper duck), hip-hop wants the
+    duck inaudible-as-an-effect (fast release, shallow duck). Defaults to
+    'hiphop' (the more common case, and the original single hardcoded
+    profile's character) if a genre opts into sidechain_duck without
+    setting duck_profile explicitly."""
+    return {key: (doc.get('mix') or {}).get('duck_profile', 'hiphop')
+            for key, doc in load_all().items()
             if (doc.get('mix') or {}).get('sidechain_duck')}
 
 
