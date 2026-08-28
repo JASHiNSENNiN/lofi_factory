@@ -14,6 +14,18 @@ composition:
   progression_indices: [13, 0, 7, 3, 38, 10, 32, 39, 59]
 swing_range: [0.58, 0.68]
 cozy_bias: false
+# research/subgenres/lofi_world.md: "Gamaka-style ornamentation (grace-note
+# bends around a target pitch, per raga convention) is the genre's most
+# distinctive melodic device" -- see build_melody(gamaka=True) /
+# _gamaka_pitchbend_events() in generate_music_gemini.py.
+gamaka: true
+# research/subgenres/lofi_world.md: "tala rhythmic cycles" -- a genuinely
+# odd-meter (7-beat Rupak Tal) polymetric overlay layered over the existing
+# 4/4 foundation, independent of BAR/grid_tick()/DRUM_PATTERNS (Phase 11's
+# "true time-signature support" item, scoped safely -- see
+# build_tala_overlay()'s module comment for why this is an overlay rather
+# than a full engine-wide meter retrofit).
+tala_overlay: true
 texture: {program: GM_KALIMBA, style: pop}
 drum_sampler_pattern: null
 mix: {lpf_hz: 10500, bitcrush_bits: 12, reverb_room: 0.42, reverb_wet: 0.24, tape_wobble_depth: 0.16,

@@ -948,6 +948,8 @@ _GLIDE_808_GENRES: set = genre_presets.build_glide_808_genres()
 _MICRO_SWING_GENRES: set = genre_presets.build_micro_swing_genres()
 _CONTINUOUS_ARP_GENRES: set = genre_presets.build_continuous_arp_genres()
 _CHH_TRIPLET_GENRES: set = genre_presets.build_chh_triplet_genres()
+_GAMAKA_GENRES: set = genre_presets.build_gamaka_genres()
+_TALA_OVERLAY_GENRES: set = genre_presets.build_tala_overlay_genres()
 
 # Drum fills (1 bar of 16 steps — fire at last bar of a section)
 DRUM_FILLS = [
@@ -2084,6 +2086,49 @@ def _glide_pitchbend_events(note_on_tick: int, note_dur: int, bpm: int,
     return events
 
 
+# Small dedicated bend range for gamaka (well under 2 semitones per bend) --
+# a separate, finer-resolution range from _GLIDE_BEND_RANGE_SEMITONES since
+# it lives on a different channel (melody/counter-melody, not bass) and
+# never needs the 808 glide's much wider excursion.
+_GAMAKA_BEND_RANGE_SEMITONES = 2
+_GAMAKA_PROB = 0.45
+
+
+def _gamaka_pitchbend_events(note_on_tick: int, note_dur: int, bpm: int,
+                             bend_semitones=(0.5, 1.5), ramp_ms=(50, 110),
+                             steps: int = 5) -> list:
+    """
+    Gamaka-style grace-note ornament (research/subgenres/lofi_world.md:
+    "grace-note bends around a target pitch, per raga convention" -- the
+    genre's most distinctive melodic device, the clearest way to
+    differentiate it from other dorian-leaning genres). Unlike
+    _glide_pitchbend_events (which slides OUT of a note at its TAIL --
+    drill's 808 glide), this bends INTO a note at its ONSET: the note
+    starts bent off true pitch by a fraction of a semitone (direction
+    random) and eases back to center over the first `ramp_ms` of its
+    duration -- the classic meend/kampita "approach" ornament. Returns
+    (abs_tick, _PITCHWHEEL_NOTE, pitch14, 0) tuples for the same
+    events-list convention as _glide_pitchbend_events(); the melody/
+    counter-melody channel must be assembled with abs_to_track(...,
+    pitch_bend_range=_GAMAKA_BEND_RANGE_SEMITONES).
+    """
+    if note_dur <= 1:
+        return []
+    ticks_per_ms = (PPQN * bpm) / 60_000.0
+    ramp_ticks = max(1, min(int(random.uniform(*ramp_ms) * ticks_per_ms), note_dur - 1))
+    direction = random.choice([-1, 1])
+    start_offset = direction * random.uniform(*bend_semitones)
+
+    events = []
+    for i in range(steps + 1):   # i=0 -> full offset at note_on; i=steps -> true pitch
+        frac = i / steps
+        tick = note_on_tick + int(frac * ramp_ticks)
+        semis = start_offset * (1.0 - frac)
+        events.append((tick, _PITCHWHEEL_NOTE,
+                        _bend_semitones_to_pitch14(semis, _GAMAKA_BEND_RANGE_SEMITONES), 0))
+    return events
+
+
 def build_bass(progression, start_bar, num_loops, swing, bpm, walking=False, glide=False):
     """
     Bass line with:
@@ -2189,7 +2234,7 @@ def _markov_next_pitch_class(markov_nodes: dict, prev_pc: int, scale_pcs: set) -
 
 def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', scale='pent',
                  motif=None, progression=None, prog_bars=None, markov_nodes=None,
-                 tension: float = 0.5):
+                 tension: float = 0.5, gamaka: bool = False):
     """
     Motif-based melody with phi-point (0.618) contour arc + chord-aware phrase starts.
     Develops a 3-5 note motif through retrograde/inversion/transposition variations.
@@ -2207,6 +2252,12 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
     contour toward wider melodic leaps — part of threading the track-wide
     arc through the melody, not just drum velocity. density='dense' (used
     for the climax loop) additionally drops the forced rest floor to 0.
+
+    gamaka: when True, each emitted note has a chance (see _GAMAKA_PROB) of
+    a raga-convention grace-note pitch-bend ornament layered on top (see
+    _gamaka_pitchbend_events()) -- lofi_world's opt-in only. Requires the
+    melody channel to be assembled with abs_to_track(..., pitch_bend_range=
+    _GAMAKA_BEND_RANGE_SEMITONES) for the bends to read as musically correct.
     """
     notes_scale = _resolve_scale(scale, key_root)
     if not notes_scale:
@@ -2339,6 +2390,8 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                 if random.random() < 0.30:
                     dur = int(dur * 1.5)
                 events.append((t, note, _gauss_velocity(70 + vel_bonus + vel_arc, 13), dur))
+                if gamaka and random.random() < _GAMAKA_PROB:
+                    events += _gamaka_pitchbend_events(t, dur, bpm)
 
             bar += phrase_len + random.randint(rest_min, rest_min + 3)
         else:
@@ -2476,7 +2529,8 @@ _COUNTER_MELODY_ANSWER_VARIATIONS = ['invert', 'retrograde', 'fragment']
 
 def build_counter_melody(key_root: int, start_bar: int, num_bars: int,
                          swing: float, bpm: int, scale: str = 'pent',
-                         seed_motif: list | None = None) -> list:
+                         seed_motif: list | None = None,
+                         gamaka: bool = False) -> list:
     """
     Answering melody in lower register (root-12). Fills silence between
     main melody phrases. 1-2 short phrases per num_bars section.
@@ -2494,6 +2548,10 @@ def build_counter_melody(key_root: int, start_bar: int, num_bars: int,
     co-located in time. Falls back to the prior independent-random-walk
     behavior when no seed motif is given, so existing call sites that don't
     pass one keep their exact prior behavior.
+
+    gamaka: see build_melody()'s identical parameter -- koto's counter-
+    melody line gets the same raga-convention grace-note bend treatment as
+    sitar's lead (research/subgenres/lofi_world.md).
     """
     notes_low = _resolve_scale(scale, key_root - 12) or _resolve_scale(scale, key_root)
     if not notes_low:
@@ -2529,6 +2587,8 @@ def build_counter_melody(key_root: int, start_bar: int, num_bars: int,
                 t    = jitter(grid_tick(g, swing), 28, bpm)
                 dur  = int(BAR * random.uniform(0.65, 1.55))
                 events.append((t, note, v(44, 10), dur))
+                if gamaka and random.random() < _GAMAKA_PROB:
+                    events += _gamaka_pitchbend_events(t, dur, bpm)
                 prev_note = note
             bar += phrase_len + random.randint(2, 5)
         else:
@@ -3268,13 +3328,11 @@ def generate_song_form(seed: int | None = None) -> list[tuple[str, int]]:
 # production the form tuples alone don't touch (they only encode section
 # duration, never the handoff between sections).
 #
-# NOTE (scope): this dict + the 3 audio-domain FX functions in lofi_fx.py
-# are real and independently tested. Wiring them into the live per-track
-# pipeline requires build_midi() to expose each section's absolute bar
-# offset (currently internal-only) so it can be converted to a sample
-# position and threaded through to apply_lofi_fx() -- flagged as follow-up
-# integration work rather than risking a change to build_midi()'s
-# established return contract this late in a large change set.
+# Wired end-to-end: build_midi() calls _compute_section_transitions() (see
+# below) and returns its result; generate_track() threads it through
+# apply_lofi_fx() into _apply_pedalboard(), which fires the actual FX
+# (lofi_fx._apply_vinyl_stop/_apply_reverse_riser/_apply_filter_sweep) on
+# the rendered audio.
 _SECTION_TRANSITION_FX: dict[tuple[str, str], str] = {
     ('A', 'BR'):  'filter_lowpass_sweep',
     ('BR', 'A'):  'vinyl_stop',
@@ -3291,6 +3349,32 @@ def section_transition_fx_for(from_label: str, to_label: str) -> str | None:
     return _SECTION_TRANSITION_FX.get((from_label, to_label))
 
 
+def _compute_section_transitions(form: list[tuple[str, int]], prog_bars: int,
+                                  bpm: float, sr: int = 44100) -> list[tuple[int, str]]:
+    """
+    Walk `form`'s section sequence and return (sample_position, fx_name) for
+    every section-boundary hand-off that section_transition_fx_for() defines
+    an effect for. `sample_position` is where the transition FX's window
+    should END (see _apply_vinyl_stop/_apply_reverse_riser/
+    _apply_filter_sweep's `at_sample` semantics) -- i.e. the sample offset
+    of the boundary itself, computed from bar offset via BAR=1920 ticks
+    (4 beats) at the track's actual bpm, matching midi_to_wav's fixed 44.1kHz
+    render rate.
+    """
+    bar_seconds = 240.0 / bpm   # 4 beats/bar * 60s/min / bpm
+    transitions: list[tuple[int, str]] = []
+    bar = 0
+    prev_label = None
+    for label, n_loops in form:
+        if prev_label is not None:
+            fx = section_transition_fx_for(prev_label, label)
+            if fx is not None:
+                transitions.append((int(bar * bar_seconds * sr), fx))
+        bar += prog_bars * n_loops
+        prev_label = label
+    return transitions
+
+
 # In-track key modulation (new research this session -- no existing
 # research/theory/*.md doc covers this). The "truck driver modulation": an
 # abrupt whole-step (occasionally half-step) key rise with no pivot chord,
@@ -3300,15 +3384,13 @@ def section_transition_fx_for(from_label: str, to_label: str) -> str | None:
 # universal effect, so it's only offered to forms with a real "final
 # statement" section to modulate into.
 #
-# NOTE (scope): decision logic + the transpose helper below are real and
-# independently tested. Wiring `_transpose_events()` into build_midi()'s
-# per-section event-accumulation loop (piano_ev/bass_ev/mel_ev/pad_ev/
-# cmelo_ev/texture_ev/sustain_ev are each appended to from many different
-# section-label branches across a long, already-complex loop body) is
-# flagged as follow-up integration work rather than attempted this late in
-# a large change set, for the same reason as _SECTION_TRANSITION_FX's
-# wiring above -- the building blocks are real, the last-mile wiring into
-# an already-large, heavily-relied-on function is the remaining risk.
+# Wired end-to-end: build_midi() decides `_modulation` once (form/form_name
+# are fixed pre-retry-loop, see there), then applies `_apply_modulation_tail`
+# -- a head/tail split on each event's own abs_tick, transposing only the
+# tail via _transpose_events() -- to piano_ev/bass_ev/mel_ev/pad_ev/
+# cmelo_ev/texture_ev after the retry loop resolves best_events. drum_ev
+# (note numbers select drum voices, not pitches) and sustain_ev (CC64
+# pedal on/off tuples, not 4-tuple note events) are deliberately excluded.
 _MODULATION_ELIGIBLE_FORMS = {'build', 'aaba', 'standard'}
 _MODULATION_PROB = 0.12
 
@@ -3418,6 +3500,95 @@ def build_texture(program, progression, start_bar, num_bars, swing, bpm, style):
                     t = jitter(grid_tick(bar * 16 + 10 + fi * 2, swing), 18, bpm)
                     events.append((t, fn, v(55, 10), int(S16 * 0.55)))
 
+    return events
+
+
+# Tala-cycle polymetric overlay (research/subgenres/lofi_world.md: "tala
+# rhythmic cycles" -- alongside gamaka and drone/modal harmony, one of the
+# three techniques the raga/maqam research grounds this genre in; Phase 11's
+# "true time-signature support" item). This is genuinely odd-meter -- a
+# 7-beat cycle, NOT reachable by subdividing or regrouping the existing 4/4
+# BAR/grid_tick()/DRUM_PATTERNS grid every one of the other 28 genres
+# depends on -- but implemented as a fully independent overlay with its own
+# tick math (multiples of PPQN per beat, nothing derived from BAR or S16),
+# LAYERED on top of the existing 4/4 foundation rather than replacing any
+# part of it. This is the deliberately-scoped alternative to a full
+# variable-time-signature retrofit: parametrizing grid_tick()/BAR/every
+# DRUM_PATTERNS entry's step count throughout build_chords/build_bass/
+# build_melody/build_drums/etc. would touch code every genre depends on
+# (see this function's own research-doc citation above) -- real, but a
+# separate, much larger, higher-blast-radius undertaking than fits safely
+# in the same change set as everything else in this backlog. This overlay
+# achieves the same "genuinely odd-meter, not just cross-rhythm" goal
+# (distinct from Phase 5's 3-vs-4 polyrhythm, which stays within one 4/4
+# bar) with zero risk to any function outside this one: BAR/grid_tick()/
+# DRUM_PATTERNS/build_drums() are never touched or even imported here in a
+# meter-aware way.
+#
+# Rupak Tal (Hindustani classical, 7 beats grouped 3+2+2) -- chosen over an
+# arbitrary odd grouping because it's a real, named, idiomatic cycle from
+# the same raga/tala tradition gamaka is drawn from, and because its
+# defining characteristic (no bass stroke on beat 1 -- a deliberately
+# "empty"/de-accented downbeat) gives this overlay an audibly different
+# character from the main track's strong-downbeat 4/4 foundation rather
+# than just being "4/4 with an extra beat stapled on."
+_TALA_BEAT_GROUPS = (3, 2, 2)   # Rupak Tal
+_TALA_BEATS_PER_CYCLE = sum(_TALA_BEAT_GROUPS)   # 7
+
+
+def _tala_cycle_ticks() -> int:
+    """Tick-length of one 7-beat tala cycle -- PPQN ticks per quarter-note
+    beat (the same beat unit BAR=4*PPQN uses), times 7 instead of 4. Ticks
+    are tempo-independent throughout this module (same reason BAR itself
+    isn't a function of bpm), which is what makes this a genuinely
+    different meter rather than a regrouping of an existing bar."""
+    return _TALA_BEATS_PER_CYCLE * PPQN
+
+
+def build_tala_overlay(key_root: int, scale: str, start_tick: int, duration_ticks: int,
+                       bpm: float) -> list:
+    """
+    One (or more, back-to-back) 7-beat Rupak Tal cycle(s) of sparse notes,
+    covering [start_tick, start_tick + duration_ticks). Meant to be appended
+    into the SAME texture_ev list build_texture() populates -- shares its
+    channel/program downstream, so this reads as an occasional alternate
+    rhythmic character from the same instrument voice (kalimba for
+    lofi_world), not a whole new track. Returns (abs_tick, note, velocity,
+    duration) tuples, empty list if the scale can't be resolved or there's
+    no positive duration to fill.
+    """
+    notes_scale = _resolve_scale(scale, key_root)
+    if not notes_scale or duration_ticks <= 0:
+        return []
+    cycle_ticks = _tala_cycle_ticks()
+
+    events = []
+    t = start_tick
+    end = start_tick + duration_ticks
+    while t < end:
+        beat = 0
+        for gi, group in enumerate(_TALA_BEAT_GROUPS):
+            group_tick = t + beat * PPQN
+            if group_tick >= end:
+                break
+            # Rupak's "empty" downbeat: the first group (beats 1-3) rests
+            # more often and, when it does sound, sits quieter than the
+            # other two groups -- an audible de-accent on the cycle start.
+            is_first_group = (gi == 0)
+            rest_prob = 0.55 if is_first_group else 0.25
+            if random.random() >= rest_prob:
+                note = random.choice(notes_scale)
+                # Gaussian humanization (research/theory/rhythm-groove.md:
+                # clustered-not-flat deviation reads as idiomatic) -- same
+                # _gauss_jitter/_gauss_velocity pair build_melody() uses,
+                # not the flat jitter()/v() this module reserves for
+                # secondary texture layers.
+                t_humanized = _gauss_jitter(group_tick, 15, bpm)
+                vel = _gauss_velocity(28 if is_first_group else 48, 6)
+                dur = max(1, int(group * PPQN * random.uniform(0.5, 0.9)))
+                events.append((t_humanized, note, vel, dur))
+            beat += group
+        t += cycle_ticks
     return events
 
 
@@ -3559,6 +3730,8 @@ def build_midi(params, output_path):
     use_micro_swing = sub_genre in _MICRO_SWING_GENRES
     use_arp_melody  = sub_genre in _CONTINUOUS_ARP_GENRES
     use_chh_triplet = sub_genre in _CHH_TRIPLET_GENRES
+    use_gamaka      = sub_genre in _GAMAKA_GENRES
+    use_tala_overlay = sub_genre in _TALA_OVERLAY_GENRES
 
     # ── Song form ───────────────────────────────────────────────
     form_name = _FORM_BY_SUBGENRE.get(sub_genre, 'standard')
@@ -3582,6 +3755,39 @@ def build_midi(params, output_path):
     for _sec, _n in form:
         c += prog_bars * _n
         fill_bars.add(c - 1)
+
+    # Section-boundary transition FX (research/theory/arrangement-structure.md
+    # gap #1, see _SECTION_TRANSITION_FX/section_transition_fx_for): computed
+    # once here from `form`+`bpm` alone (both fixed before the retry loop
+    # below rolls per-attempt randomness), so it's already consistent with
+    # whichever attempt the quality gate ends up keeping as best_events --
+    # no need to fold this into that loop's bookkeeping.
+    section_transitions = _compute_section_transitions(form, prog_bars, bpm)
+
+    # In-track key modulation ("truck driver modulation" -- new research
+    # this session, no existing theory doc covers it, see maybe_modulate_key
+    # for the full rationale). Decided once here, same reasoning as
+    # section_transitions above: form/form_name are fixed pre-retry-loop, so
+    # this is already consistent with whichever attempt wins. Deliberately
+    # NOT applied to drum_ev (drum note numbers select instrument voices,
+    # not pitches -- transposing would swap to a different drum sound) or
+    # sustain_ev (CC64 pedal on/off tuples, a different shape entirely --
+    # _transpose_events assumes a 4-tuple note event).
+    _modulation = maybe_modulate_key(form, form_name)
+    _mod_tick = _mod_semitones = None
+    if _modulation is not None:
+        _mod_sec_idx, _mod_semitones = _modulation
+        _mod_tick = sum(prog_bars * n for _, n in form[:_mod_sec_idx]) * BAR
+
+    def _apply_modulation_tail(events: list[tuple]) -> list[tuple]:
+        """Transpose only the events at/after _mod_tick, leaving the head of
+        the track (before the modulation lands) untouched. No-op when this
+        track didn't roll a modulation."""
+        if _mod_tick is None:
+            return events
+        head = [e for e in events if e[0] < _mod_tick]
+        tail = [e for e in events if e[0] >= _mod_tick]
+        return head + _transpose_events(tail, _mod_semitones)
 
     # ── Motif scale (recomputed fresh per retry attempt below) ──
     # Uses the same _resolve_scale() dispatch as build_melody()/
@@ -3662,7 +3868,7 @@ def build_midi(params, output_path):
                 if hat_b > 0:
                     drum_ev += build_intro_hats(hat_s, hat_b, swing, bpm)
                 cmelo_ev += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm,
-                                                 scale=scale, seed_motif=track_motif)
+                                                 scale=scale, seed_motif=track_motif, gamaka=use_gamaka)
 
             elif sec_label == 'A':
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
@@ -3679,12 +3885,20 @@ def build_midi(params, output_path):
                     mel_ev += build_melody(key_root, sec_start, sec_bars, swing, bpm,
                                            'sparse', scale, motif=track_motif,
                                            progression=prog, prog_bars=prog_bars,
-                                           markov_nodes=markov_nodes, tension=sec_tension)
+                                           markov_nodes=markov_nodes, tension=sec_tension,
+                                           gamaka=use_gamaka)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 active_bars += sec_bars
                 _tex = _SUBGENRE_TEXTURE.get(sub_genre)
                 if _tex and random.random() < (0.35 + 0.40 * sec_tension):
                     texture_ev += build_texture(_tex[0], prog, sec_start, sec_bars, swing, bpm, _tex[1])
+                # Tala-cycle polymetric overlay (see build_tala_overlay's
+                # module comment) -- independent probability roll from the
+                # texture layer above, appended into the same texture_ev
+                # list/channel/program rather than replacing anything.
+                if use_tala_overlay and random.random() < 0.30:
+                    texture_ev += build_tala_overlay(key_root, scale, sec_start * BAR,
+                                                      sec_bars * BAR, bpm)
 
             elif sec_label == 'BR':
                 bridge_prog      = _bridge_progression(key, prog)
@@ -3695,7 +3909,7 @@ def build_midi(params, output_path):
                 pad_ev     += build_pad(bridge_prog, sec_start, bridge_loops, swing, bpm)
                 drum_ev    += build_break_hats(sec_start, sec_bars, swing, bpm)
                 cmelo_ev   += build_counter_melody(break_key_root, sec_start, sec_bars, swing, bpm,
-                                                   scale=break_scale, seed_motif=track_motif)
+                                                   scale=break_scale, seed_motif=track_motif, gamaka=use_gamaka)
                 sustain_ev += build_sustain_pedal(bridge_prog, sec_start, bridge_loops, swing, bpm)
 
             elif sec_label == 'B':
@@ -3707,6 +3921,9 @@ def build_midi(params, output_path):
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 active_bars += sec_bars
                 _tex = _SUBGENRE_TEXTURE.get(sub_genre)
+                if use_tala_overlay and random.random() < 0.30:
+                    texture_ev += build_tala_overlay(key_root, scale, sec_start * BAR,
+                                                      sec_bars * BAR, bpm)
 
                 # Per-loop climax handling: the loop(s) coinciding with
                 # _tension()'s peak plateau get denser melody, a guaranteed
@@ -3724,10 +3941,10 @@ def build_midi(params, output_path):
                                                'dense' if is_climax else 'medium', scale,
                                                motif=track_motif, progression=prog,
                                                prog_bars=prog_bars, markov_nodes=markov_nodes,
-                                               tension=loop_tension)
+                                               tension=loop_tension, gamaka=use_gamaka)
                     if loop_i >= 1 or is_climax:
                         cmelo_ev += build_counter_melody(key_root, loop_start, prog_bars, swing, bpm,
-                                                         scale=scale, seed_motif=track_motif)
+                                                         scale=scale, seed_motif=track_motif, gamaka=use_gamaka)
                     if is_climax:
                         if _tex:
                             texture_ev += build_texture(_tex[0], prog, loop_start, prog_bars,
@@ -3743,7 +3960,7 @@ def build_midi(params, output_path):
                 bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, False, glide=use_glide_bass)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 cmelo_ev   += build_counter_melody(key_root, sec_start, sec_bars, swing, bpm,
-                                                   scale=scale, seed_motif=track_motif)
+                                                   scale=scale, seed_motif=track_motif, gamaka=use_gamaka)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 od_bars = max(1, sec_bars // 2)
                 od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm,
@@ -3783,6 +4000,17 @@ def build_midi(params, output_path):
 
     piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev = best_events
 
+    # ── In-track key modulation: transpose the tail from _mod_tick onward ──
+    # (see _apply_modulation_tail above; a no-op when this track didn't roll
+    # a modulation). drum_ev/sustain_ev are deliberately excluded -- see the
+    # comment where _modulation was decided.
+    piano_ev   = _apply_modulation_tail(piano_ev)
+    bass_ev    = _apply_modulation_tail(bass_ev)
+    mel_ev     = _apply_modulation_tail(mel_ev)
+    pad_ev     = _apply_modulation_tail(pad_ev)
+    cmelo_ev   = _apply_modulation_tail(cmelo_ev)
+    texture_ev = _apply_modulation_tail(texture_ev)
+
     # ── Tension arc: replaces flat energy_mult with per-bar dynamic curve ──────
     drum_ev = _apply_tension_to_drums(drum_ev, TOTAL, energy_mult)
 
@@ -3817,14 +4045,19 @@ def build_midi(params, output_path):
     drum_kit = random.choice(_SUBGENRE_DRUM_KITS.get(sub_genre, _DEFAULT_DRUM_KIT_POOL))
     mid.tracks.append(abs_to_track(drum_ev, channel=9, program=drum_kit,
                                    bank_msb=127 if drum_kit != 0 else None))
+    # pitch_bend_range only when this subgenre actually uses gamaka (see
+    # use_gamaka above) -- same scoped-RPN-setup pattern as the bass glide.
+    _gamaka_bend_range = _GAMAKA_BEND_RANGE_SEMITONES if use_gamaka else None
     if mel_ev:
-        mid.tracks.append(abs_to_track(mel_ev,    channel=2, program=mel_prog))
+        mid.tracks.append(abs_to_track(mel_ev,    channel=2, program=mel_prog,
+                                       pitch_bend_range=_gamaka_bend_range))
     # Pad: always present — fills air throughout
     mid.tracks.append(abs_to_track(pad_ev,    channel=3, program=GM_STRINGS))
     # Counter melody: instrument chosen per sub-genre
     if cmelo_ev:
         cmelo_prog = _cfg.get('cmelo', GM_WARM_PAD)
-        mid.tracks.append(abs_to_track(cmelo_ev, channel=4, program=cmelo_prog))
+        mid.tracks.append(abs_to_track(cmelo_ev, channel=4, program=cmelo_prog,
+                                       pitch_bend_range=_gamaka_bend_range))
     # Texture layer: secondary genre-specific instrument (guitar/organ/flute/marimba/trumpet)
     if texture_ev:
         tex_prog = _SUBGENRE_TEXTURE[sub_genre][0] if sub_genre in _SUBGENRE_TEXTURE else GM_WARM_PAD
@@ -3843,7 +4076,7 @@ def build_midi(params, output_path):
         pass
 
     mid.save(output_path)
-    return output_path
+    return output_path, section_transitions
 
 # ─── RENDER ───────────────────────────────────────────────────────────────────
 
@@ -3903,7 +4136,7 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
         raw_wav   = os.path.join(tmp, 'raw.wav')
 
         print(f"  [MIDI] Building...")
-        build_midi(params, midi_path)
+        _, section_transitions = build_midi(params, midi_path)
         chosen_sf = _pick_soundfont()
         print(f"  [FluidSynth] Rendering ({os.path.basename(chosen_sf)})...")
         midi_to_wav(midi_path, raw_wav, soundfont=chosen_sf, low_priority=low_priority)
@@ -3915,7 +4148,8 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
         _lofi_fx(raw_wav, out,
                  sub_genre=params.get('sub_genre'),
                  bpm=params.get('bpm', 80),
-                 energy=params.get('drum_energy', 'medium'))
+                 energy=params.get('drum_energy', 'medium'),
+                 transitions=section_transitions)
 
         # Layer synthesized drum break — real FM+noise drums on top of the
         # MIDI render so every track has a different acoustic character.

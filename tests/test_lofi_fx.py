@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+import scripts.lofi_fx as lofi_fx
 from scripts.lofi_fx import (
     _apply_gated_reverb,
     _apply_head_bump,
@@ -8,6 +9,7 @@ from scripts.lofi_fx import (
     _apply_kick_sidechain_duck,
     _apply_lufs_mastering,
     _apply_multiband_glue,
+    _apply_pedalboard,
     _apply_stereo_width,
     _apply_sub_bass_saturation,
     _apply_tape_saturation,
@@ -646,3 +648,103 @@ def test_apply_lofi_fx_output_still_valid_with_multiband_glue(tmp_path):
     result, _sr = sf.read(str(wav_out), dtype="float32", always_2d=True)
     assert not np.isnan(result).any()
     assert np.max(np.abs(result)) <= 1.0
+
+
+# ── section-transition FX wiring (research/theory/arrangement-structure.md
+# gap #1 -- build_midi()'s section_transitions return value threaded through
+# apply_lofi_fx() into _apply_pedalboard(), which is the piece under test
+# here; the 3 FX functions themselves are unit-tested in
+# tests/generate_music/test_arrangement_transition_fx.py) ─────────────────
+
+def test_transitions_none_does_not_call_any_transition_fx(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(lofi_fx, "_apply_vinyl_stop", lambda *a, **k: calls.append("vinyl_stop") or a[0])
+    monkeypatch.setattr(lofi_fx, "_apply_reverse_riser", lambda *a, **k: calls.append("reverse_riser") or a[0])
+    monkeypatch.setattr(lofi_fx, "_apply_filter_sweep", lambda *a, **k: calls.append("filter_sweep") or a[0])
+
+    stereo, sr = _sine_stereo(seconds=1)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+    wav_out = tmp_path / "out.wav"
+    apply_lofi_fx(str(wav_in), str(wav_out), sub_genre="chillhop", bpm=80, energy="medium",
+                  transitions=None)
+    assert calls == []
+
+
+def test_transitions_empty_list_does_not_call_any_transition_fx(monkeypatch, tmp_path):
+    monkeypatch.setattr(lofi_fx, "_apply_vinyl_stop", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(lofi_fx, "_apply_reverse_riser", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(lofi_fx, "_apply_filter_sweep", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+
+    stereo, sr = _sine_stereo(seconds=1)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+    wav_out = tmp_path / "out.wav"
+    apply_lofi_fx(str(wav_in), str(wav_out), sub_genre="chillhop", bpm=80, energy="medium",
+                  transitions=[])
+    # no assertion raised => none of the 3 spies fired
+
+
+def test_transitions_dispatches_each_fx_name_to_its_function(monkeypatch, tmp_path):
+    calls = []
+
+    def _spy_vinyl(audio, sr, at_sample, *a, **k):
+        calls.append(("vinyl_stop", at_sample))
+        return audio
+
+    def _spy_riser(audio, sr, at_sample, *a, **k):
+        calls.append(("reverse_riser", at_sample))
+        return audio
+
+    def _spy_sweep(audio, sr, at_sample, *a, **k):
+        calls.append(("filter_lowpass_sweep", at_sample, k.get("direction")))
+        return audio
+
+    monkeypatch.setattr(lofi_fx, "_apply_vinyl_stop", _spy_vinyl)
+    monkeypatch.setattr(lofi_fx, "_apply_reverse_riser", _spy_riser)
+    monkeypatch.setattr(lofi_fx, "_apply_filter_sweep", _spy_sweep)
+
+    stereo, sr = _sine_stereo(seconds=2)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+    wav_out = tmp_path / "out.wav"
+    transitions = [(10000, "vinyl_stop"), (20000, "reverse_riser"), (30000, "filter_lowpass_sweep")]
+    apply_lofi_fx(str(wav_in), str(wav_out), sub_genre="chillhop", bpm=80, energy="medium",
+                  transitions=transitions)
+
+    fired = {c[0] for c in calls}
+    assert fired == {"vinyl_stop", "reverse_riser", "filter_lowpass_sweep"}
+    at_samples = {c[0]: c[1] for c in calls}
+    assert at_samples["vinyl_stop"] == 10000
+    assert at_samples["reverse_riser"] == 20000
+    assert at_samples["filter_lowpass_sweep"] == 30000
+    sweep_call = next(c for c in calls if c[0] == "filter_lowpass_sweep")
+    assert sweep_call[2] == "down"
+
+
+def test_transitions_unknown_fx_name_is_silently_ignored(monkeypatch, tmp_path):
+    monkeypatch.setattr(lofi_fx, "_apply_vinyl_stop", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(lofi_fx, "_apply_reverse_riser", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+    monkeypatch.setattr(lofi_fx, "_apply_filter_sweep", lambda *a, **k: (_ for _ in ()).throw(AssertionError))
+
+    stereo, sr = _sine_stereo(seconds=1)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+    wav_out = tmp_path / "out.wav"
+    # No FX named this way exists -- should be a silent no-op, not a crash.
+    apply_lofi_fx(str(wav_in), str(wav_out), sub_genre="chillhop", bpm=80, energy="medium",
+                  transitions=[(5000, "not_a_real_fx")])
+    result, _sr = sf.read(str(wav_out), dtype="float32", always_2d=True)
+    assert not np.isnan(result).any()
+
+
+def test_apply_pedalboard_transitions_param_defaults_to_none(tmp_path):
+    # Direct call with no transitions kwarg at all -- the wiring must be
+    # fully optional, matching every other genre-gated stage in this chain.
+    stereo, sr = _sine_stereo(seconds=1)
+    wav_in = tmp_path / "in.wav"
+    sf.write(str(wav_in), stereo.T, sr, subtype="PCM_16")
+    wav_out = tmp_path / "out.wav"
+    _apply_pedalboard(str(wav_in), str(wav_out), "chillhop", 80, "medium")
+    result, _sr = sf.read(str(wav_out), dtype="float32", always_2d=True)
+    assert not np.isnan(result).any()

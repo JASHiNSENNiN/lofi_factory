@@ -48,6 +48,35 @@ melody_style: continuous_arp         # optional. 'continuous_arp' = replace the
                                       # (build_arpeggio()) -- synthwave's
                                       # melodic engine. membership set:
                                       # _CONTINUOUS_ARP_GENRES
+chh_triplet: true|false              # optional, default false. true = closed-hat
+                                      # voice comes from a real 12-step-per-bar
+                                      # (8th-note-triplet) subdivision layered
+                                      # against the normal 16-step kick/snare,
+                                      # instead of a denser 16-step hat pattern
+                                      # (drill's hi-hat triplets) --
+                                      # build_drums(..., chh_triplet=True)
+                                      # membership set: _CHH_TRIPLET_GENRES
+roll_density: 0.0-1.0                # optional, default unset (no-op). Scales
+                                      # DRUM_PATTERNS[16]'s ("Phonk hat-roll
+                                      # cell") back-quarter hat-roll velocity
+                                      # between a flat hit and its full authored
+                                      # ramp -- a lever independent of swing --
+                                      # see _scale_roll_intensity()
+gamaka: true|false                   # optional, default false. true = raga-
+                                      # convention grace-note pitch-bend
+                                      # ornaments on melody/counter-melody notes
+                                      # (bend into true pitch from a fraction of
+                                      # a semitone off, ease to center) --
+                                      # build_melody(..., gamaka=True) /
+                                      # _gamaka_pitchbend_events()
+tala_overlay: true|false             # optional, default false. true = an
+                                      # occasional genuinely odd-meter (7-beat
+                                      # Rupak Tal, 3+2+2) polymetric cycle
+                                      # layered into texture_ev over the
+                                      # existing 4/4 foundation -- its own
+                                      # independent tick grid, unrelated to
+                                      # BAR/grid_tick()/DRUM_PATTERNS --
+                                      # build_tala_overlay()
 
 texture:                             # omit the whole block if this subgenre has none
   program: GM_SOMETHING

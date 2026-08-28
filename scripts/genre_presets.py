@@ -126,6 +126,8 @@ def _parse_one(path: str) -> tuple[str, dict]:
     doc['melody_style'] = raw.get('melody_style')    # e.g. 'continuous_arp'
     doc['roll_density'] = raw.get('roll_density')    # float 0-1+, e.g. lofi_phonk's hat-roll intensity
     doc['chh_triplet']  = bool(raw.get('chh_triplet', False))
+    doc['gamaka']       = bool(raw.get('gamaka', False))
+    doc['tala_overlay'] = bool(raw.get('tala_overlay', False))
 
     tex_raw = raw.get('texture')
     if tex_raw is not None:
@@ -358,6 +360,28 @@ def build_chh_triplet_genres() -> set:
     genuinely different subdivision, not reachable by densifying the
     16-step grid). See generate_music_gemini.py's build_drums(chh_triplet=)."""
     return {key for key, doc in load_all().items() if doc.get('chh_triplet')}
+
+
+def build_gamaka_genres() -> set:
+    """Subgenres with gamaka: true -- raga-convention grace-note pitch-bend
+    ornaments (bending into a note's true pitch from a fraction of a
+    semitone off, then easing to center) on melody/counter-melody notes.
+    research/subgenres/lofi_world.md: "the genre's most distinctive melodic
+    device and the clearest way to differentiate lofi_world's melodic
+    character" from other dorian-leaning genres. See generate_music_gemini.py's
+    _gamaka_pitchbend_events() / build_melody(gamaka=)."""
+    return {key for key, doc in load_all().items() if doc.get('gamaka')}
+
+
+def build_tala_overlay_genres() -> set:
+    """Subgenres with tala_overlay: true -- an occasional genuinely odd-meter
+    (7-beat Rupak Tal, 3+2+2) polymetric overlay cycle layered over the
+    existing 4/4 foundation. research/subgenres/lofi_world.md: "tala
+    rhythmic cycles" alongside gamaka and drone/modal harmony. See
+    generate_music_gemini.py's build_tala_overlay() for why this is a safe,
+    fully independent overlay rather than a change to BAR/grid_tick()/
+    DRUM_PATTERNS (which every other genre also depends on)."""
+    return {key for key, doc in load_all().items() if doc.get('tala_overlay')}
 
 
 def build_continuous_arp_genres() -> set:

@@ -90,16 +90,22 @@ _TRACK_LUFS_TARGET = -17.0
 
 
 def apply_lofi_fx(wav_in: str, wav_out: str, sub_genre: str | None = None,
-                  bpm: int = 80, energy: str = "medium") -> None:
+                  bpm: int = 80, energy: str = "medium",
+                  transitions: list[tuple[int, str]] | None = None) -> None:
     """
     Apply lo-fi FX chain using Pedalboard.
     Each sub_genre has distinct settings — dark_lofi sounds gritty and muffled,
     cozy_cafe sounds warm and airy, vaporwave sounds degraded and washed.
     Jazz/piano genres use convolution reverb from real room IRs (assets/ir/) when present.
     Falls back to the legacy ffmpeg chain if pedalboard import fails.
+
+    `transitions`: optional list of (sample_position, fx_name) from
+    generate_music_gemini.build_midi()'s section_transitions return value
+    (see section_transition_fx_for) -- ignored by the ffmpeg fallback, which
+    is a bare-bones legacy path with no numpy-array FX of its own.
     """
     try:
-        _apply_pedalboard(wav_in, wav_out, sub_genre, bpm, energy)
+        _apply_pedalboard(wav_in, wav_out, sub_genre, bpm, energy, transitions=transitions)
     except ImportError:
         _apply_ffmpeg_fallback(wav_in, wav_out, sub_genre, bpm, energy)
 
@@ -134,7 +140,8 @@ _SR_DEFAULT = 26000  # brighter genres stay at 26kHz
 
 
 def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
-                      bpm: int, energy: str) -> None:
+                      bpm: int, energy: str,
+                      transitions: list[tuple[int, str]] | None = None) -> None:
     import numpy as np
     import soundfile as sf
     from pedalboard import (
@@ -243,6 +250,26 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     # (see _GATED_REVERB_GENRES / _apply_gated_reverb).
     if sub_genre in _GATED_REVERB_GENRES:
         processed = _apply_gated_reverb(processed, sr)
+
+    # Section-boundary transition FX (research/theory/arrangement-structure.md
+    # gap #1) -- each entry is (sample_position, fx_name), computed by
+    # build_midi() from the track's actual song-form section boundaries via
+    # section_transition_fx_for(). Applied here, before the polish stages
+    # below (stereo width/sub-bass/tape-saturation/sidechain/crackle/
+    # mastering), same chain position as gated reverb just above -- these
+    # are structural/arrangement effects, not final polish, so everything
+    # after this point (including LUFS mastering) measures/acts on the
+    # fully-arranged signal. Each FX function clamps its own sample
+    # position internally, so an out-of-range entry is a silent no-op
+    # rather than a crash.
+    if transitions:
+        for _at_sample, _fx_name in transitions:
+            if _fx_name == 'vinyl_stop':
+                processed = _apply_vinyl_stop(processed, sr, _at_sample)
+            elif _fx_name == 'reverse_riser':
+                processed = _apply_reverse_riser(processed, sr, _at_sample)
+            elif _fx_name == 'filter_lowpass_sweep':
+                processed = _apply_filter_sweep(processed, sr, _at_sample, direction='down')
 
     # Stereo widening (mid-side) -- the main chain above has no dry-signal
     # stereo-field control beyond Reverb's wet-tail width.
