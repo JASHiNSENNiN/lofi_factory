@@ -124,6 +124,8 @@ def _parse_one(path: str) -> tuple[str, dict]:
     doc['bass_style']   = raw.get('bass_style')      # e.g. 'glide_808'
     doc['micro_swing']  = bool(raw.get('micro_swing', False))
     doc['melody_style'] = raw.get('melody_style')    # e.g. 'continuous_arp'
+    doc['roll_density'] = raw.get('roll_density')    # float 0-1+, e.g. lofi_phonk's hat-roll intensity
+    doc['chh_triplet']  = bool(raw.get('chh_triplet', False))
 
     tex_raw = raw.get('texture')
     if tex_raw is not None:
@@ -332,11 +334,30 @@ def build_glide_808_genres() -> set:
             if doc.get('bass_style') == 'glide_808'}
 
 
+def build_roll_density() -> dict:
+    """{genre_key: float} for every subgenre with a roll_density YAML field
+    set -- research/theory/rhythm-groove.md: phonk's characteristic bounce
+    comes from swing AND off-grid hat placement AND roll density as three
+    separate levers; this is the third one, distinct from swing_range."""
+    return {key: doc['roll_density'] for key, doc in load_all().items()
+            if doc.get('roll_density') is not None}
+
+
 def build_micro_swing_genres() -> set:
     """Subgenres with micro_swing: true -- per-voice micro-timing drum
     humanization (2-step/garage swing 'lives in the individual hits',
     research/subgenres/lofi_garage.md), instead of one uniform swing ratio."""
     return {key for key, doc in load_all().items() if doc.get('micro_swing')}
+
+
+def build_chh_triplet_genres() -> set:
+    """Subgenres with chh_triplet: true -- a true 12-step-per-bar
+    (8th-note-triplet) hi-hat subdivision layered against the normal
+    16-step kick/snare, instead of a denser 16-step hat pattern
+    (research/theory/rhythm-groove.md: drill's hi-hat triplets are a
+    genuinely different subdivision, not reachable by densifying the
+    16-step grid). See generate_music_gemini.py's build_drums(chh_triplet=)."""
+    return {key for key, doc in load_all().items() if doc.get('chh_triplet')}
 
 
 def build_continuous_arp_genres() -> set:

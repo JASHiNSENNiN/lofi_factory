@@ -15,6 +15,10 @@ cozy_bias: false
 # single most recognizable production element in modern drill" -- 808
 # pitch-slide/portamento on the root hit's tail (build_bass(..., glide=True)).
 bass_style: glide_808
+# research/theory/rhythm-groove.md: drill hi-hats are triplet subdivisions
+# layered over the underlying 16th grid, a genuinely different subdivision
+# from a denser 16-step pattern -- see build_drums(chh_triplet=True).
+chh_triplet: true
 texture: {program: GM_ORGAN_ROCK, style: stab}
 drum_sampler_pattern: 808_trap
 mix: {lpf_hz: 7200, bitcrush_bits: 8, reverb_room: 0.35, reverb_wet: 0.2, tape_wobble_depth: 0.28,

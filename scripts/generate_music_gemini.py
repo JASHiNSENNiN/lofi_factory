@@ -899,6 +899,40 @@ DRUM_PATTERNS = [
      RIM:  [0,0,0,0,  0,0,50,0,  0,0,0,0,  0,0,55,0]},
 ]
 
+# Index of pattern Q above -- the only pattern _scale_roll_intensity() acts
+# on (its back-quarter CHH steps 12-15 are the hand-authored "roll burst").
+_PHONK_ROLL_PATTERN_IDX = 16
+_PHONK_ROLL_STEPS = (12, 13, 14, 15)
+_PHONK_ROLL_FLAT_VEL = 55     # matches the pattern's own steady-8th level (steps 0-11)
+_PHONK_ROLL_FULL_VELS = (60, 68, 76, 85)   # the ramp as hand-authored
+
+
+def _scale_roll_intensity(pattern: dict, density: float) -> dict:
+    """
+    Scale pattern Q's back-quarter hat-roll (steps 12-15) between "flat, no
+    roll" (density=0, same level as the rest of the bar) and "full ramp as
+    authored" (density=1) -- research/theory/rhythm-groove.md: phonk's
+    bounce comes from swing + off-grid placement + roll density as three
+    separate, independently-tunable levers, not just swing. Returns an
+    unmodified reference to `pattern` for any other pattern (only pattern
+    Q's specific hand-authored roll shape is meaningful to scale this way).
+    """
+    if pattern is not DRUM_PATTERNS[_PHONK_ROLL_PATTERN_IDX] or CHH not in pattern:
+        return pattern
+    density = max(0.0, density)
+    scaled = dict(pattern)
+    chh = list(pattern[CHH])
+    for i, step in enumerate(_PHONK_ROLL_STEPS):
+        full = _PHONK_ROLL_FULL_VELS[i]
+        chh[step] = int(round(_PHONK_ROLL_FLAT_VEL + (full - _PHONK_ROLL_FLAT_VEL) * density))
+    scaled[CHH] = chh
+    return scaled
+
+
+# {genre_key: float} from config/genres/*.yaml's roll_density field --
+# currently only lofi_phonk sets one.
+_ROLL_DENSITY_BY_GENRE: dict[str, float] = genre_presets.build_roll_density()
+
 # ─── Per-subgenre tables, loaded from config/genres/*.yaml ───────────────────
 # Placed here (after PROGRESSIONS/DRUM_PATTERNS/VOICING_OPTIONS) because
 # genre_presets.load_all() bounds-validates progression_indices/
@@ -913,6 +947,7 @@ _COZY_SUBGENRES: frozenset[str] = genre_presets.build_cozy_subgenres()
 _GLIDE_808_GENRES: set = genre_presets.build_glide_808_genres()
 _MICRO_SWING_GENRES: set = genre_presets.build_micro_swing_genres()
 _CONTINUOUS_ARP_GENRES: set = genre_presets.build_continuous_arp_genres()
+_CHH_TRIPLET_GENRES: set = genre_presets.build_chh_triplet_genres()
 
 # Drum fills (1 bar of 16 steps — fire at last bar of a section)
 DRUM_FILLS = [
@@ -1459,7 +1494,8 @@ _MICRO_SWING_PROFILE = {
 _MICRO_SWING_DEFAULT = (4.0, 6.0)
 
 
-def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None, micro_swing=False):
+def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None,
+                micro_swing=False, chh_triplet=False):
     """
     Build drum events. fill_bars = set of bar numbers that get a fill
     instead of the regular pattern. Every 4 bars gets a hi-hat 16th run.
@@ -1469,6 +1505,14 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None, micro_
     _MICRO_SWING_PROFILE) on top of the existing _gauss_jitter humanization —
     each drum voice gets its own bias/std-dev instead of every voice sharing
     the same flat +-4ms jitter.
+
+    chh_triplet=True (default False -- every existing genre/call site keeps
+    its exact prior behavior unchanged): replaces the CHH voice's normal
+    16-step reads with a true 12-step-per-bar (8th-note-triplet) subdivision
+    layered against the still-16-step KICK/SNARE/RIM/OHH -- drill's
+    hi-hat triplets are a genuinely different subdivision (12 vs 16 per
+    bar), not reachable by densifying the 16-step hat pattern
+    (research/theory/rhythm-groove.md). See _build_triplet_hat_events().
     """
     events = []
     fill_bars = fill_bars or set()
@@ -1493,6 +1537,8 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None, micro_
             src = fill_template if use_fill else pattern
 
             for drum_note, vels in src.items():
+                if chh_triplet and drum_note == CHH:
+                    continue   # CHH comes from _build_triplet_hat_events() below instead
                 # Per-element swing: hi-hats/ride are tighter (less swing) than
                 # kick/snare — creates the J Dilla polyrhythmic push-pull feel.
                 # Research: "Different swing percentages on different drum elements
@@ -1546,6 +1592,36 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None, micro_
                         t = _gauss_jitter(base_t, 4, bpm)
                     events.append((t, drum_note, _gauss_velocity(vel_val, 8), 25))
 
+    if chh_triplet:
+        events += _build_triplet_hat_events(start_bar, num_bars, bpm)
+
+    return events
+
+
+_TRIPLET_STEPS_PER_BAR = 12
+_TRIPLET_STEP_TICKS = BAR // _TRIPLET_STEPS_PER_BAR   # 160 ticks = one 8th-note-triplet
+
+
+def _build_triplet_hat_events(start_bar: int, num_bars: int, bpm: int) -> list:
+    """
+    True 12-step-per-bar (8th-note-triplet) hi-hat subdivision -- a
+    genuinely different grid than the 16-step DRUM_PATTERNS format, not a
+    denser 16-step pattern (research/theory/rhythm-groove.md). Every 3rd
+    triplet step (the "downbeat" of each triplet group, i.e. each real
+    beat) gets a stronger accent; the two off-triplet steps in between are
+    ghosted, giving the characteristic drill triplet-roll shuffle.
+    """
+    events = []
+    for bar in range(num_bars):
+        abs_bar = start_bar + bar
+        base_tick = abs_bar * BAR
+        for step in range(_TRIPLET_STEPS_PER_BAR):
+            if random.random() < 0.08:   # occasional dropped step for variation
+                continue
+            accent = (step % 3 == 0)
+            base_vel = 62 if accent else 40
+            t = _gauss_jitter(base_tick + step * _TRIPLET_STEP_TICKS, 4, bpm)
+            events.append((t, CHH, _gauss_velocity(base_vel, 8), 25))
     return events
 
 
@@ -3456,6 +3532,15 @@ def build_midi(params, output_path):
     pat_a = params.get('drum_pattern_a_generated') or DRUM_PATTERNS[pat_a_idx % len(DRUM_PATTERNS)]
     pat_b = params.get('drum_pattern_b_generated') or DRUM_PATTERNS[pat_b_idx % len(DRUM_PATTERNS)]
 
+    # Phonk roll-density lever (see _scale_roll_intensity) -- only affects
+    # pattern Q, only for genres with a configured roll_density; every other
+    # pattern/genre combination passes through _scale_roll_intensity() as a
+    # no-op (identity check against pattern Q's own dict fails).
+    _roll_density = _ROLL_DENSITY_BY_GENRE.get(params.get('sub_genre'))
+    if _roll_density is not None:
+        pat_a = _scale_roll_intensity(pat_a, _roll_density)
+        pat_b = _scale_roll_intensity(pat_b, _roll_density)
+
     # Sub-genre config (piano/melody programs, forced energy)
     _cfg = _SUBGENRE_CONFIG.get(sub_genre, {})
     piano_prog = _cfg.get('piano', GM_RHODES)
@@ -3473,6 +3558,7 @@ def build_midi(params, output_path):
     use_glide_bass  = sub_genre in _GLIDE_808_GENRES
     use_micro_swing = sub_genre in _MICRO_SWING_GENRES
     use_arp_melody  = sub_genre in _CONTINUOUS_ARP_GENRES
+    use_chh_triplet = sub_genre in _CHH_TRIPLET_GENRES
 
     # ── Song form ───────────────────────────────────────────────
     form_name = _FORM_BY_SUBGENRE.get(sub_genre, 'standard')
@@ -3582,7 +3668,7 @@ def build_midi(params, output_path):
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
                 bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking, glide=use_glide_bass)
                 drum_ev    += build_drums(pat_a, sec_start, sec_bars, swing, bpm, fill_bars,
-                                          micro_swing=use_micro_swing)
+                                          micro_swing=use_micro_swing, chh_triplet=use_chh_triplet)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 if use_arp_melody:
                     # Synthwave's melodic engine is the arp itself, not
@@ -3616,7 +3702,7 @@ def build_midi(params, output_path):
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
                 bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking, glide=use_glide_bass)
                 drum_ev    += build_drums(pat_b, sec_start, sec_bars, swing, bpm, fill_bars,
-                                          micro_swing=use_micro_swing)
+                                          micro_swing=use_micro_swing, chh_triplet=use_chh_triplet)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 active_bars += sec_bars
@@ -3660,7 +3746,8 @@ def build_midi(params, output_path):
                                                    scale=scale, seed_motif=track_motif)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 od_bars = max(1, sec_bars // 2)
-                od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm, micro_swing=use_micro_swing)
+                od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm,
+                                      micro_swing=use_micro_swing, chh_triplet=use_chh_triplet)
                 n_od = len(od_raw)
                 od_raw = [(ev[0], ev[1], max(1, int(ev[2] * (1.0 - (i / max(1, n_od)) * 0.75))), ev[3])
                           for i, ev in enumerate(od_raw)]
