@@ -8,8 +8,10 @@ says so.
 **Method:** read the pipeline end to end (run → music → visuals → assemble →
 upload → analytics → web panel → deploy), ran the full test suite (1002 pass,
 4 deselected as slow), ran `ruff` over the non-test code, generated 22 tracks
-with the real composer to measure length and register, and cross-checked the
-committed runtime logs in `assets/` against the code that writes them.
+with the real composer to measure length and register, generated 300 real
+titles and their thumbnail text, rendered thumbnails and a background frame
+and looked at them, and cross-checked the committed runtime logs in `assets/`
+against the code that writes them.
 
 **Severity**
 - **P0** — breaks the product's core promise, or risks the channel/account.
@@ -32,15 +34,21 @@ The bad news:
    repeated four times, over a 60-second visual loop. Most of the
    "growth engine" (duration bandit, watch-time weighting) never runs in
    production.
-3. **The live stream and the daily render share one `music/` folder and
-   delete each other's files.**
-4. **The analytics are statistics cosplay.** "Thompson Sampling" isn't, the
+3. **What viewers see is broken.** 40% of thumbnails show a phrase cut off
+   mid-sentence ("LOFI HIP HOP FOR"), 1 in 6 titles say "lofi hip hop"
+   twice, the on-screen now-playing text scrambles word order, and every
+   uploaded video shows a fake "LIVE" badge.
+4. **Disk cleanup never runs in production**, and the live stream and
+   renders share one `music/` folder that several things delete from.
+5. **A "jazz" video isn't jazz.** Only the first track follows the chosen
+   sub-genre; the rest are random picks from all 26.
+6. **The analytics are statistics cosplay.** "Thompson Sampling" isn't, the
    "A/B test" compares different videos, and the KPI is biased against
-   long videos.
-5. **Channel-risk features:** "lofi cover" titles for songs that aren't in
+   long videos. The thumbnail swap can never find its alternate image.
+7. **Channel-risk features:** "lofi cover" titles for songs that aren't in
    the video, "no ads" claims on a channel built for ad revenue,
    anti-bot evasion, and an "undetectable" AI-background module.
-6. **The codebase grew by accretion, not design:** 4,400-line files,
+8. **The codebase grew by accretion, not design:** 4,400-line files,
    226 blanket `except Exception`, comments that narrate past sessions
    instead of explaining code, and no CI.
 
@@ -151,6 +159,21 @@ new end, so the video stops dead with no fade.
 earlier uploads' tracks, the live stream's library, and silent `--mode mock`
 placeholders. This is reused content uploaded without a warning.
 
+**OUT-9 — A chosen sub-genre applies to one track only.**
+`_build_diverse_params()` (`generate_music_gemini.py:4206`) builds track 0
+from `pick_params(genre_hint=...)`, then gives every other track a
+**different, random** sub-genre from all 26 (`sub_pool` excludes only the
+anchor's genre). Picking "jazz_cafe" in the web panel gets one jazz track
+plus, say, phonk, sleep_lofi and lofi_house. The title, thumbnail and
+burned-in genre badge all describe track 0 only. Its docstring still says
+"call pick_params (Groq or random)".
+
+**OUT-10 — The audio "quality gate" never rejects anything.** After
+rendering, `score_audio_quality()` (`generate_music_gemini.py:4179`) scores
+clipping, silence, loudness and spectral balance, prints the result,
+appends it to a log, and ships the track regardless of the score. It's a
+logger named like a gate.
+
 **OUT-8 — `DURATION_MAP.get(label, 7200)`** (`assemble_video.py:757`):
 an unknown label silently becomes a 2-hour render instead of an error.
 
@@ -158,17 +181,20 @@ an unknown label silently becomes a 2-hour render instead of an error.
 
 ## 3. Live stream vs. daily render: they destroy each other (P0/P1)
 
-**LIVE-1 — Shared `music/` folder, two pruners.**
-- The daily run prunes `music/*.wav` to the **10** newest
-  (`run.py:106-107`).
-- The stream keeps a **150-track** library in the same folder
+**LIVE-1 — Shared `music/` folder, several deleters.** *(Corrected in
+round 2: `run.py`'s prune only runs on a bare CLI upload — see DISK-1.)*
+- The stream keeps a **150-track** library in `music/`
   (`stream_live.py:354`) and prunes to 150 itself (`:358`).
+- A bare `python run.py` that uploads by itself prunes `music/*.wav` to
+  the **10** newest (`run.py:106-107`). Run during a stream, it deletes
+  ~140 files the stream's ffmpeg playlist still references. It also
+  leaves the `.meta.json` sidecars behind as orphans.
+- The web panel's scratch cleanup deletes every `track_*.wav`, including
+  the whole stream library (JOB-6).
 - The web panel allows a stream and a render at the same time (separate
-  `slot`s in `webui/jobs.py`).
-- So a daily run deletes ~140 files that the running stream's ffmpeg
-  playlist still references, and the stream's pruner can delete a track
-  the daily render is about to concat.
-- `run.py`'s prune also leaves the `.meta.json` sidecars behind as orphans.
+  `slot`s in `webui/jobs.py`). Each daily render's tracks land in the
+  stream's library and get played there too, so the same music ships on
+  both the stream and the uploads.
 
 **LIVE-2 — The playlist refresher is dead code, and the comments
 contradict each other.** `_start_playlist_refresher()`
@@ -502,7 +528,181 @@ colab is AI (AI-3). Move mock into `tests/` and delete the rest.
 
 ---
 
-## 12. What's actually good
+## 12. Titles, thumbnails and on-screen text (P0/P1)
+
+Measured by generating 300 titles with the real pool (`pick_concept_from_pool`
++ `build_title`) and running each through the thumbnail's text function,
+then rendering thumbnails and a background frame and looking at them.
+
+**TXT-1 — 40% of thumbnails show a broken fragment.**
+`_derive_short_title()` (`generate_thumbnail_cozy.py:179`) takes everything
+after the first " · ", then cuts at the last whole word that fits. It never
+checks what's left. 120 of 300 ended on a dangling word or punctuation
+(a conservative count). Real outputs:
+`'lo-fi hip hop ·'`, `'lo-fi hip hop,'`, `'1 hour straight of'`,
+`'chillhop roots, 1'`, `'lofi · dead of'`, `'lofi hip hop for'`,
+`'chill lofi beats to'`. The last two were rendered and appear on the
+thumbnail in 80-pixel capitals.
+
+**TXT-2 — The titles themselves are keyword salad.**
+- 50 of 300 contain "lofi hip hop"/"lo-fi hip hop" twice:
+  `'lofi hip hop · lo-fi hip hop, space station light, side project open — 1 hour'`.
+- "lofi lofi" appears outright: `'1 hour of neo soul lofi lofi for essay writing'`.
+- Random activity slots produce `'wedding planning beats for chill, study'`
+  and `'minecraft cozy light, grad school open'`.
+- 6 of 300 claim "no loop", on a video that plays the same 4 tracks four
+  times (OUT-1).
+- 29 of 300 titles were exact duplicates of another.
+
+**TXT-3 — The on-screen "now playing" text scrambles word order.**
+`draw_now_playing()` (`visual_v2/scene.py:298`) loops over the words and
+appends each one to line 1 *whenever it still fits*, even after an earlier
+word overflowed to line 2. Rendered result for "cyberpunk cafe · neon rain
+and coffee made by a robot": line 1 "cyberpunk cafe · neon **by**", line 2
+"rain and coffee made a…". Words are moved out of order, and the title is
+burned into every frame of the video.
+
+**TXT-4 — Every uploaded video shows a fake "LIVE" badge.** `draw_header()`
+(`visual_v2/scene.py:382`) draws a pulsing red dot and "LIVE" on the
+background loop used for regular uploads, not just the stream. Claiming a
+pre-recorded video is live is misleading to viewers.
+
+**TXT-5 — The on-screen clock is the render time, frozen into a loop.**
+The header clock is `datetime.now()` at render time, in the server's time
+zone. In a 1-hour video built from a 60-second loop, it shows the same
+minute and jumps back every 60 seconds.
+
+**TXT-6 — "Now playing" is one title for the whole video.** The track
+title is baked into the 60-second background loop (`run.py:270-280`) from
+the concept's mood line, before the music is even generated. Four tracks
+play under one fixed title. The genre badge also comes from the concept's
+*guess*, so a video can say "lo-fi hip hop" over bossa or phonk (OUT-9).
+
+**TXT-7 — Thumbnail design defects** (seen in rendered output):
+- The accent underline runs through the bottom of the title glyphs and
+  reads as a strikethrough.
+- A stray `*` sits above every title: the ✦ deco mark was replaced with an
+  asterisk (`generate_thumbnail_cozy.py:897`).
+- "1 HOUR" appears twice (badge and subtitle), and the subtitle "LOFI ·
+  1 HOUR" adds nothing.
+- The "listener" silhouette is a black blob on a near-black background; it
+  reads as a tombstone with headphones. The coffee cup is black on black
+  too.
+- Overall very dark, heavy grain, nothing that reads at YouTube's small
+  grid size.
+- The RNG seed uses `hash(theme_name)`, which Python randomizes per
+  process, so "same (theme, variant) always renders the same layout" is
+  false for the decorative elements.
+
+**TXT-8 — Two channel names.** The video says "Lofi Streams"
+(`visual_v2/config.py:62`); the thumbnail watermark says "LOFI FACTORY".
+The second also tells viewers, in plain words, that this is a factory.
+
+**TXT-9 — Default upload metadata is risky.** `publish.py:827-828`: when
+no SEO file is found, the title becomes "lo-fi beats to study/relax to 🌙",
+a near-copy of Lofi Girl's signature title, and the description becomes
+"No copyright. Free to use." That grants anyone the right to reupload the
+channel's music, and "no copyright" is legally wrong.
+
+---
+
+## 13. OAuth and the YouTube API (P1)
+
+**API-1 — The "monetary analytics" connect flow is broken.**
+`monetary_authorization_url()` (`webui/youtube_oauth.py:210`) doesn't save
+the PKCE code verifier that google-auth-oauthlib 1.5 generates
+automatically. `monetary_handle_callback()` builds a fresh `Flow` with no
+verifier, so Google rejects the code exchange ("Missing code verifier").
+The main flow had exactly this bug, fixed it, and documented the fix in a
+comment 100 lines up (`:124-130`); the fix was never copied to the
+monetary flow. Its tests (`tests/webui/test_youtube_oauth_monetary.py`)
+replace `Flow` with a fake, so they pass.
+
+**API-2 — The "read-only" monetary token is a full-power token.**
+`MONETARY_SCOPES = SCOPES + [...]` (`webui/config.py:55`), and the consent
+uses `include_granted_scopes`. `token_monetary.json` carries full YouTube
+management rights (upload, delete, edit), despite the comments calling it
+a separate opt-in that "never silently upgrades" anything. That's two
+full-power tokens on disk instead of one.
+
+**API-3 — The OAuth state check can be skipped.** `handle_callback()`
+(`youtube_oauth.py:122`) only rejects a *mismatched* state:
+`if _pending_state and state and state != _pending_state`. A callback with
+**no** state, or one arriving after a restart (when `_pending_state` is
+`None`), is accepted. A logged-in admin opening a crafted callback link
+would link someone else's YouTube account to the pipeline. Require the
+state to be present and equal. Same in the monetary flow (`:226`).
+
+**API-4 — Scope lists are duplicated in four files** (`webui/config.py`,
+`scripts/upload_youtube.py`, `scripts/analytics.py`,
+`scripts/youtube_live_manager.py`). They will drift.
+
+**API-5 — Every live title update erases the stream description.**
+`LiveTitleUpdater._run()` (`youtube_live_manager.py:381`) calls
+`liveBroadcasts().update(part="snippet")` with only the title and start
+time. With `part=snippet`, the YouTube API deletes any snippet property
+not included, so the description is wiped on every track change. (The
+midnight refresh in `publish.py:1012` does include it.)
+
+**API-6 — The live stream eats the daily API quota.** Its own comment
+(`youtube_live_manager.py:37`) works out "720/day × 50 units = 36,000",
+against a default quota of 10,000 units/day, and waves it off with "live
+streams rarely run 24h straight". This one is a 24/7 stream. Once the
+quota is spent, the daily upload, thumbnail set and analytics sync all fail
+for the rest of the day. The titles it pushes come from the wrong-song
+monitor (LIVE-3) anyway.
+
+**API-7 — `"frameRate": "15fps"`** (`youtube_live_manager.py:179`).
+YouTube's documented values for `cdn.frameRate` are `30fps`, `60fps` and
+`variable`. If the API rejects this, the managed-broadcast path fails and
+the stream falls back to the bare stream key. *(Unverified against the live
+API.)*
+
+**API-8 — Each upload's duplicate check costs 100 quota units**
+(`search().list`, `publish.py:790`) and only looks at the 50 newest
+videos.
+
+**API-9 — Manual uploads pair files by "newest".** `publish.py upload`
+without explicit paths takes the newest video, the newest `seo_*.json`
+(`load_seo`, `:131`) and the newest `thumb_*.jpg` (`:819`) independently.
+An `_alt` thumbnail or a web-panel thumbnail regeneration is "newer", so
+a video can go up with another video's title and thumbnail.
+`find_latest_valid_video()` (`:115`) also **deletes** any video shorter
+than 10 minutes, including one a concurrent render is still writing.
+
+---
+
+## 14. Disk and file lifecycle (P1)
+
+**DISK-1 — Production never cleans up.** `_cleanup_old_files()`
+(`run.py:74`) is only called when `run.py` itself uploaded (`run.py:535-536`).
+The daily timer runs `publish.py auto`, which runs `run.py --skip-upload`
+and uploads separately; the web panel does the same. Neither ever prunes.
+Every day leaves behind:
+- the uploaded video (~3.6 GB for 1 hour at 8 Mbps),
+- the track WAVs (~40 MB each), plus their `.meta.json` files,
+- the background loop, thumbnails and SEO files.
+
+A 100 GB disk fills in roughly a month. The "Clean up scratch" button and
+the disk-usage panel exist because of this.
+
+**DISK-2 — The thumbnail swap can never find its alternate image.**
+Even where cleanup does run, it keeps only the 5 newest `thumb_*.jpg`
+(primary and `_alt` together, so about 2.5 videos' worth). The swap only
+looks at videos 7–30 days old (`analytics.py:1097`). By then the `_alt`
+file is long gone, and the swap quietly skips every video. So the
+"A/B" feature (STAT-3) is dead twice over.
+
+**DISK-3 — `--skip-visual` picks an arbitrary old background**:
+`visuals[0]` from an unsorted glob (`run.py:288`), not the newest.
+
+**DISK-4 — `append_upload_log()`** (`publish.py:139`) resets to an empty
+list on any JSON error and then overwrites the file. One corrupt write and
+the entire upload history, which every analytics feature reads, is gone.
+
+---
+
+## 15. What's actually good
 
 So the fix work keeps these:
 
@@ -530,11 +730,18 @@ Order matters: stop the damage first, then fix the output, then clean up.
 3. Fix cancel: `start_new_session=True` on the job subprocess,
    `os.killpg` on cancel, set a `cancel_requested` flag that `_pump`
    checks before marking failed or alerting (JOB-1, JOB-2).
-4. Remove the "no ads" and "recorded in a bedroom" copy (POL-2).
-5. Stop "cover"/"slowed + reverb"/artist-name titles in lofi_inator, or
+4. Remove the "no ads", "recorded in a bedroom", "no loop" and "Free to
+   use" copy, the default Lofi Girl-style title, and the "LIVE" badge on
+   uploads (POL-2, TXT-2, TXT-4, TXT-9).
+5. Make cleanup run after every successful upload, whoever uploads
+   (DISK-1). Store the `_alt` thumbnail with the upload record, not in
+   the pruned folder (DISK-2).
+6. Stop "cover"/"slowed + reverb"/artist-name titles in lofi_inator, or
    disable lofi_inator entirely (POL-1).
-6. Login lockout or Cloudflare Access (SEC-1); fix `compare_digest`
+7. Login lockout or Cloudflare Access (SEC-1); fix `compare_digest`
    on bytes (SEC-2).
+8. Require a present, matching OAuth state (API-3). Send the full snippet
+   on live title updates, or stop updating titles (API-5, API-6).
 
 ### Phase 1 — Make the uploads worth watching
 1. Rework the encode (OUT-3) until a 2-hour render fits the budget.
@@ -547,6 +754,14 @@ Order matters: stop the damage first, then fix the output, then clean up.
    falling back to globbing `music/` (OUT-6, OUT-7).
 6. Fix Shorts: compose a real 9:16 layout instead of center-cropping
    (POL-5).
+7. Keep every track in a video in the chosen sub-genre (OUT-9). Make the
+   audio quality gate reject and regenerate (OUT-10).
+8. Fix thumbnail text: refuse fragments that end on a function word or
+   punctuation, de-duplicate genre words in titles, and add a test that
+   runs 1,000 generated titles through both (TXT-1, TXT-2).
+9. Fix the now-playing word wrap; drop the burned-in clock; make "now
+   playing" either real (per track) or remove it (TXT-3, TXT-5, TXT-6).
+10. One channel name everywhere (TXT-8).
 
 ### Phase 2 — Honest analytics or none
 1. Pick at most two levers (e.g. title strategy, thumbnail) and turn off
@@ -590,8 +805,10 @@ Order matters: stop the damage first, then fix the output, then clean up.
 - **Listening quality.** The music was measured (length, register, MIDI
   structure), not judged by ear. Pitch registers looked sane across the
   10 sampled keys.
-- **`generate_thumbnail_cozy.py`** (1,278 lines) beyond its claims.
-- **`visual_v2/` rendering internals** (Gray-Scott, particles, post-FX).
-- **`youtube_live_manager.py`** and `youtube_oauth.py` beyond a skim.
-- **Anything needing the deployed box:** live streaming, VAAPI, real
-  YouTube API responses (see STAT-8).
+- **`generate_music_v2.py`** internals (1,387 lines) beyond its shared
+  quality-gate and engine-selection code.
+- **`visual_v2/` effects** (Gray-Scott, particles, post-FX): one frame was
+  rendered and inspected, the algorithms weren't reviewed.
+- **`posting_time.py`, `playlist_curation.py`, `dashboard.py`.**
+- **Anything needing the deployed box or a real account:** live streaming,
+  VAAPI, real YouTube API responses (STAT-8, API-7).
