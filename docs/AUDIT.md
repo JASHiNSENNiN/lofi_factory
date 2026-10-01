@@ -702,7 +702,130 @@ the entire upload history, which every analytics feature reads, is gone.
 
 ---
 
-## 15. What's actually good
+## 15. Round 3: everything else (P1/P2)
+
+Rendered 6 full tracks through FluidSynth and the FX chain (4 v1, 2 v2) and
+measured them, rendered a full 60-second background loop and checked its
+seam, ran the suite under coverage, and read the remaining modules.
+
+**R3-1 — The money paths are the untested ones.** Coverage is 52% overall,
+but it's concentrated on the composer (86–87%) and the FX chain (90%).
+What actually touches YouTube is barely tested:
+`youtube_live_manager.py` 0%, the whole `lofi_inator/` package 0%,
+`upload_youtube.py` 11%, `stream_live.py` 12%, `webui/app.py` 8%,
+`assemble_video.py` 31%. 357 mock/monkeypatch uses across 76 test files;
+API-1 shows what that hides.
+
+**R3-2 — The audio is technically clean but static.** All six tracks sat
+at −16.9 LUFS (one at −18.7) with no clipping, so the mastering works. But
+loudness varies only 1.6–3.2 dB (10th–90th percentile of 3-second windows)
+across a whole track. The "storytelling tension arc" and section-transition
+features are close to inaudible at the level of the mix. One track
+(lofi_garage) ran **13.4 minutes** (OUT-4). True peak reached −0.4 dBTP on
+one track; the AAC encode will push that over 0 dBTP (YouTube asks for
+−1). Every track scored a perfect 1.00 on the built-in gate (OUT-10).
+
+**R3-3 — Track titles are word-bank salad**: "Iterating beyond that
+pulse", "Hum along latency", "Untethered grief, porous ozone". These are
+what the live stream shows as "now playing" and pushes into the broadcast
+title (API-5).
+
+**R3-4 — The music21 "harmony engine" doesn't use music21 to generate
+anything.** `generate_functional_progression()` (`harmony_engine.py:181`)
+walks hand-written tables. music21 is only called by
+`validate_roman_numerals()` and `realize_numeral_pitches()`, which nothing
+in production calls. The README's "functional-harmony progressions via
+music21" is false, and the project ships a 115 MB dependency that adds
+~0.26 s of import time to every track for nothing.
+
+**R3-5 — The drum kit is 8 sounds, two of them duplicated.**
+`assets/drums/` has 10 files, but `ch-lofi.wav` and `hi-hat-closed-01.wav`
+are byte-identical, and so are `oh00-lofi.wav` and `open-hat-01.wav`. All
+26 "genres" share one closed hat, one open hat (cut at 250 ms, so it never
+rings open), 3 kicks and 3 snares.
+
+**R3-6 — Bundled assets are missing their licenses.**
+- `BebasNeue-Regular.ttf` is under the SIL Open Font License, which requires
+  the license text to travel with the font. It isn't in the repo.
+- `MuseScore_General.sf3` (MIT) needs its copyright notice included; it
+  isn't. `GeneralUser_GS.sf2` has its own license; also absent.
+- The drum samples are described as "CC0 from Boochi44" only in a code
+  comment.
+- The Voxengo IR license (`assets/ir/license.txt`, condition 4b) allows
+  redistribution only of **complete and unaltered** copies of the archive.
+  The repo ships 3 of its files.
+
+**R3-7 — The background clock runs at render speed.** Confirmed in a
+rendered 60-second loop: the header clock reads 23:41 on the first frame
+and 23:50 on the last, because it's `datetime.now()` sampled during a
+9-minute render. In the final video it races forward 9 minutes every
+minute, then jumps back (TXT-5).
+
+**R3-8 — `--visual-seed` doesn't reproduce renders.** The Gray-Scott vs.
+noise background choice uses the global, unseeded `random`
+(`visual_v2/static_layers.py:50,53`), not the visual seed. The flag's help
+text promises "use to reproduce a specific render". Gray-Scott is also
+picked only 12% of the time and then mostly covered by UI panels and a
+vignette; the README's "Perlin/Gray-Scott visuals" oversells it.
+
+**R3-9 — The background render is slow and huge.** 60 seconds of 720p
+took **9 minutes** to render on this machine (Python/PIL compositing every
+frame) and produced a **116 MB** intermediate file (15.5 Mbps), which is
+then re-encoded twice more (OUT-3). Music notes pop in and out at the loop
+seam.
+
+**R3-10 — The documented terminal dashboard crashes on install.**
+`dashboard.py` imports `textual` and `rich`; neither is in
+`requirements.txt`. `./lofi`, documented in `DEPLOYMENT.md:118`, dies with
+`ModuleNotFoundError` on a fresh venv. The file hasn't been touched since
+the initial commit.
+
+**R3-11 — Four schedulers, and the docs point to one that doesn't exist.**
+A systemd timer, `publish.py auto --loop`, `publish.py cron install`, and
+the dashboard's toggles all schedule the same job. Nothing stops cron and
+systemd from both running a daily upload. The cron help text says "Prefer
+'auto-service install'", but `auto-service` has no `install` action
+(`publish.py:1753`). The cron entry doesn't quote the repo path.
+
+**R3-12 — Two opposite playlist policies.** `playlist_curation.py` insists
+that creating a public playlist must never happen without an explicit
+`confirm=True` from a human. `lofi_inator/registry.py:153` creates a public
+playlist silently, and creates another one whenever its cache file goes
+missing or corrupt. The curated playlists are keyed on internal SEO buckets
+("temporal", "cross_genre") that mean nothing to viewers.
+
+**R3-13 — Posting-time advice is noise presented as a finding.**
+`posting_time.py` says it refuses to "dress up a guess as a finding", then
+recommends a "best hour" from **3** total samples (`MIN_SAMPLES = 3`), with
+single-sample hours allowed. It ranks by total views without adjusting for
+video age, so older uploads win. It uses the time the upload *finished*
+(hours after the 00:00 timer fires), not the publish time. And since the
+timer always fires at the same hour, nearly all data points share one hour.
+
+**R3-14 — The web panel still asks for Google login cookies for a removed
+feature.** The Settings card says "Upload a Netscape cookies.txt … no
+cookies.txt — downloads fall back to MIDI" (`webui/app.py:2577-2598`). The
+only code that used cookies for downloads, `ytdlp_util.download_opts()`,
+has no callers. Uploading a logged-in Google session to an
+internet-exposed box, for nothing, is a bad trade.
+
+**R3-15 — Alerting is off, and was off for the one recorded failure.**
+`assets/alerts_log.jsonl` shows the only logged failure with
+`"sent": false, "configured": false`. Alerts are opt-in, `setup.sh` never
+asks for a destination, the variable is named `LOFI_STREAM_ALERT_WEBHOOK`
+even though it carries every alert, and `notify_auto_failure.py` silently
+returns when it's unset. Its docstring says it must work "even if the venv
+or app modules are in a bad state", but it imports the `webui` package and
+`apprise` from that same venv.
+
+**R3-16 — Comments mention other "agents".** `posting_time.py`'s docstring
+says analytics is "owned by a separate agent", and lists schema doubts
+"this worktree can't verify". These are leftovers from how the code was
+generated, not documentation.
+
+---
+
+## 16. What's actually good
 
 So the fix work keeps these:
 
@@ -806,9 +929,7 @@ Order matters: stop the damage first, then fix the output, then clean up.
   structure), not judged by ear. Pitch registers looked sane across the
   10 sampled keys.
 - **`generate_music_v2.py`** internals (1,387 lines) beyond its shared
-  quality-gate and engine-selection code.
-- **`visual_v2/` effects** (Gray-Scott, particles, post-FX): one frame was
-  rendered and inspected, the algorithms weren't reviewed.
-- **`posting_time.py`, `playlist_curation.py`, `dashboard.py`.**
+  quality-gate and engine-selection code, and two rendered tracks.
+- **`webui/stats.py` and `webui/data.py`** beyond a skim.
 - **Anything needing the deployed box or a real account:** live streaming,
   VAAPI, real YouTube API responses (STAT-8, API-7).
