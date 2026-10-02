@@ -1190,12 +1190,23 @@ def view_live(root) -> None:
                     ui.notify(str(e), type="warning")
 
             with ui.row().classes("gap-3 mt-2"):
-                ui.button("Start stream", icon="sensors", on_click=start).props("color=primary")
-                ui.button("End stream", icon="stop_circle", on_click=end).props("color=negative")
+                start_btn = ui.button("Start stream", icon="sensors", on_click=start)\
+                    .props("color=primary")
+                end_btn = ui.button("End stream", icon="stop_circle", on_click=end)\
+                    .props("color=negative")
                 ui.button("Status", icon="info", on_click=check_status).props("flat color=primary")
-                ui.button("Force kill", icon="power_settings_new",
-                          on_click=lambda: jobs.manager.cancel(slot="stream"))\
+                kill_btn = ui.button("Force kill", icon="power_settings_new",
+                                     on_click=lambda: jobs.manager.cancel(slot="stream"))\
                     .props("flat color=negative")
+
+            def refresh_buttons() -> None:
+                streaming = jobs.manager.stream_running()
+                start_btn.set_enabled(not streaming)
+                end_btn.set_enabled(streaming or data.live_status() is not None)
+                kill_btn.set_enabled(streaming)
+
+            refresh_buttons()
+            ui.timer(2.0, refresh_buttons)
         with theme.card("Stream output"):
             def _latest_stream_job():
                 cands = [j for j in (jobs.manager.stream, jobs.manager.control) if j]

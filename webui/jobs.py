@@ -354,7 +354,10 @@ class JobManager:
         # job.cmd is [config.PYTHON, *args] (see run()) -- strip the
         # interpreter back off since run() re-adds it.
         args = job.cmd[1:]
-        return await self.run(job.name, args, slot=job.slot)
+        # History written before the control slot existed has end/status
+        # in the stream slot, where they'd collide with the stream itself.
+        slot = "control" if job.name in ("end", "status") else job.slot
+        return await self.run(job.name, args, slot=slot)
 
     async def cancel(self, slot: str = "main") -> None:
         """Stop the job and every process it started. _pump() records the
