@@ -1399,11 +1399,13 @@ def cmd_rename(args):
             print(f"[ERROR] Broadcast {broadcast_id} not found.")
             sys.exit(1)
         scheduled_start = items[0]["snippet"].get("scheduledStartTime", "")
+        description = items[0]["snippet"].get("description", "")
     except Exception as e:
         print(f"[ERROR] Could not fetch broadcast: {e}")
         sys.exit(1)
 
-    # Update title
+    # Update title. update(part="snippet") replaces the whole snippet, so the
+    # description must be sent back or it is erased.
     try:
         youtube.liveBroadcasts().update(
             part="snippet",
@@ -1411,6 +1413,7 @@ def cmd_rename(args):
                 "id": broadcast_id,
                 "snippet": {
                     "title": new_title[:100],
+                    "description": description,
                     "scheduledStartTime": scheduled_start,
                 },
             }

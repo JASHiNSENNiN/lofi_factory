@@ -403,22 +403,32 @@ def get_video_details(video_id: str, *, client=None) -> dict | None:
         return None
 
 
+_SNIPPET_KEEP = ("defaultLanguage", "defaultAudioLanguage")
+_STATUS_KEEP = ("embeddable", "license", "publicStatsViewable", "publishAt",
+                "selfDeclaredMadeForKids", "containsSyntheticMedia")
+
+
 def update_video(video_id: str, *, title: str, description: str, tags: list[str],
                   privacy: str, category_id: str = "10", client=None) -> bool:
-    """videos.update — the API requires the full snippet/status resource for
-    any part being updated (not a partial patch), so callers must pass every
-    field, not just the one that changed. Returns True on success."""
+    """videos.update. The API replaces each part it's given, so a field left
+    out is deleted: sending only the edited fields erased the video's
+    made-for-kids declaration, license and embed settings, and its publishAt
+    (a scheduled video lost its schedule). The current resource is read
+    first and every writable field it has is sent back. True on success."""
     try:
         yt = _yt_client(client)
+        cur = (yt.videos().list(part="snippet,status", id=video_id).execute()
+               .get("items") or [{}])[0]
+        old_snip, old_status = cur.get("snippet") or {}, cur.get("status") or {}
+        snippet = {k: old_snip[k] for k in _SNIPPET_KEEP if k in old_snip}
+        snippet.update(title=title[:100], description=description[:4900], tags=tags,
+                       categoryId=category_id)
+        status = {k: old_status[k] for k in _STATUS_KEEP if k in old_status}
+        status["privacyStatus"] = privacy
+        if privacy != "private":
+            status.pop("publishAt", None)   # the API only allows publishAt on private videos
         yt.videos().update(part="snippet,status", body={
-            "id": video_id,
-            "snippet": {
-                "title": title[:100],
-                "description": description[:4900],
-                "tags": tags,
-                "categoryId": category_id,
-            },
-            "status": {"privacyStatus": privacy},
+            "id": video_id, "snippet": snippet, "status": status,
         }).execute()
         return True
     except Exception:
