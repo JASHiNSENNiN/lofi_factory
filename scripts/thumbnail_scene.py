@@ -330,7 +330,7 @@ def draw_room(img: Image.Image, c: dict, theme: str, window_side: str,
     size = TH * 0.20
     left, right = cx - ww * 0.36, cx + ww * 0.36
     prop_a = rng.choice(["mug", "books"])
-    prop_b = rng.choice(["plant", "headphones" if prop_a != "headphones" else "plant"])
+    prop_b = rng.choice(["plant", "headphones"])
     for name, px in ((prop_a, left if not flip else right), (prop_b, right if not flip else left)):
         if name == "mug":
             _silhouette_coffee_cup(d, px, desk_y - size * 0.29, size, size, fill, rim, rng)

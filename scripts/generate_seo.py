@@ -310,9 +310,9 @@ CROSS_GENRE_POOL = [
     ("lofi ambient",
      "texture more than melody. presence more than song.",
      ["lofi ambient", "ambient lofi", "ambient study music", "atmospheric lofi"]),
-    ("lofi trap",
-     "808 at 70bpm. all the weight, none of the aggression.",
-     ["lofi trap", "trap lofi", "slow trap", "chill trap"]),
+    ("lofi drill",
+     "sliding 808s at half time. all the weight, none of the aggression.",
+     ["lofi drill", "drill lofi", "chill drill", "uk drill lofi"]),
     ("vaporwave lofi",
      "slowed down. everything softer. nostalgic for things that never happened.",
      ["vaporwave lofi", "aesthetic lofi", "retrowave study music", "90s lofi", "vaporwave beats"]),
@@ -569,9 +569,21 @@ def _pillar_weights() -> dict[str, float]:
         return default
 
 
-# Preferred title length band. Templates can't hit an exact length, so this
-# is a preference when picking among candidates, not a hard limit.
-_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 40, 62   # research: 40-60 chars read fully on mobile
+# Preferred title length band (research: 40-60 characters read fully on
+# mobile). A preference when picking among candidates, not a hard limit.
+_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 40, 62
+
+_UPLOAD_LOG = os.path.join(os.path.dirname(__file__), "..", "upload_log.json")
+
+
+def published_titles() -> set[str]:
+    """Titles already on the channel (upload_log.json), so a daily channel
+    doesn't post the same title twice."""
+    try:
+        with open(_UPLOAD_LOG) as f:
+            return {e.get("title") for e in json.load(f) if isinstance(e, dict) and e.get("title")}
+    except (OSError, ValueError):
+        return set()
 
 
 def generate_title_variants(
@@ -579,49 +591,41 @@ def generate_title_variants(
     duration: str,
     trends: dict | None = None,
     n: int = 3,
+    taken: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return up to n unique title candidates for this concept, each drawn
-    from a DIFFERENT hook-strategy family (HOOK_STRATEGIES: "statement",
-    "benefit_list", "spec_led") so the variants are genuinely different
-    creative hooks -- not n rolls of the same skeleton family.
-
-    Each attempt prefers a candidate landing in the [_TITLE_TARGET_MIN,
-    _TITLE_TARGET_MAX] char range (falls back to the first deduped candidate
-    if none of the 12 attempts land in range -- these pattern pools are
-    small, so "best of a small set" rather than a guarantee).
-
-    Returns (titles, strategies) -- two parallel lists, `strategies[i]` is
-    the hook-strategy family `titles[i]` was built from. If n > len(
-    HOOK_STRATEGIES), strategies repeat (cycled) for the extra slots.
+    """Up to n distinct titles, one per title form (HOOK_STRATEGIES: scene,
+    moment, radio), never one already published (`taken`, default: the
+    upload log). Returns (titles, strategies) as parallel lists;
+    `strategies[i]` is the form that really built `titles[i]`, so the
+    bandit credits the right form.
     """
+    taken = published_titles() if taken is None else taken
     variants: list[str] = []
     strategies: list[str] = []
 
-    for i in range(n):
-        strategy = HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)]
-        candidate = None
+    def _best(strategy: str) -> str | None:
+        found = None
         for _attempt in range(12):
             cand = build_title(concept, duration, strategy=strategy, trends=trends)
-            if cand not in variants:
-                candidate = candidate or cand
-                if _TITLE_TARGET_MIN <= len(cand) <= _TITLE_TARGET_MAX:
-                    candidate = cand
-                    break
-        if candidate is None:
-            # This strategy's small pattern set was exhausted by dedup --
-            # fall back to any strategy rather than dropping the slot.
-            for _attempt in range(12):
-                cand = build_title(concept, duration, trends=trends)
-                if cand not in variants:
-                    candidate = candidate or cand
-                    if _TITLE_TARGET_MIN <= len(cand) <= _TITLE_TARGET_MAX:
-                        candidate = cand
-                        break
-        if candidate is not None:
-            variants.append(candidate)
-            strategies.append(strategy)
+            if cand in variants or cand in taken:
+                continue
+            found = found or cand
+            if _TITLE_TARGET_MIN <= len(cand) <= _TITLE_TARGET_MAX:
+                return cand
+        return found
 
-    return variants[:n], strategies[:len(variants[:n])]
+    for i in range(n):
+        first = HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)]
+        # A form whose few titles are all used falls back to the others.
+        for strategy in (first, *[s for s in HOOK_STRATEGIES if s != first]):
+            title = _best(strategy)
+            if title:
+                variants.append(title)
+                strategies.append(strategy)
+                break
+    if not variants:   # every phrase already used: a repeat beats no title
+        variants, strategies = [build_title(concept, duration, "scene", trends)], ["scene"]
+    return variants, strategies
 
 
 _SEASON_WORDS = {"winter": (12, 1, 2), "spring": (3, 4, 5), "summer": (6, 7, 8),
@@ -782,19 +786,19 @@ def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concep
     to match what was actually generated. Called after generate_tracks() so
     SEO titles reflect the real music, not the pre-generation guess.
 
-    Exception: the "cross_genre" pillar's genre_label is left untouched. Its
-    concept came from a specific, curated CROSS_GENRE_POOL pick -- that pick
-    IS the pillar's whole reason for existing, and overriding it with
-    _SUBGENRE_TO_GENRE_LABEL's coarser alias would silently discard a more
-    specific, deliberate choice in favor of a less specific one (confirmed
-    2026-08-26: this was clobbering the pool's pick on every cross_genre
-    video, making its title/concept mismatch).
+    A "cross_genre" concept keeps its own wording ("lofi ambient", "vaporwave
+    lofi") when the music really is that genre; when the music turned out to
+    be something else, the label is replaced, because a title must never name
+    a genre that doesn't play.
     """
     updated = dict(base_concept)
-    if base_concept.get("pillar") != "cross_genre":
-        genre_label = _SUBGENRE_TO_GENRE_LABEL.get(music_sub_genre)
-        if genre_label:
-            updated["genre_label"] = genre_label
+    genre_label = _SUBGENRE_TO_GENRE_LABEL.get(music_sub_genre)
+    if base_concept.get("pillar") == "cross_genre":
+        from scripts.composer import _resolve_genre_hint
+        if _resolve_genre_hint(base_concept.get("genre_label") or "") == music_sub_genre:
+            genre_label = None
+    if genre_label:
+        updated["genre_label"] = genre_label
     if music_mood and len(music_mood.split()) >= 3:
         updated["mood_line"] = music_mood
     return updated
@@ -908,15 +912,11 @@ def generate_seo(theme_name: str = None, duration: str = None,
         print("  [SEO] Generating concept...")
         concept = pick_concept(trends)
 
-    # Generate 3 title variants (one per hook-strategy family -- statement,
-    # benefit_list, spec_led); pick one for upload diversity tracking,
-    # weighted by TWO independent bandit signals multiplied together: past
-    # per-hook-strategy performance for this pillar (title_variant_weights,
-    # coarse -- "which creative hook family wins") and per-surface-text-
-    # feature performance (title_feature_weights, finer -- "does a
-    # target-length/emoji/benefit-list title win", mined from the same
-    # already-logged title text). Both fall back to a neutral 1.0 for any
-    # strategy/feature without >=5 samples of performance data yet.
+    # Three title variants, one per form (scene, moment, radio); one is
+    # picked, weighted by two bandit signals multiplied together: past
+    # performance of each form for this pillar (title_variant_weights) and
+    # of surface features such as length (title_feature_weights). Both are
+    # a neutral 1.0 until a form or feature has >=5 scored videos.
     concept = {**concept, "theme": theme_name or concept.get("theme") or "cozy_rain"}
     title_variants, variant_strategies = generate_title_variants(concept, duration, trends, n=3)
     from scripts.analytics import (

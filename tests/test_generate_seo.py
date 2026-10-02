@@ -163,15 +163,27 @@ def test_generate_title_variants_falls_back_when_nothing_lands_in_range(monkeypa
 
 
 # ── concept_from_music_params() genre alignment (genre-variety bug fix) ────
-def test_concept_from_music_params_preserves_cross_genre_pool_pick():
+def test_concept_from_music_params_keeps_cross_genre_wording_when_the_music_matches():
     base = _concept_for_pillar("cross_genre")
-    base["genre_label"] = "bossa nova lofi"  # CROSS_GENRE_POOL's deliberate pick
-    updated = concept_from_music_params(
-        music_sub_genre="hip_hop_lofi",  # would map to "lo-fi hip hop" if applied
-        music_mood="a completely different generated mood entirely",
-        base_concept=base,
-    )
-    assert updated["genre_label"] == "bossa nova lofi"
+    base["genre_label"] = "lofi ambient"      # the pool's wording of `ambient`
+    updated = concept_from_music_params(music_sub_genre="ambient", music_mood="",
+                                        base_concept=base)
+    assert updated["genre_label"] == "lofi ambient"
+
+
+def test_concept_from_music_params_never_names_a_genre_that_doesnt_play():
+    base = _concept_for_pillar("cross_genre")
+    base["genre_label"] = "bossa nova lofi"
+    updated = concept_from_music_params(music_sub_genre="hip_hop_lofi",
+                                        music_mood="", base_concept=base)
+    assert updated["genre_label"] == "lo-fi hip hop"
+
+
+def test_every_cross_genre_pick_reaches_the_music_generator():
+    from scripts.composer import _resolve_genre_hint
+    from scripts.generate_seo import CROSS_GENRE_POOL
+    for label, *_ in CROSS_GENRE_POOL:
+        assert _resolve_genre_hint(label), label
 
 
 def test_concept_from_music_params_still_aligns_other_pillars():

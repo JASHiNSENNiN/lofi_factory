@@ -634,7 +634,7 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
     specific hook family, so a naive positional key was really only ever
     learning "which slot index tends to get clicked" -- keying by the
     strategy name itself makes the bandit learn something creatively
-    meaningful ("benefit_list outperforms statement for the 'emotional'
+    meaningful ("the moment form outperforms the scene form for the 'emotional'
     pillar"), which also survives generate_title_variants() reordering or
     resizing its variant slots in the future. Callers should fall back to
     1.0 for any strategy not present in the returned per-pillar dict (no

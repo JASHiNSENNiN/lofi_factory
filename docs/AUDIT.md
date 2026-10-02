@@ -1188,3 +1188,43 @@ a real account.
 Not done on purpose: randomising upload times to get around the
 repetitious-content policy. That policy judges the videos, not the
 schedule, and evading enforcement isn't something this project should do.
+
+## Round 8: hostile review of the title/thumbnail/genre seams
+
+Found and fixed:
+- Titles named genres that didn't play. Cross-genre picks "bossa nova lofi",
+  "jazz hop" and "lofi trap" never reached the music generator (no
+  sub-genre matched), and the concept kept its label anyway, so a video
+  titled "bossa nova lofi" could be hip hop. Published labels now resolve
+  to their sub-genre, "lofi trap" (no such genre here) became "lofi drill",
+  and a cross-genre label is replaced whenever the music differs. A test
+  that asserted the old behaviour was rewritten.
+- The visual theme was chosen before the music picked the genre, from a
+  label map whose keys no longer matched ("neo-soul lofi", "lofi ambient"),
+  so sleep music could get a summer sunset and the snow theme could run in
+  July. The theme is now chosen after the music, from the sub-genre, and
+  seasonal themes only run in season (`titles.theme_for_genre`).
+- "sleep lofi … beats to study & relax to": the radio form now says what
+  the genre is for (sleep, drift away, work & unwind, study & relax).
+- Titles repeated: in a simulated two years of daily uploads, 103 repeats
+  in the first year (first on day 22). Titles already in upload_log.json
+  are now skipped: 2 repeats in year one (first on day 256). Repeats after
+  that come from the finite hand-written phrase pool.
+- The bandit credited a fallback title to the wrong form; each title now
+  carries the form that built it.
+- Thumbnail regeneration from the panel couldn't parse the new
+  "scene 🌧️ [genre · length]" titles and fell back to stock phrases; a
+  leftover emoji variation selector also leaked into derived text.
+- Moment-form thumbnail text could run to 29 characters.
+- Thumbnail seeds came from `time % 100`, so pictures repeated.
+- Stale comments describing the removed title templates.
+
+Known and not fixed:
+- `title_features` buckets (45/70 chars, emoji, benefit list) predate the
+  new titles: every new title has an emoji and none has a benefit list, so
+  only the length feature still varies. Changing buckets would orphan the
+  scores already logged.
+- Every thumbnail is the same room composition, varied by theme, props
+  and side. On a channel page they will read as a series, which is the
+  intent, but they are not individually distinctive.
+- On some layouts the text card overlaps the desk props or the listener.

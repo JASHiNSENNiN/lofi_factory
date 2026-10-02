@@ -67,7 +67,7 @@ _ADJ: dict[str, str] = {
     "amber_night": "warm", "winter_snow": "snowy", "autumn_study": "autumn",
     "spring_dawn": "soft", "neon_tokyo": "neon", "summer_lofi": "sunny",
     "blue_hour": "calm", "forest_rain": "rainy", "sakura_night": "dreamy",
-    "vaporwave": "hazy", "lofi_house": "groovy", "lofi_classical": "gentle",
+    "vaporwave": "hazy", "lofi_house": "late night", "lofi_classical": "gentle",
     "bedroom_pop": "dreamy", "lofi_rnb": "smooth",
 }
 
@@ -82,6 +82,7 @@ _NIGHT_TIMES = ["after midnight", "at 2am", "late at night"]
 _DAY_TIMES = ["on a slow morning", "at golden hour", "on a sunday afternoon"]
 
 STRATEGIES = ("scene", "moment", "radio")
+THUMB_MAX_CHARS = 24    # the longest scene phrase; longer text shrinks on the card
 
 # Activities that read well before a time ("coding after midnight"); the
 # rest of the concept pool ("first week of classes") falls back to studying.
@@ -132,6 +133,18 @@ def _genre_tag(genre: str) -> str:
     return "lofi hip hop" if g == "lo-fi hip hop" else g
 
 
+def _use_phrase(genre: str) -> str:
+    """What the music is for, in the genre's own idiom: sleep music isn't
+    for studying, and ambient has no beats."""
+    if "sleep" in genre:
+        return "music to fall asleep to"
+    if "ambient" in genre:
+        return "music to drift away to"
+    if any(w in genre for w in ("house", "garage", "funk", "city pop", "synthwave")):
+        return "grooves to work & unwind to"
+    return "beats to study & relax to"
+
+
 def build(strategy: str, *, theme: str, genre: str, activity: str, duration: str,
           trends: dict | None = None, month: int | None = None,
           rng: random.Random | None = None) -> tuple[str, str]:
@@ -145,11 +158,11 @@ def build(strategy: str, *, theme: str, genre: str, activity: str, duration: str
         when = rng.choice(_NIGHT_TIMES if theme in _NIGHT_THEMES else _DAY_TIMES)
         act = activity if activity in _MOMENT_ACTIVITIES else "studying"
         head = f"{act} {when}"
-        # Thumbnail text stays at four words or fewer (readable on a phone).
-        thumb = head if len(head.split()) <= 4 else scene
+        # Thumbnail text stays short enough to read on a phone.
+        thumb = head if len(head.split()) <= 4 and len(head) <= THUMB_MAX_CHARS else scene
     elif strategy == "radio":
         adj = _ADJ.get(theme, "chill")
-        head, thumb = f"{g} {emoji} {adj} beats to study & relax to", scene
+        head, thumb = f"{g} {emoji} {adj} {_use_phrase(g)}", scene
         title = f"{head} · {duration}"
         return (title if len(title) <= 62 else head), thumb
     else:
@@ -158,3 +171,49 @@ def build(strategy: str, *, theme: str, genre: str, activity: str, duration: str
     if len(title) > 62:
         title = f"{head} {emoji} [{g}]"
     return title, thumb
+
+
+# Sub-genre -> themes that look like it sounds. Genres with no clear look
+# (plain lofi hip hop, chillhop, study beats) get any in-season theme.
+_GENRE_THEMES: dict[str, tuple[str, ...]] = {
+    "lofi_jazz": ("midnight_cafe", "amber_night", "cozy_rain"),
+    "jazz_cafe": ("midnight_cafe", "amber_night", "cozy_rain"),
+    "cozy_cafe": ("midnight_cafe", "amber_night", "cozy_rain"),
+    "nujabes": ("amber_night", "midnight_cafe", "cozy_rain"),
+    "neo_soul": ("lofi_rnb", "amber_night", "purple_dusk"),
+    "lofi_rnb": ("lofi_rnb", "amber_night", "purple_dusk"),
+    "bossa_lofi": ("summer_lofi", "blue_hour", "spring_dawn"),
+    "summer_vibes": ("summer_lofi", "spring_dawn"),
+    "ambient": ("blue_hour", "winter_snow", "forest_rain"),
+    "sleep_lofi": ("blue_hour", "winter_snow", "forest_rain"),
+    "city_pop": ("neon_tokyo", "purple_dusk"),
+    "dark_lofi": ("neon_tokyo", "midnight_cafe", "cozy_rain"),
+    "lofi_phonk": ("neon_tokyo", "midnight_cafe"),
+    "lofi_drill": ("neon_tokyo", "cozy_rain"),
+    "lofi_house": ("lofi_house", "neon_tokyo"),
+    "lofi_garage": ("lofi_house", "neon_tokyo"),
+    "lofi_synthwave": ("vaporwave", "purple_dusk"),
+    "vaporwave": ("vaporwave", "purple_dusk"),
+    "lofi_classical": ("lofi_classical", "winter_snow", "amber_night"),
+    "piano_lofi": ("lofi_classical", "winter_snow", "amber_night"),
+    "bedroom_pop": ("bedroom_pop", "purple_dusk"),
+    "anime_lofi": ("sakura_night", "blue_hour", "purple_dusk"),
+    "morning_lofi": ("spring_dawn", "summer_lofi", "autumn_study"),
+}
+# Themes whose picture belongs to one time of year.
+_THEME_MONTHS = {"winter_snow": (11, 12, 1, 2, 3), "sakura_night": (3, 4, 5),
+                 "autumn_study": (9, 10, 11), "spring_dawn": (3, 4, 5, 6)}
+
+
+def theme_in_season(theme: str, month: int | None = None) -> bool:
+    month = month or datetime.datetime.now(datetime.timezone.utc).month
+    return month in _THEME_MONTHS.get(theme, range(1, 13))
+
+
+def theme_for_genre(sub_genre: str | None, month: int | None = None,
+                    rng: random.Random | None = None) -> str:
+    """A visual theme that fits the genre that plays and the time of year
+    (no snow in July, no sunny beach for sleep music)."""
+    rng = rng or random
+    fitting = [t for t in _GENRE_THEMES.get(sub_genre or "", ()) if theme_in_season(t, month)]
+    return rng.choice(fitting or [t for t in SCENES if theme_in_season(t, month)])

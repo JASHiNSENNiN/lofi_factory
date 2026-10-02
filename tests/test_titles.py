@@ -70,3 +70,50 @@ def test_generate_seo_gives_the_thumbnail_the_titles_scene(tmp_path, monkeypatch
     assert seo["thumb_text"]
     assert seo["thumb_text"] in seo["title"] or seo["title"].startswith("lofi") \
         or seo["title"].split(" ")[0] in ("chillhop", "lofi")
+
+
+def test_radio_form_names_what_the_music_is_for():
+    import random
+    from scripts import titles
+    rng = random.Random(0)
+    sleep, _ = titles.build("radio", theme="blue_hour", genre="sleep lofi",
+                            activity="studying", duration="1 hour", rng=rng)
+    ambient, _ = titles.build("radio", theme="blue_hour", genre="ambient lofi",
+                              activity="studying", duration="1 hour", rng=rng)
+    assert "study" not in sleep and "sleep" in sleep
+    assert "beats" not in ambient
+
+
+def test_scene_phrases_fit_the_thumbnail_and_moment_text_falls_back():
+    import random
+    from scripts import titles
+    assert max(len(p) for ps in titles.SCENES.values() for p in ps) <= titles.THUMB_MAX_CHARS
+    _, thumb = titles.build("moment", theme="cozy_rain", genre="lofi jazz",
+                            activity="interview prep", duration="1 hour", rng=random.Random(3))
+    assert len(thumb) <= titles.THUMB_MAX_CHARS
+
+
+def test_theme_fits_the_genre_and_the_season():
+    import random
+    from scripts import titles
+    rng = random.Random(0)
+    for _ in range(50):
+        assert titles.theme_for_genre("sleep_lofi", month=7, rng=rng) in ("blue_hour", "forest_rain")
+        assert titles.theme_for_genre("hip_hop_lofi", month=7, rng=rng) not in ("winter_snow", "sakura_night")
+        assert titles.theme_for_genre("anime_lofi", month=10, rng=rng) != "sakura_night"
+
+
+def test_published_titles_are_not_reused():
+    from scripts.generate_seo import generate_title_variants
+    concept = {"theme": "cozy_rain", "genre_label": "lofi jazz", "activity": "studying"}
+    first, _ = generate_title_variants(concept, "1 hour", n=3, taken=set())
+    again, _ = generate_title_variants(concept, "1 hour", n=3, taken=set(first))
+    assert again and not set(again) & set(first)
+
+
+def test_each_title_is_credited_to_the_form_that_built_it():
+    from scripts.generate_seo import generate_title_variants
+    concept = {"theme": "cozy_rain", "genre_label": "lofi jazz", "activity": "studying"}
+    titles_, forms = generate_title_variants(concept, "1 hour", n=3, taken=set())
+    for t, form in zip(titles_, forms):
+        assert ("beats to" in t) == (form == "radio")

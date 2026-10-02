@@ -2983,6 +2983,13 @@ def _pick_progression_avoiding_recent(sub: str, cfg: dict, history: list[dict]) 
 def _resolve_genre_hint(hint: str) -> str | None:
     """Map a free-text genre hint to a known sub_genre key, or None."""
     normalized = hint.lower().replace(' ', '_').replace('-', '_')
+    # A published genre label ("bossa nova lofi", "jazz hop"). Labels shared
+    # by several sub-genres ("lo-fi hip hop") mean "no preference" and fall
+    # through to the weighted pick.
+    from scripts.generate_seo import _SUBGENRE_TO_GENRE_LABEL as _labels
+    owners = [k for k, v in _labels.items() if v == hint.strip().lower()]
+    if len(owners) == 1 and owners[0] in _SUBGENRE_CONFIG:
+        return owners[0]
     # Exact match
     if normalized in _SUBGENRE_CONFIG:
         return normalized

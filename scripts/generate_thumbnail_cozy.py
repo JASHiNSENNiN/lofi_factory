@@ -161,9 +161,10 @@ TITLE_TEMPLATES = {
 # ── Title-card text derivation ────────────────────────────────────────────────
 
 _EMOJI_RE   = re.compile(
-    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]+"
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\uFE0F\u200D]+"
 )
-_TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\))\s*$")
+# A trailing "— ...", "(...)" or "[genre · length]" tag (scripts/titles.py).
+_TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\)|\[[^\[\]]*\])\s*$")
 # Researched 2026-08-16 (YouTube thumbnail CTR guides, consistent across
 # sources): high-CTR thumbnails run 0-3 "high-impact" words, not a full
 # clause -- 28 chars was landing 5-6 words ("3 hours in. remote work"),
@@ -173,7 +174,8 @@ _TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\))\s*$")
 # templates, so keep deriving from the real title rather than gutting to a
 # bare 3-word cap) -- word-boundary trimming in _derive_short_title below
 # still applies at this new budget.
-_SHORT_TITLE_MAX_CHARS = 20
+_SCENE_TITLE_RE = re.compile(r"^([^\[\]]+?)\s*" + _EMOJI_RE.pattern + r"\s*\[[^\[\]]*\]\s*$")
+_SHORT_TITLE_MAX_CHARS = 24   # == scripts/titles.THUMB_MAX_CHARS
 
 
 _DANGLING = {"of", "for", "to", "and", "the", "a", "an", "in", "on", "at", "with",
@@ -217,6 +219,11 @@ def _derive_short_title(full_title: str) -> str | None:
     """
     if not full_title:
         return None
+    # "scene 🌧️ [genre · length]" (scripts/titles.py): the scene is the
+    # thumbnail text, whole -- commas and numbers included.
+    m = _SCENE_TITLE_RE.match(full_title)
+    if m and len(m.group(1).split()) <= 4 and len(m.group(1).strip()) <= _SHORT_TITLE_MAX_CHARS:
+        return m.group(1).strip().lower()
     text = _EMOJI_RE.sub("", full_title).strip()
     text = _TRAILING_DURATION_RE.sub("", text).strip(" -—·")
     clauses = [c.strip() for c in re.split(r"\s+·\s+|,\s+|\s+—\s+", text) if c.strip()]

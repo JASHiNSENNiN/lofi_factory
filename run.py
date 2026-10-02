@@ -31,7 +31,6 @@ import os
 import sys
 import argparse
 import fcntl
-import random
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -82,7 +81,7 @@ def main():
     from scripts.visual_v2.themes import ALL_THEMES
 
     parser.add_argument("--theme", choices=ALL_THEMES,
-                        default=None, help="Visual theme (default: random)")
+                        default=None, help="Visual theme (default: one that fits the genre and season)")
     parser.add_argument("--duration", default=None,
                         choices=["30 min", "45 min", "1 hour", "90 min",
                                  "2 hours", "3 hours", "4 hours", "5 hours",
@@ -119,28 +118,6 @@ def main():
 
     _pipeline_lock = _acquire_pipeline_lock()  # noqa: F841 — held for the life of this run
 
-    # Genre → preferred visual theme mapping.
-    # Keeps visual world consistent with the music genre when theme not forced.
-    _GENRE_THEME = {
-        "lo-fi hip hop":   None,          # any theme
-        "lofi jazz":       "midnight_cafe",
-        "chillhop":        "cozy_rain",
-        "bossa nova lofi": "summer_lofi",
-        "neo-soul lofi":   "lofi_rnb",
-        "lofi ambient":    "blue_hour",
-        "city pop lofi":   "neon_tokyo",
-        "dark lofi":       "midnight_cafe",
-        # New research-driven subgenres' SEO labels (scripts/generate_seo.py
-        # _SUBGENRE_TO_GENRE_LABEL) -- "lofi ambient" (sleep_lofi's label)
-        # already maps to blue_hour above, so no entry needed for it here.
-        # lofi_drill/lofi_world have no SEO label at all (see the comment in
-        # generate_seo.py), so there was no existing pattern to check against
-        # for them -- these two are added because a genuinely good visual
-        # fit already exists in scripts/visual_v2/themes.py.
-        "lofi garage":     "lofi_house",   # nocturnal/moody neon-blue night fits UKG-adjacent mood
-        "synthwave lofi":  "vaporwave",    # 80s neon retro palette is the closest existing visual match
-    }
-
     # Default matches what the unattended run can actually render in time
     # (see publish._dynamic_max_safe_duration).
     duration_was_set = args.duration is not None
@@ -172,16 +149,13 @@ def main():
     if args.mood:
         concept_hint = args.mood
 
-    # Theme: use --theme if set, otherwise derive from genre, else random
-    if args.theme:
-        theme = args.theme
-    else:
-        preferred = _GENRE_THEME.get(genre_hint)
-        theme = preferred if preferred else random.choice(ALL_THEMES)
+    # The theme is chosen after the music (below), from the genre that
+    # actually plays; --theme still wins.
+    theme = args.theme
 
     print("=" * 60)
     print("  LO-FI FACTORY")
-    print(f"  Theme:    {theme}")
+    print(f"  Theme:    {theme or '(matched to the music)'}")
     print(f"  Duration: {duration}{'' if duration_was_set else ' (default)'}")
     print(f"  Genre:    {genre_hint or 'lo-fi hip hop'}")
     print(f"  Concept:  {concept_hint or '(random)'}")
@@ -240,6 +214,11 @@ def main():
                 print(f"  [SEO] Aligned to music: genre={concept['genre_label']!r} mood={concept['mood_line']!r}")
             except Exception as _e:
                 print(f"  [SEO] Alignment skipped ({_e})")
+
+    if not theme:
+        from scripts.titles import theme_for_genre
+        from scripts.composer import _resolve_genre_hint
+        theme = theme_for_genre(music_sub_genre or _resolve_genre_hint(genre_hint or ""))
 
     # ── STEP 2b: Visual ────────────────────────────────────────
     # Rendered after the music so its genre badge names the genre that
@@ -303,7 +282,7 @@ def main():
     print("\n[4/5] Generating thumbnail...")
     import time
     from scripts.generate_thumbnail_cozy import generate_thumbnail
-    thumb_variant = int(time.time()) % 100
+    thumb_variant = int(time.time()) % 1_000_000   # seeds the room: 100 values repeated pictures
     thumb_path, thumb_title = generate_thumbnail(
         theme_name=theme,
         duration=args.duration,

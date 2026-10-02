@@ -35,10 +35,16 @@ def test_titles_do_not_repeat_the_genre_or_words():
         assert not re.search(r"\b(\w+) \1\b", low), t
 
 
+_WHOLE_PHRASES = {p for ps in __import__("scripts.titles", fromlist=["SCENES"]).SCENES.values() for p in ps}
+
+
 def test_thumbnail_text_never_ends_mid_phrase():
     for t in _titles():
         short = thumb._derive_short_title(t)
         if short is None:
+            continue
+        assert len(short) <= thumb._SHORT_TITLE_MAX_CHARS
+        if short in _WHOLE_PHRASES:   # hand-written ("a rainy evening in"), not cut
             continue
         last = short.split()[-1]
         assert last not in thumb._DANGLING, (t, short)
