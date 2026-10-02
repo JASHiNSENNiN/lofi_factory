@@ -933,3 +933,38 @@ Order matters: stop the damage first, then fix the output, then clean up.
 - **`webui/stats.py` and `webui/data.py`** beyond a skim.
 - **Anything needing the deployed box or a real account:** live streaming,
   VAAPI, real YouTube API responses (STAT-8, API-7).
+
+---
+
+## Fix status (after the fix commits on this branch)
+
+**Fixed:** every AI/LLM path (section 1, plus a guard test); the music
+findings (wrong voicings, V chords as maj7, melody/chord key mismatch on
+tracks 2+, semitone clashes, near-silent melody, intro bass offset, key
+changes, track length, drum layer over every section, quality gate,
+true peak, genre hopping); OUT-1, OUT-4–8; LIVE-1–5, LIVE-7; JOB-1–9;
+SEC-1–4; API-1–7, API-9; STAT-1–5, STAT-7–9 (STAT-8 handled defensively);
+POL-1, POL-2, POL-4, POL-5; TXT-1–9; DISK-1–4; DEAD-1–4; R3-3, R3-4,
+R3-5, R3-6 (except below), R3-7, R3-8, R3-10–R3-16; repo hygiene
+(runtime state untracked, CI, lockfile, portable units).
+
+**Partly fixed:**
+- OUT-3: film grain removed and bitrate lowered, but the audio-reactive EQ
+  overlay still forces a full re-encode of every video.
+- STAT-6: two dead bandits removed (duration, engine); pillar/title/
+  sub-genre/BPM weighting remains and still learns from ~1 video a day.
+- R3-6: MuseScore_General's MIT license text still has to be added next
+  to the soundfont (see assets/soundfonts/README.md).
+
+**Not fixed:**
+- ARCH-1–3, ARCH-5: the 4,000-line composer, v1/v2 duplication, the
+  circular import, and ~220 blanket `except Exception` blocks.
+- ARCH-6: only the comments narrating AI sessions were rewritten; the
+  change-log style comments remain.
+- LIVE-6: no lock between the live stream and a render.
+- API-8: the duplicate check still costs 100 quota units per upload.
+- POL-3: daily unattended uploads of generated music remain what the
+  channel is; the inauthentic-content risk is a product decision.
+- SEC-5: backups still live on the same disk.
+- Section 10: description byte limit and `<`/`>` stripping.
+- Listening tests: the music was measured, not judged by ear.
