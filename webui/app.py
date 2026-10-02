@@ -1072,7 +1072,7 @@ def _content_table(cards: list[dict], sort_by: str) -> None:
 
     with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
         theme.data_row([
-            {"text": "Video", "width": "xl"},
+            {"text": "Video", "width": "fill"},
             {"text": "Published", "width": "md"},
             {"text": "Status", "width": "sm"},
             {"text": "Views", "width": "sm"},
@@ -1085,18 +1085,19 @@ def _content_table(cards: list[dict], sort_by: str) -> None:
 
             with ui.row().classes("data-row cursor-pointer items-center gap-3 no-wrap")\
                     .on("click", _view):
-                with ui.row().classes("items-center gap-2 no-wrap col-xl min-w-0"):
+                with ui.row().classes("items-center gap-2 no-wrap dcol-fill"):
                     ui.image(f"/media/{r['thumb_name']}").classes("w-20 aspect-video rounded")\
                         .props("fit=cover")
-                    ui.label(r["title"]).classes("text-sm font-medium truncate")
-                ui.label(r["when"]).classes(f"{theme.SUB} col-md")
+                    ui.label(r["title"]).classes("text-sm font-medium truncate min-w-0 flex-1")\
+                        .tooltip(r["title"])
+                ui.label(r["when"]).classes(f"{theme.SUB} dcol-md")
                 if r.get("video_id"):
-                    ui.label("Public").classes("text-teal text-sm col-sm")
+                    ui.label("Public").classes("text-teal text-sm dcol-sm")
                 else:
-                    ui.label("Local only").classes(f"{theme.SUB} col-sm")
-                ui.label(stats.fmt_count(r["views"])).classes("text-sm col-sm")
-                ui.label(stats.fmt_count(r["likes"])).classes("text-sm col-sm")
-                ui.label(stats.fmt_count(r["comments"])).classes("text-sm col-sm")
+                    ui.label("Local only").classes(f"{theme.SUB} dcol-sm")
+                ui.label(stats.fmt_count(r["views"])).classes("text-sm dcol-sm")
+                ui.label(stats.fmt_count(r["likes"])).classes("text-sm dcol-sm")
+                ui.label(stats.fmt_count(r["comments"])).classes("text-sm dcol-sm")
 
 
 def view_library(root) -> None:
@@ -1109,7 +1110,7 @@ def view_library(root) -> None:
                 ui.label("Library").classes(theme.H)
                 search = ui.input(placeholder="Search title or theme...")\
                     .props("dense clearable").classes("grow max-w-xs")
-                with ui.row().classes("items-center gap-2 no-wrap"):
+                with ui.row().classes("items-center gap-2"):   # wraps on a phone
                     sort_sel = ui.select(list(_CONTENT_SORTS), value="Newest")\
                         .props("dense").classes("w-36")
                     # Table-first by default -- matches YT Studio's own
@@ -1394,10 +1395,10 @@ def view_analytics(root) -> None:
                     with ui.column().classes("w-full gap-1 mt-2"):
                         for pillar, st in sorted(posteriors.items(), key=lambda kv: -kv[1]["mean"]):
                             with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
-                                ui.label(pillar).classes("text-sm font-medium col-md")
+                                ui.label(pillar).classes("text-sm font-medium dcol-md")
                                 ui.linear_progress(value=st["mean"], show_value=False)\
                                     .classes("grow").props("rounded color=primary")
-                                ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm col-xs")
+                                ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm dcol-xs")
                                 ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
 
                 # ── Title-feature bandit posteriors ─────────────────────────────────
@@ -1418,12 +1419,12 @@ def view_analytics(root) -> None:
                                 with ui.column().classes("w-full gap-1"):
                                     for bucket, st in sorted(buckets.items(), key=lambda kv: -kv[1]["mean"]):
                                         with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
-                                            ui.label(bucket).classes("text-sm font-medium col-md")
+                                            ui.label(bucket).classes("text-sm font-medium dcol-md")
                                             ui.linear_progress(value=st["mean"], show_value=False)\
                                                 .classes("grow").props("rounded color=primary")
-                                            ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm col-xs")
+                                            ui.label(f"{st['mean'] * 100:.1f}%").classes("text-sm dcol-xs")
                                             ui.label(f"α={st['alpha']:.0f} β={st['beta']:.0f}")\
-                                                .classes(f"{theme.SUB} col-md")
+                                                .classes(f"{theme.SUB} dcol-md")
                                             ui.label(f"n={st['n']:.0f}").classes(theme.SUB)
 
                 # ── Cohort growth curves + forecast + viral-moment flags ────────────
@@ -2194,7 +2195,7 @@ _SLOT_STYLE = {
 
 def _slot_chip(slot: str) -> None:
     icon, color_cls, label = _SLOT_STYLE.get(slot, ("event_note", "text-muted", slot))
-    with ui.row().classes("items-center gap-1 no-wrap col-sm"):
+    with ui.row().classes("items-center gap-1 no-wrap dcol-sm"):
         ui.icon(icon).classes(f"{color_cls} text-base")
         ui.label(label).classes(f"{theme.SUB} {color_cls}")
 
@@ -2313,10 +2314,10 @@ def view_calendar(root) -> None:
                 with ui.column().classes("w-full gap-1 mt-2 table-scroll"):
                     for idx, item in enumerate(pending):
                         with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
-                            ui.label(f"#{idx + 1}").classes(f"{theme.SUB} col-xs")
-                            ui.label(item["name"]).classes("text-sm font-medium col-lg")
+                            ui.label(f"#{idx + 1}").classes(f"{theme.SUB} dcol-xs")
+                            ui.label(item["name"]).classes("text-sm font-medium dcol-lg")
                             _slot_chip(item["slot"])
-                            ui.label(item["note"] or "").classes(f"{theme.SUB} col-grow")
+                            ui.label(item["note"] or "").classes(f"{theme.SUB} dcol-grow")
                             if idx > 0:
                                 ui.button(icon="arrow_upward",
                                           on_click=lambda item=item, idx=idx: (
@@ -2345,10 +2346,10 @@ def view_calendar(root) -> None:
                         color_cls = _STATUS_COLOR.get(item.status, "text-muted")
                         with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
                             ui.icon(_STATUS_ICON.get(item.status, "help")).classes(color_cls)
-                            ui.label(item.name).classes("text-sm font-medium col-lg")
+                            ui.label(item.name).classes("text-sm font-medium dcol-lg")
                             _slot_chip(item.slot)
-                            ui.label(item.status).classes(f"text-sm {color_cls} col-sm")
-                            ui.label(item.note or "").classes(f"{theme.SUB} col-grow")
+                            ui.label(item.status).classes(f"text-sm {color_cls} dcol-sm")
+                            ui.label(item.note or "").classes(f"{theme.SUB} dcol-grow")
                             if item.status == "failed":
                                 ui.button("Retry", icon="replay",
                                           on_click=lambda item=item: (
@@ -2375,9 +2376,9 @@ def view_calendar(root) -> None:
                         with ui.row().classes("w-full items-center gap-3 no-wrap data-row"):
                             ui.icon(icon).classes(color_cls)
                             time_str = row["when"].strftime("%H:%M UTC") if row["when"] else "—"
-                            ui.label(time_str).classes(f"{theme.SUB} col-sm")
-                            ui.label(row["title"]).classes("text-sm font-medium truncate col-grow")
-                            ui.label(row["status"]).classes(f"{theme.SUB} col-xl")
+                            ui.label(time_str).classes(f"{theme.SUB} dcol-sm")
+                            ui.label(row["title"]).classes("text-sm font-medium truncate dcol-grow")
+                            ui.label(row["status"]).classes(f"{theme.SUB} dcol-xl")
                             if row.get("url"):
                                 ui.link("Open ↗", row["url"], new_tab=True).classes("text-sm")
 
@@ -2600,7 +2601,7 @@ def view_settings(root) -> None:
                     ui.label("Redirect URI for Google Cloud Console (register alongside "
                              "the main one):").classes(theme.SUB + " mt-1")
                     ui.label(mst["redirect_uri"])\
-                        .classes("font-mono text-sm bg-black/35 rounded-lg px-2 py-0.5")
+                        .classes("font-mono text-sm bg-black/35 rounded-lg px-2 py-0.5 break-all")
 
             refresh_monetary()
 
@@ -3108,7 +3109,8 @@ def view_logs(root) -> None:
                     if not entries:
                         ui.label("No admin actions logged yet.").classes(theme.SUB)
                     for e in entries:
-                        with ui.row().classes("w-full items-center gap-3 no-wrap"):
+                        # Wraps on a phone: time + action, then the detail below.
+                        with ui.row().classes("w-full items-center gap-x-3 gap-y-0"):
                             ui.label(e.get("ts", "")).classes(
                                 "text-xs font-mono text-muted whitespace-nowrap")
                             ui.label(e.get("action", "")).classes("text-sm whitespace-nowrap")
@@ -3143,7 +3145,7 @@ def view_logs(root) -> None:
                             ui.notify("Test alert sent." if ok else
                                       "Nothing configured yet — save a URL above first.",
                                       type="positive" if ok else "warning")
-                            refresh_alerts()
+                            await refresh_alerts()
 
                         ui.button("Send test alert", icon="notifications_active",
                                   on_click=send_test).props("flat dense color=secondary")
@@ -3399,6 +3401,8 @@ def run() -> None:
     # single-job model, so this is the only new startup wiring it needs).
     app.on_startup(jobs.start_queue_drain)
     app.on_startup(_start_stats_warmer)
+    # Fonts only, and public (the login page uses them too; see auth.py).
+    app.add_static_files("/static/fonts", os.path.join(config.ASSETS_DIR, "fonts"))
     app.add_static_files("/media", config.ASSETS_DIR)
     app.add_static_files("/videos", config.OUTPUT_DIR)
     app.add_static_files("/music", config.MUSIC_DIR)

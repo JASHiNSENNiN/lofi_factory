@@ -175,6 +175,23 @@ def _nearest(dt, candidates: list[dict], window_secs: int = 120) -> dict | None:
     return best
 
 
+_SEO_RE = re.compile(r"^seo_(\d{8}_\d{6})\.json$")
+
+
+def _seo_title_before(dt, seos: list[tuple]) -> str | None:
+    """The title from the SEO file the same run wrote: the newest one written
+    before the thumbnail (run.py writes the SEO first, then renders the
+    visual, so it can be several minutes older), within a few hours."""
+    for when, path in seos:          # newest first
+        if when <= dt and (dt - when).total_seconds() <= 3 * 3600:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f).get("title")
+            except (OSError, ValueError):
+                return None
+    return None
+
+
 def library(limit: int = 24) -> list[dict]:
     """
     Newest-first render cards: {theme, dt, thumb, title, url, video_id, video_file, when}.
@@ -185,6 +202,12 @@ def library(limit: int = 24) -> list[dict]:
     thumbs.sort(key=lambda t: t["dt"], reverse=True)
     logs = _log_index()
     videos = _video_index()
+    seos = []
+    for p in glob.glob(os.path.join(config.ASSETS_DIR, "seo_*.json")):
+        m = _SEO_RE.match(os.path.basename(p))
+        if m:
+            seos.append((datetime.strptime(m.group(1), "%Y%m%d_%H%M%S"), p))
+    seos.sort(reverse=True)
 
     cards = []
     for t in thumbs[:limit]:
@@ -195,7 +218,9 @@ def library(limit: int = 24) -> list[dict]:
             "dt": t["dt"],
             "thumb": t["thumb"],
             "thumb_name": os.path.basename(t["thumb"]),
-            "title": (match or {}).get("title") or t["theme"].replace("_", " "),
+            # Published title, else the title this render was made with.
+            "title": ((match or {}).get("title") or _seo_title_before(t["dt"], seos)
+                      or t["theme"].replace("_", " ")),
             "url": (match or {}).get("url"),
             "video_id": (match or {}).get("video_id"),
             "video_file": (vid or {}).get("name"),

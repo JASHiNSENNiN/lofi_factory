@@ -50,3 +50,16 @@ def test_making_a_scheduled_video_public_drops_its_schedule():
                                          "publishAt": "2026-10-03T08:00:00Z"}})
     stats.update_video("vid", title="t", description="", tags=[], privacy="public", client=yt)
     assert "publishAt" not in yt.v.sent[0]["status"]
+
+
+def test_library_names_local_renders_by_their_title(tmp_path, monkeypatch):
+    import json
+    from webui import config
+    (tmp_path / "seo_20261002_100000.json").write_text(json.dumps({"title": "rain on the window 🌧️ [lofi jazz]"}))
+    (tmp_path / "seo_20261002_120000.json").write_text(json.dumps({"title": "a later render"}))
+    (tmp_path / "thumb_cozy_rain_20261002_100800.jpg").write_bytes(b"x")
+    monkeypatch.setattr(config, "ASSETS_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(stats, "_log_index", lambda: [])
+    cards = stats.library()
+    assert cards[0]["title"] == "rain on the window 🌧️ [lofi jazz]"

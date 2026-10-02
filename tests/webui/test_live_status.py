@@ -32,9 +32,22 @@ def test_247_stream_and_stale_detection(tmp_path, monkeypatch):
     assert data.live_status() is None
 
 
+def _wait_exec(proc, marker: bytes) -> None:
+    """Until exec, /proc/<pid>/cmdline is still the parent's (pytest's)."""
+    import time
+    for _ in range(200):
+        try:
+            if marker in open(f"/proc/{proc.pid}/cmdline", "rb").read():
+                return
+        except OSError:
+            pass
+        time.sleep(0.01)
+
+
 def test_stop_247_only_signals_a_stream_process(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ROOT", str(tmp_path))
     other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    _wait_exec(other, b"time.sleep(30)")
     try:
         _write(tmp_path, "stream_state.json", {"pid": other.pid})
         assert data.stop_247_stream() is False          # not stream_live / --stream
@@ -43,6 +56,7 @@ def test_stop_247_only_signals_a_stream_process(tmp_path, monkeypatch):
         other.kill()
         other.wait()
     fake = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "--stream"])
+    _wait_exec(fake, b"--stream")
     try:
         _write(tmp_path, "stream_state.json", {"pid": fake.pid})
         assert data.stop_247_stream() is True
