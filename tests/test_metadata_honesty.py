@@ -181,3 +181,17 @@ def test_genre_playlist_is_reused_then_created_once(tmp_path):
     assert pc.genre_playlist_id(yt2, "lofi jazz", env=env, cache_path=cache) == "PLnew"
     assert pc.genre_playlist_id(yt2, "lofi jazz", env=env, cache_path=cache) == "PLnew"
     assert len(yt2.created) == 1          # second call came from the cache
+
+
+def test_live_titles_name_the_streams_own_genre_and_scene(monkeypatch):
+    import publish
+    from scripts import generate_seo, titles
+    cross = {"pillar": "cross_genre", "genre_label": "bossa nova lofi", "theme": None,
+             "activity": "studying"}
+    monkeypatch.setattr(generate_seo, "pick_concept", lambda trends=None: dict(cross))
+    monkeypatch.setattr("scripts.trend_research.get_trend_snapshot", lambda: None)
+    concept = publish._live_concept({"theme": "neon_tokyo", "genre_label": "city pop lofi"})
+    assert concept["genre_label"] == "city pop lofi" and concept["theme"] == "neon_tokyo"
+    title = publish._live_title(concept)
+    assert "bossa" not in title and "24/7 live" in title
+    assert titles.EMOJI["neon_tokyo"] in title

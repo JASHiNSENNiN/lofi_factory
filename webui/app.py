@@ -834,10 +834,10 @@ def _edit_video_dialog(c: dict) -> None:
                     if ok:
                         ui.notify("Thumbnail updated", type="positive")
 
-                with ui.row().classes("items-center gap-2"):
+                with ui.row().classes("items-center gap-2") as thumb_row:
                     ui.button("Regenerate + push thumbnail", icon="auto_awesome",
                               on_click=do_regenerate_thumbnail).props("flat color=primary")
-                    thumb_status
+                thumb_status.move(thumb_row)
 
                 with ui.row().classes("w-full justify-end gap-2 mt-2"):
                     ui.button("Cancel", on_click=dlg.close).props("flat")

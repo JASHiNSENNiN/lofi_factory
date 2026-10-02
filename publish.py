@@ -816,31 +816,42 @@ def cmd_upload(args):
 
 # ── AUTO TITLE ──────────────────────────────────────────────────────────────
 
-def _generate_live_title() -> str:
+def _live_concept(stream_seo: dict | None) -> dict:
+    """A fresh concept for a live title, pinned to what the stream really
+    shows and plays (its video's theme and genre); only the wording varies."""
+    sys.path.insert(0, ROOT)
+    from scripts.generate_seo import pick_concept
+    trends = None
+    try:
+        from scripts.trend_research import get_trend_snapshot
+        trends = get_trend_snapshot()
+    except Exception:
+        pass
+    concept = pick_concept(trends)
+    stream_seo = stream_seo or {}
+    if stream_seo.get("theme"):
+        concept["theme"] = stream_seo["theme"]
+    # The video's genre, or a neutral one: never a random pool genre.
+    concept["genre_label"] = stream_seo.get("genre_label") or "lo-fi hip hop"
+    return concept
+
+
+def _live_title(concept: dict) -> str:
+    from scripts.generate_seo import build_title
+    title = build_title(concept, "all night")
+    return title.replace("all night", "24/7 live").strip()[:100]
+
+
+def _generate_live_title(stream_seo: dict | None = None) -> str:
     """
-    Generate a unique live broadcast title using the SEO concept engine.
-    Hard 30s timeout — if APIs hang, falls back to default immediately.
-    Returns empty string on any failure (caller uses its own fallback).
+    A live broadcast title in the channel's title style, for the stream's
+    own theme and genre. Hard 30s timeout (trend fetch can hang); returns
+    an empty string on any failure (caller uses its own fallback).
     """
     import concurrent.futures
 
-    def _inner():
-        sys.path.insert(0, ROOT)
-        from scripts.generate_seo import pick_concept, build_title
-
-        trends = None
-        try:
-            from scripts.trend_research import get_trend_snapshot
-            trends = get_trend_snapshot()
-        except Exception:
-            pass
-
-        concept = pick_concept(trends)
-        title = build_title(concept, "all night")
-        return title.replace("all night", "24/7 live").strip()[:100]
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(_inner)
+        future = ex.submit(lambda: _live_title(_live_concept(stream_seo)))
         try:
             return future.result(timeout=30)
         except concurrent.futures.TimeoutError:
@@ -894,7 +905,6 @@ def _generate_live_description(concept: dict) -> str:
 def _do_midnight_refresh(broadcast_id: str):
     """Generate a fresh title + description and push it to the live broadcast."""
     try:
-        from scripts.generate_seo import pick_concept, build_title
         from scripts.youtube_live_manager import get_youtube_service
         # save_live_state / load_live_state are defined in publish.py itself
 
@@ -903,16 +913,10 @@ def _do_midnight_refresh(broadcast_id: str):
             print("  [midnight] No YouTube credentials — skipping refresh")
             return
 
-        trends = None
-        try:
-            from scripts.trend_research import get_trend_snapshot
-            trends = get_trend_snapshot()
-        except Exception:
-            pass
-
-        concept = pick_concept(trends)
-        title   = build_title(concept, "all night")
-        title   = title.replace("all night", "24/7 live").strip()[:100]
+        state = load_live_state() or {}
+        concept = _live_concept({"theme": state.get("theme"),
+                                 "genre_label": state.get("genre_label")})
+        title   = _live_title(concept)
         description = _generate_live_description(concept)
 
         # scheduledStartTime is required by the update API
@@ -1102,7 +1106,9 @@ def cmd_live(args):
 
     # Resolve files
     video_path = args.video or find_latest(os.path.join(ROOT, "output"), "lofi_*.mp4")
-    seo        = load_seo(args.seo)
+    # The SEO file made with this video, not whichever is newest.
+    seo        = load_seo(args.seo or (paired_asset("seo_*.json", video_path)
+                                       if video_path and os.path.exists(video_path) else None))
     preset     = STREAM_PRESETS.get(args.quality, STREAM_PRESETS["720p15"])
 
     if not video_path or not os.path.exists(video_path):
@@ -1113,7 +1119,7 @@ def cmd_live(args):
         title = args.title
     else:
         print("  Generating broadcast title...")
-        title = (_generate_live_title()
+        title = (_generate_live_title(seo)
                  or seo.get("title")
                  or "lo-fi beats • 24/7 chill music 🌙")
     description = seo.get("description", "Cozy lo-fi music streaming 24/7.")
@@ -1174,6 +1180,8 @@ def cmd_live(args):
         "ffmpeg_pid":   ffmpeg_proc.pid,
         "title":        title,
         "video_file":   os.path.basename(video_path),
+        "theme":        seo.get("theme"),        # the midnight refresh keeps
+        "genre_label":  seo.get("genre_label"),  # titles true to the stream
         "watch_url":    watch_url,
         "started_at":   datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }

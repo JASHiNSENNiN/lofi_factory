@@ -204,6 +204,9 @@ async def set_schedule(hour: int, every_hours: int) -> None:
 resource_status = _svc.resource_status
 
 
+_PUMPS: set[asyncio.Task] = set()   # running log pumps (see tail_logs)
+
+
 async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:
     """Stream `journalctl --user -u lofi-auto -f` lines to on_line(str).
 
@@ -220,5 +223,7 @@ async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:
         async for raw in proc.stdout:
             on_line(raw.decode(errors="replace").rstrip("\n"))
 
-    asyncio.create_task(_pump())
+    task = asyncio.create_task(_pump())
+    _PUMPS.add(task)                       # the loop only keeps weak references
+    task.add_done_callback(_PUMPS.discard)
     return proc

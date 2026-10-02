@@ -2678,7 +2678,7 @@ _MOOD_WORDS: dict[str, tuple[str, ...]] = {
                      'washed-out', 'blue', 'grey', 'mellow', 'low', 'sleepy', 'cloudy',
                      'distant', 'gentle', 'tender', 'still', 'cold', 'silver'),
     'adj_feeling':  ('tired', 'restless', 'unhurried', 'half-awake', 'quiet', 'lonely',
-                     'hopeful', 'wistful', 'calm', 'drowsy', 'content', 'unfinished',
+                     'hopeful', 'wistful', 'calm', 'drowsy', 'unfinished',
                      'easy', 'idle', 'thoughtful', 'homesick', 'patient', 'lazy'),
     'noun_sensory': ('light', 'smoke', 'static', 'groove', 'hum', 'echo', 'rain',
                      'silence', 'dust', 'fog', 'shadow', 'breath', 'glow', 'hiss',
@@ -2689,19 +2689,30 @@ _MOOD_WORDS: dict[str, tuple[str, ...]] = {
                      'fire escape', 'train platform', 'bookshop', 'corner cafe', 'porch',
                      'attic', 'garden', 'harbor', 'record store', 'night bus', 'bedroom',
                      'back seat', 'riverbank', 'study desk'),
-    'noun_time':    ('morning', 'evening', 'afternoon', 'tuesday', 'sunday', 'winter',
-                     'autumn', 'spring', 'midnight', 'late november', 'early march',
-                     'the small hours', '3am', 'dusk', 'dawn', 'a rainy thursday',
-                     'the night before the exam', 'last summer', 'closing time',
-                     'the last train home', 'a snow day', 'a slow weekend'),
+    # Bare words that can sit before a noun or after an adjective ("dusty
+    # sunday", "midnight vinyl"); phrases with their own article only follow
+    # "of" or "until" ("until the small hours"). Mixing the two gave titles
+    # like "distant a rainy thursday".
+    'time_bare':    ('morning', 'evening', 'afternoon', 'tuesday', 'sunday', 'winter',
+                     'autumn', 'spring', 'midnight', 'november', 'dusk', 'dawn',
+                     'weekend', 'summer'),
+    'time_phrase':  ('the small hours', 'a rainy thursday', 'the night before the exam',
+                     'last summer', 'closing time', 'the last train home', 'a snow day',
+                     'a slow weekend', 'early march', 'late november', '3am', 'sunday morning'),
     'noun_abstract':('weight', 'longing', 'distance', 'stillness', 'quiet', 'memory',
                      'warmth', 'calm', 'nostalgia', 'comfort', 'daydream', 'patience',
                      'solitude', 'drift', 'afterglow', 'slowness', 'hush'),
     'verb_ing':     ('falling', 'echoing', 'waiting', 'breathing', 'floating', 'drifting',
                      'turning', 'humming', 'settling', 'lingering', 'wandering', 'fading',
                      'dreaming', 'resting', 'swaying', 'glowing', 'melting'),
-    'prep':         ('through', 'beneath', 'beside', 'beyond', 'under', 'across',
-                     'over', 'along', 'past', 'around', 'behind', 'inside', 'outside'),
+    'until':        ('the small hours', 'closing time', 'the last train home', '3am',
+                     'sunday morning', 'dawn', 'the lights go out', 'the rain stops'),
+    'place':        ('on the rooftop', 'by the window', 'in the kitchen', 'down the hallway',
+                     'on the staircase', 'in the doorway', 'at the library', 'at the laundromat',
+                     'at the bus stop', 'on the balcony', 'on the fire escape', 'in the bookshop',
+                     'at the corner café', 'on the porch', 'in the attic', 'in the garden',
+                     'by the harbor', 'at the record store', 'on the night bus', 'by the river',
+                     'on the train platform', 'in the back seat'),
 }
 
 # Genre-specific word tints — pull toward sonic character without hardcoding titles
@@ -2741,19 +2752,16 @@ _MOOD_TINTS: dict[str, dict[str, tuple[str, ...]]] = {
 # Every pattern reads as a complete phrase for any choice of words.
 _MOOD_PATTERNS: tuple[str, ...] = (
     '{adj_texture} {noun_sensory}',
-    'the {noun_abstract} of {noun_time}',
-    '{noun_sensory} {prep} the {noun_place}',
-    '{adj_texture} {noun_time}',
-    '{adj_feeling} {noun_time}',
-    '{verb_ing} {prep} the {noun_place}',
-    '{noun_time}, {adj_texture} and {adj_feeling}',
-    '{adj_texture} {noun_place}, {adj_feeling} {noun_sensory}',
-    'the last {noun_sensory} of {noun_time}',
-    'lost {prep} the {adj_texture} {noun_place}',
+    'the {noun_abstract} of {time_phrase}',
+    '{noun_sensory} {place}',
+    '{adj_texture} {time_bare}',
+    '{adj_feeling} {time_bare}',
+    '{verb_ing} {place}',
+    'the last {noun_sensory} of {time_phrase}',
+    'until {until}',
     'still {verb_ing}',
-    '{adj_texture} {noun_sensory} {prep} the {noun_place}',
+    '{time_bare} {noun_sensory}',
     '{noun_sensory} and {noun_sensory}',
-    '{noun_time} {noun_sensory}',
     '{adj_feeling} {noun_abstract}',
 )
 
@@ -2768,8 +2776,23 @@ def _compose_mood_phrase(sub_genre: str = '') -> str:
         pool = tint.get(m.group(1)) or _MOOD_WORDS.get(m.group(1)) or ('',)
         return random.choice(pool)
 
-    result = _re.sub(r'\{([^}]+)\}', _pick, pattern)
-    return result[0].upper() + result[1:]
+    for _ in range(4):   # "rain and rain" is not a title
+        result = _re.sub(r'\{([^}]+)\}', _pick, pattern)
+        words = [w for w in result.split() if w not in _SMALL_WORDS]
+        if len(set(words)) == len(words):
+            break
+    return _song_case(result)
+
+
+_SMALL_WORDS = {'a', 'an', 'the', 'and', 'of', 'on', 'in', 'at', 'by', 'to', 'until'}
+
+
+def _song_case(text: str) -> str:
+    """Title Case the way song titles are written ("Until the Small Hours")."""
+    words = text.split()
+    return ' '.join(w if w[0].isdigit() else
+                    w.capitalize() if i == 0 or w not in _SMALL_WORDS else w
+                    for i, w in enumerate(words))
 
 
 _PARAMS_HISTORY_FILE = os.path.join(MUSIC_DIR, '.params_history.json')
@@ -3010,8 +3033,11 @@ def _pick_mood_phrase(concept_hint: str | None = None, sub_genre: str = '',
                       history: list[dict] | None = None) -> str:
     """Poetic mood phrase. Procedural composer is primary (combinatorial word-bank
     generator). Retries a few times to avoid the last 10 phrases used."""
-    if concept_hint:
-        return concept_hint
+    # A short, explicit mood (run.py --mood "rainy jazz") names the track; a
+    # whole video concept ("cottagecore · wildflowers, handwritten recipes,
+    # afternoon light...") is not a song title.
+    if concept_hint and len(concept_hint.split()) <= 5 and '·' not in concept_hint:
+        return _song_case(concept_hint)
 
     recent = {h['mood'] for h in (history or [])[-10:] if h.get('mood')}
     phrase = _compose_mood_phrase(sub_genre)

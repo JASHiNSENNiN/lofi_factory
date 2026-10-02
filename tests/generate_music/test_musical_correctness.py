@@ -66,7 +66,7 @@ def test_each_track_gets_its_own_title_and_the_first_keeps_the_concept():
     random.seed(5)
     sets = _quiet(g._build_diverse_params, 6, concept_hint='rain on the window')
     moods = [p['mood'] for p in sets]
-    assert moods[0] == 'rain on the window'
+    assert moods[0] == 'Rain on the Window'          # a short mood names the first track
     assert len(set(moods)) == len(moods)
 
 

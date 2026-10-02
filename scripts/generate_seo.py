@@ -782,9 +782,9 @@ _SUBGENRE_TO_GENRE_LABEL: dict[str, str] = {
 
 def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concept: dict) -> dict:
     """
-    Return a copy of base_concept with genre_label and mood_line overridden
-    to match what was actually generated. Called after generate_tracks() so
-    SEO titles reflect the real music, not the pre-generation guess.
+    Return a copy of base_concept with genre_label set to the genre that was
+    actually generated. Called after generate_tracks() so SEO titles reflect
+    the real music, not the pre-generation guess.
 
     A "cross_genre" concept keeps its own wording ("lofi ambient", "vaporwave
     lofi") when the music really is that genre; when the music turned out to
@@ -799,8 +799,8 @@ def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concep
             genre_label = None
     if genre_label:
         updated["genre_label"] = genre_label
-    if music_mood and len(music_mood.split()) >= 3:
-        updated["mood_line"] = music_mood
+    # music_mood is the first track's name ("Until the Small Hours"): a song
+    # title, not a mood line, so the concept's own mood line stays.
     return updated
 
 
@@ -854,14 +854,23 @@ def _search_line(genre: str, duration: str, activity: str) -> str:
     return _sentence(f"{duration} of {search_phrase(genre)} beats for {use_text}")
 
 
-def build_description(concept: dict, duration: str) -> str:
+def build_description(concept: dict, duration: str, scene: str = "") -> str:
+    from scripts.titles import fits_time_of_day
     activity = concept.get("activity", "work")
     genre    = concept.get("genre_label", "lo-fi hip hop")
+    theme    = concept.get("theme") or ""
 
     concept_ctx = dict(concept)
     concept_ctx["duration"] = DURATION_DISPLAY.get(duration, duration)
+    # Text must agree with the picture: a mood line or hook naming the wrong
+    # time of day (afternoon light over a night window) gives way to the
+    # title's own scene.
+    for key in ("mood_line", "time_label"):
+        if theme and not fits_time_of_day(theme, concept_ctx.get(key) or ""):
+            concept_ctx[key] = scene if key == "mood_line" else ""
+    hooks = [h for h in DESCRIPTION_HOOKS if not theme or fits_time_of_day(theme, h)]
 
-    mood_hook = random.choice(DESCRIPTION_HOOKS).format(**concept_ctx)
+    mood_hook = random.choice(hooks or DESCRIPTION_HOOKS).format(**concept_ctx)
     mood_hook = mood_hook[0].upper() + mood_hook[1:]
     setting_story = _build_setting_story(concept_ctx)
 
@@ -940,7 +949,7 @@ def generate_seo(theme_name: str = None, duration: str = None,
     chosen_idx        = random.choices(range(len(title_variants)), weights=_weights, k=1)[0]
     title             = title_variants[chosen_idx]
     chosen_strategy   = variant_strategies[chosen_idx] if chosen_idx < len(variant_strategies) else None
-    description = build_description(concept, duration)
+    description = build_description(concept, duration, scene=_THUMB_TEXT.get(title, ""))
     tags        = build_tags(concept, duration, theme_name=theme_name)
 
     # Other channels' trending tags are not copied in: the old keyword filter

@@ -117,3 +117,37 @@ def test_each_title_is_credited_to_the_form_that_built_it():
     titles_, forms = generate_title_variants(concept, "1 hour", n=3, taken=set())
     for t, form in zip(titles_, forms):
         assert ("beats to" in t) == (form == "radio")
+
+
+def test_description_never_contradicts_the_pictures_time_of_day():
+    import random
+    from scripts.generate_seo import build_description
+    random.seed(0)
+    concept = {"pillar": "aesthetic", "theme": "neon_tokyo", "genre_label": "city pop lofi",
+               "activity": "coding", "time_label": "sunday morning",
+               "mood_line": "wildflowers and afternoon light through curtains"}
+    for _ in range(30):
+        d = build_description(concept, "1 hour", scene="neon city at 2am").lower()
+        assert "afternoon" not in d and "morning" not in d
+        assert "neon city at 2am" in d
+
+
+def test_track_names_are_grammatical_song_titles():
+    import random
+    import re
+    from scripts import composer
+    random.seed(7)
+    names = [composer._compose_mood_phrase(s) for s in ("sleep_lofi", "lofi_jazz", "city_pop", "")
+             for _ in range(200)]
+    for n in names:
+        low = n.lower()
+        assert not re.search(r"\b(a|the) (a|the)\b", low), n            # "the a rainy..."
+        assert not re.search(r"^\w+ (a|the) ", low) or low.split()[0] in (
+            "the", "until", "still") or " the " in low or low.split()[1] in ("on", "in", "at", "by", "down", "of", "and"), n
+        words = [w for w in low.split() if w not in composer._SMALL_WORDS]
+        assert len(set(words)) == len(words), n
+        assert n[0].isupper()
+    # A whole video concept never becomes a track name; a short --mood does.
+    assert composer._pick_mood_phrase("cottagecore · wildflowers, afternoon light") != \
+        "cottagecore · wildflowers, afternoon light"
+    assert composer._pick_mood_phrase("rainy jazz") == "Rainy Jazz"

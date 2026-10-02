@@ -189,6 +189,7 @@ def main():
     # log-append). Defaults are the pre-existing-behavior-safe ones for
     # tracks generated before this metadata existed.
     music_sub_genre = ""
+    first_track_title = ""
     music_bpm = None
     music_engine = "v1"
     import glob as _glob
@@ -209,9 +210,10 @@ def main():
                     base_concept=concept,
                 )
                 music_sub_genre = _meta.get("genre", "") or ""
+                first_track_title = _meta.get("title", "") or ""
                 music_bpm = _meta.get("bpm")
                 music_engine = _meta.get("music_engine") or "v1"
-                print(f"  [SEO] Aligned to music: genre={concept['genre_label']!r} mood={concept['mood_line']!r}")
+                print(f"  [SEO] Aligned to music: genre={concept['genre_label']!r} first track={first_track_title!r}")
             except Exception as _e:
                 print(f"  [SEO] Alignment skipped ({_e})")
 
@@ -224,7 +226,8 @@ def main():
     # Rendered after the music so its genre badge names the genre that
     # actually plays (every track in a video shares one sub-genre).
     # Derive short now-playing title + genre from the concept for the UI panel
-    np_title = concept.get("mood_line") or concept.get("concept") or "lofi dreams"
+    # The first track's real name (what the tracklist calls it).
+    np_title = first_track_title or concept.get("mood_line") or "lofi dreams"
     np_genre = concept.get("genre_label", "lo-fi hip hop")
 
     if not args.skip_visual:

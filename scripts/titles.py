@@ -101,6 +101,20 @@ _NIGHT_TIMES = ["after midnight", "at 2am", "late at night", "at 3am", "past mid
 _DAY_TIMES = ["on a slow morning", "at golden hour", "on a sunday afternoon",
               "with morning coffee", "on a quiet afternoon", "before sunset"]
 
+_DAY_WORDS = ("morning", "afternoon", "sunrise", "sunlight", "daylight", "noon",
+              "golden hour", "sunny", "breakfast")
+_NIGHT_WORDS = ("midnight", "2am", "3am", "4am", "at night", "late night", "tonight",
+                "awake at this hour", "moon", "stars", "after dark")
+
+
+def fits_time_of_day(theme: str, text: str) -> bool:
+    """False when text names a time of day the theme's picture contradicts
+    ("afternoon light" over a night city, "midnight" over a sunny window)."""
+    low = (text or "").lower()
+    clashing = _DAY_WORDS if theme in _NIGHT_THEMES else _NIGHT_WORDS
+    return not any(w in low for w in clashing)
+
+
 STRATEGIES = ("scene", "moment", "radio")
 THUMB_MAX_CHARS = 24    # the longest scene phrase; longer text shrinks on the card
 

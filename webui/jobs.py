@@ -456,6 +456,7 @@ class JobQueue:
         self._pending: list[QueueItem] = []
         self._history: list[QueueItem] = []  # most-recent-first
         self._seq = 0
+        self._tasks: set[asyncio.Task] = set()   # running items (see run_forever)
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
         self._load()
 
@@ -605,7 +606,11 @@ class JobQueue:
                     continue
                 item = self.pop_next(slot)
                 if item:
-                    asyncio.create_task(self._run_item(manager, item))
+                    # Keep a reference: the event loop holds tasks weakly, and
+                    # a collected task would drop the job mid-run.
+                    task = asyncio.create_task(self._run_item(manager, item))
+                    self._tasks.add(task)
+                    task.add_done_callback(self._tasks.discard)
             await asyncio.sleep(poll_secs)
 
 
