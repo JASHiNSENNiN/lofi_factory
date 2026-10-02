@@ -31,7 +31,7 @@ from .particles import FloatingOrbs, MusicNotes
 from .cozy_fx import build_fx
 from .postfx import (
     apply_bloom, film_grain, warm_grade,
-    apply_vignette, apply_scanlines, draw_watermark,
+    apply_vignette, apply_scanlines,
     chromatic_aberration,
 )
 
@@ -186,8 +186,7 @@ def generate_visual(theme_name: str = "cozy_rain",
             # Subtle chromatic aberration (retro screen edge distortion)
             frame = chromatic_aberration(frame, shift=3)
 
-            # ── 13. Watermark ────────────────────────────────────────────────
-            draw_watermark(frame)
+            # No corner watermark: the header bar already names the channel.
 
             proc.stdin.write(frame.tobytes())
 

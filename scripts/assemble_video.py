@@ -579,7 +579,7 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None, aud
     Static VHS grade (hqdn3d/colorbalance/eq/vignette) is already baked into the
     input_video — only dynamic elements are applied here:
       showfreqs pipeline — audio-reactive EQ bars with gradient + glow
-      drawbox/drawtext — progress bar and timestamps
+      geq/overlay/drawtext — progress bar and timestamps
     """
     top, bot = _THEME_EQ_GRAD.get(theme_name or "", _DEFAULT_EQ_GRAD)
     tr, tg, tb = top
@@ -595,7 +595,15 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None, aud
     _acc = _VIS_THEMES.get(theme_name or "cozy_rain", _VIS_THEMES["cozy_rain"]).get("accent", (180, 160, 255))
     acc_hex = f"0x{_acc[0]:02x}{_acc[1]:02x}{_acc[2]:02x}"
     _h, _m, _s = target_secs // 3600, (target_secs % 3600) // 60, target_secs % 60
-    total_str     = f"{_h}:{_m:02d}:{_s:02d}"
+    # Elapsed and total use the same format: M:SS-style under an hour,
+    # H:MM:SS from an hour up.
+    if _h:
+        total_str = f"{_h}:{_m:02d}:{_s:02d}"
+        elapsed_txt = (r"%{eif\:floor(t/3600)\:d}\:%{eif\:mod(floor(t/60)\,60)\:d\:2}"
+                       r"\:%{eif\:mod(floor(t)\,60)\:d\:2}")
+    else:
+        total_str = f"{_m:02d}:{_s:02d}"
+        elapsed_txt = r"%{eif\:floor(t/60)\:d\:2}\:%{eif\:mod(floor(t)\,60)\:d\:2}"
     total_str_esc = total_str.replace(":", r"\:")
     FONT = _DRAWTEXT_FONT
     PX0, PX1, PY, PH = _NP_X0, _NP_X1, _PROG_Y, _PROG_H
@@ -611,7 +619,7 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None, aud
 
         # 2. Split audio
         f"{music_in}asplit=2[a_eq][a_mix]",
-        (f"[a_eq]showfreqs=s={_EQ_W}x{_EQ_H}:mode=bar:fscale=log:ascale=sqrt"
+        (f"[a_eq]showfreqs=s={_EQ_W}x{_EQ_H}:mode=bar:fscale=log:ascale=log"
          f":win_func=hann:averaging=1:colors=ffffff[eq_raw]"),
 
         # 3. Gradient colour for EQ bars
@@ -630,9 +638,15 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None, aud
         f"[vgraded][eq_final]overlay={_EQ_X}:{_EQ_Y}:format=auto[veq]",
 
         # 6. Progress bar
-        f"[veq]drawbox=x={PX0}:y={PY}:w='min({PW}*t/{target_secs},{PW})':h={PH}:color={acc_hex}@0.84:t=fill[pb1]",
-        f"[pb1]drawbox=x='min({PX0}+{PW}*t/{target_secs},{PX1})-7':y={ph_y}:w=14:h=14:color={acc_hex}:t=fill[pb2]",
-        f"[pb2]drawtext=fontfile={FONT}:fontsize=20:fontcolor=0xafafc3@0.78:x={PX0}:y={PY + 16}:text='%{{pts\\:hms}}'[pb3]",
+        # drawbox can't do this: in its expressions `t` is the box
+        # thickness, not time, so the bar used to be drawn full from frame
+        # one. geq and overlay do get the frame time.
+        (f"color=c={acc_hex}:s={PW}x{PH}:r=24,format=rgba,"
+         f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(X,W*T/{target_secs}),214,0)'[pbar]"),
+        f"color=c={acc_hex}:s=14x14:r=24[pknob]",
+        f"[veq][pbar]overlay=x={PX0}:y={PY}:shortest=1[pb1]",
+        f"[pb1][pknob]overlay=x='{PX0}+{PW}*min(t/{target_secs},1)-7':y={ph_y}:shortest=1[pb2]",
+        f"[pb2]drawtext=fontfile={FONT}:fontsize=20:fontcolor=0xafafc3@0.78:x={PX0}:y={PY + 16}:text='{elapsed_txt}'[pb3]",
         f"[pb3]drawtext=fontfile={FONT}:fontsize=20:fontcolor=0xafafc3@0.78:x=main_w-tw-60:y={PY + 16}:text='{total_str_esc}'[vout]",
 
         # 7. Ambient audio

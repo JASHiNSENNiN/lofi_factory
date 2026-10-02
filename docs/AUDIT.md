@@ -1008,3 +1008,13 @@ during a real render started from the command line.
   Automation was rewritten without file names and statistics jargon.
 - MUS-1: every track in a video had the same title phrase. Now only the
   first carries the concept; the rest get their own.
+- VID-1: the video's progress bar was full from the first frame. It was
+  drawn with `drawbox`, where `t` means box thickness, not time. It now
+  uses `geq`/`overlay`, which see the frame time. The elapsed time
+  printed milliseconds ("00:15:00.000") and didn't match the total's
+  format; both now read MM:SS, or H:MM:SS from an hour up.
+- VID-2: the channel name appeared twice (header and corner watermark).
+- VID-3: the spectrum showed bass only; amplitude is now log-scaled.
+
+A full 30-minute render (`run.py --skip-upload --duration "30 min"`)
+completed: 9 tracks, 30:00.0 exactly, 720p24, −17.9 LUFS, LRA 2.4 LU.

@@ -449,7 +449,7 @@ def build_eq_filtergraph(theme_name):
         # Split music audio: one copy for EQ visualiser, one for ambient mix
         "[1:a]asplit=2[a_eq][a_mix]",
         # EQ bars generated from audio at 720p-proportional size (1240×273)
-        (f"[a_eq]showfreqs=s={_EQ_W}x{_EQ_H}:mode=bar:fscale=log:ascale=sqrt"
+        (f"[a_eq]showfreqs=s={_EQ_W}x{_EQ_H}:mode=bar:fscale=log:ascale=log"
          f":win_func=hann:averaging=1:colors=ffffff[eq_raw]"),
         # Colour gradient for EQ bars
         f"color=c=black:s={_EQ_W}x{_EQ_H}:r=24[blank]",

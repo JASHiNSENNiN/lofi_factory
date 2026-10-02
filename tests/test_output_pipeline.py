@@ -85,3 +85,11 @@ def test_stream_playlist_order_is_what_the_monitor_follows(tmp_path, monkeypatch
     with open(list_path) as f:
         listed = [line.split("'")[1] for line in f]
     assert listed == [os.path.abspath(p) for p in order]
+
+
+def test_progress_bar_is_not_drawn_with_drawbox():
+    # In drawbox expressions `t` is the box thickness, not time, so a
+    # time-based drawbox bar was drawn full from the first frame.
+    import inspect
+    from scripts import assemble_video
+    assert "drawbox=" not in inspect.getsource(assemble_video.apply_vhs_grade)
