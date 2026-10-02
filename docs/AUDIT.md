@@ -1228,3 +1228,43 @@ Known and not fixed:
   and side. On a channel page they will read as a series, which is the
   intent, but they are not individually distinctive.
 - On some layouts the text card overlaps the desk props or the listener.
+
+## Round 9: the remaining weak points, then a full bug sweep
+
+Weak points from round 8, fixed:
+- Text card over the scene: side cards stay on the wall half, the centered
+  layout is a title band above a lowered window (tested geometrically).
+- Thumbnails all the same room: window styles (four/two/six-pane, arched),
+  curtains, wall shelf, framed print, laptop glow; subtitle names the genre.
+- Title repeats: 109 scene phrases and more times of day; simulated two
+  years of daily titles, 3 repeats (was 45).
+- Title features: length band, seasonal word and time of day, which vary
+  between current titles.
+
+Bugs found by sweeping the rest of the code, fixed:
+- Shorts copied the long video's description with its `lofi:` ref line,
+  which publish.py's duplicate guard searches for: a Short posted first
+  made the real upload exit as "already on YouTube". Shorts also said
+  "· 1 hour" on a one-minute clip and used the newest SEO file instead of
+  their video's. Shorts are now logged (type "short").
+- Uploads set status.madeForKids, a read-only field: no video was ever
+  given an audience declaration. Now selfDeclaredMadeForKids, and
+  containsSyntheticMedia=False (checked against the Data API reference).
+- The panel's video edit erased every field it didn't send (made-for-kids,
+  license, publishAt: a scheduled video lost its schedule); `publish.py
+  rename` erased the live description the same way.
+- `publish.py live` ignored the broadcast `publish.py schedule` set up;
+  `schedule --at` produced invalid times for inputs with "Z" or an offset.
+- The panel's job runner and log pump held asyncio tasks only weakly; a job
+  could be garbage-collected mid-run. The thumbnail status label never
+  rendered.
+- Live titles came from a random concept (wrong genre possible); the 24/7
+  radio title lost its search keyword after 30 minutes and used theme keys
+  as genres. Now keyword-first with the track appended.
+- Sleep and ambient videos were described as study beats; descriptions
+  could name the wrong time of day for the picture; a corrected
+  cross-genre concept kept the old genre's mood line and tags.
+- Track names were mad-libs ("Distant a rainy thursday"); the first track
+  was named after the whole video concept.
+- Mechanical checks added to the review: every internal import and module
+  attribute resolves (they are inside functions, where lint can't see).

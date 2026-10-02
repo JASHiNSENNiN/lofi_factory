@@ -511,6 +511,16 @@ def cmd_shorts(args):
     print(f"  Title: {result['metadata']['title']}")
     if result["uploaded"]:
         print(f"  ✓ Uploaded: {result['url']}")
+        # Logged as its own type: the panel lists it, while analytics and the
+        # posting-time model (which read only "upload") keep to long videos.
+        append_upload_log({
+            "type":         "short",
+            "video_id":     result["video_id"],
+            "url":          result["url"],
+            "title":        result["metadata"]["title"],
+            "source_video": os.path.basename(result["source_video"]),
+            "timestamp":    datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
     else:
         print("  Not uploaded (--save-only)")
     if result["crosspost"]:
