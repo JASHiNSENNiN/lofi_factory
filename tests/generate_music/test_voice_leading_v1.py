@@ -1,6 +1,6 @@
 """
 Tests for the whole-progression voice-leading optimizer (GA + simulated
-annealing) ported into v1 (generate_music_gemini.py) from v2's Stage-3
+annealing) ported into v1 (composer.py) from v2's Stage-3
 work, and its integration into build_chords() (v1's own restructure, not a
 port -- v2's build_chords_v2 has a different 15%-probability-GA design;
 v1's build_chords() always tries the whole-progression optimizer first and
@@ -11,8 +11,8 @@ tests the original v2 versions).
 
 import random
 
-import scripts.generate_music_gemini as gmg
-from scripts.generate_music_gemini import (
+import scripts.composer as gmg
+from scripts.composer import (
     VOICING_OPTIONS,
     _enumerate_shift_options,
     _voice_lead_progression_ga,

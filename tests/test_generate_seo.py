@@ -1,7 +1,6 @@
 import random
 
 from scripts.generate_seo import (
-    _TITLE_PATTERNS_BY_PILLAR,
     _THEME_GEO_TAGS,
     HOOK_STRATEGIES,
     build_description,
@@ -60,64 +59,6 @@ def test_generate_title_variants_titles_are_distinct_strings():
     assert len(set(titles)) == len(titles) == 3
 
 
-def test_build_title_strategy_param_draws_only_from_that_strategys_patterns(monkeypatch):
-    # Spy on random.choice inside generate_seo to capture exactly which
-    # candidate list build_title() picked from for each named strategy --
-    # proves no cross-contamination between hook families (e.g. a
-    # "curiosity_gap" call never secretly draws a "statement" skeleton).
-    captured: list[list[str]] = []
-    real_choice = random.choice
-
-    def spy_choice(seq):
-        captured.append(list(seq))
-        return real_choice(seq)
-
-    monkeypatch.setattr(generate_seo_mod.random, "choice", spy_choice)
-
-    concept = _concept_for_pillar("aesthetic")
-    for strategy in HOOK_STRATEGIES:
-        captured.clear()
-        build_title(concept, "1 hour", strategy=strategy)
-        assert captured, "random.choice was never called"
-        assert captured[-1] == _TITLE_PATTERNS_BY_PILLAR["aesthetic"][strategy]
-
-
-def test_build_title_no_strategy_pools_all_families(monkeypatch):
-    captured: list[list[str]] = []
-
-    def spy_choice(seq):
-        captured.append(list(seq))
-        return list(seq)[0]
-
-    monkeypatch.setattr(generate_seo_mod.random, "choice", spy_choice)
-
-    concept = _concept_for_pillar("aesthetic")
-    build_title(concept, "1 hour")  # no strategy given
-
-    all_patterns = [
-        p for plist in _TITLE_PATTERNS_BY_PILLAR["aesthetic"].values() for p in plist
-    ]
-    assert sorted(captured[-1]) == sorted(all_patterns)
-
-
-def test_build_title_unknown_strategy_falls_back_to_pooled_families(monkeypatch):
-    captured: list[list[str]] = []
-
-    def spy_choice(seq):
-        captured.append(list(seq))
-        return list(seq)[0]
-
-    monkeypatch.setattr(generate_seo_mod.random, "choice", spy_choice)
-
-    concept = _concept_for_pillar("temporal")
-    build_title(concept, "1 hour", strategy="not_a_real_strategy")
-
-    all_patterns = [
-        p for plist in _TITLE_PATTERNS_BY_PILLAR["temporal"].values() for p in plist
-    ]
-    assert sorted(captured[-1]) == sorted(all_patterns)
-
-
 # ── pool-based generation still produces valid, fully-formatted titles ─────
 def test_build_title_no_leftover_placeholders_across_pillars_and_strategies():
     random.seed(5)
@@ -173,32 +114,6 @@ def test_build_tags_unknown_theme_does_not_raise():
 
 
 # ── benefit_list replaced curiosity_gap's vlog-clickbait crutch phrases ────
-def test_build_title_benefit_list_replaces_curiosity_gap_crutch_phrases():
-    _FORBIDDEN = ("nobody admits", "nobody tells you", "nobody mentions",
-                  "nobody warned", "nobody explains", "turns out")
-    all_patterns = [
-        p
-        for pillar_patterns in _TITLE_PATTERNS_BY_PILLAR.values()
-        for plist in pillar_patterns.values()
-        for p in plist
-    ]
-    lowered = [p.lower() for p in all_patterns]
-    for phrase in _FORBIDDEN:
-        assert not any(phrase in p for p in lowered), (
-            f"crutch phrase {phrase!r} still present in a title template"
-        )
-    assert "curiosity_gap" not in HOOK_STRATEGIES
-    assert "benefit_list" in HOOK_STRATEGIES
-
-
-def test_build_title_benefit_list_patterns_format_cleanly():
-    random.seed(7)
-    for pillar in _PILLARS:
-        concept = _concept_for_pillar(pillar)
-        for _ in range(8):
-            title = build_title(concept, "1 hour", strategy="benefit_list")
-            assert "{" not in title and "}" not in title
-            assert len(title) > 0
 
 
 # ── length-target enforcement (Phase 1) ─────────────────────────────────────
@@ -242,62 +157,33 @@ def test_generate_title_variants_falls_back_when_nothing_lands_in_range(monkeypa
 
 
 # ── trend-aware {benefits} fill (Phase 2) ───────────────────────────────────
-def test_benefit_tail_uses_trend_ranked_signals_when_available(monkeypatch):
-    import scripts.trend_research as trend_research_mod
-
-    monkeypatch.setattr(
-        trend_research_mod, "extract_title_benefit_signals",
-        lambda snapshot, top_k=3: ["sleep", "unwind", "chill"],
-    )
-    tail = generate_seo_mod._benefit_tail(trends={"trending_titles": ["placeholder"]})
-    assert tail
-    assert all(word in ("sleep", "unwind", "chill") for word in tail.split(", "))
-
-
-def test_benefit_tail_falls_back_to_static_vocab_without_trends():
-    tail = generate_seo_mod._benefit_tail(trends=None)
-    assert tail
-    assert all(word in generate_seo_mod._BENEFIT_KEYWORDS for word in tail.split(", "))
 
 
 # ── genre mentions extended to all 5 pillars (genre-variety bug fix) ───────
-def test_genre_referencing_templates_keep_literal_seo_keyword_prefix():
-    # Every template that references {genre} must ALSO carry a literal
-    # "lofi"/"lo-fi"/"study music" token in the fixed (non-{genre}) part of
-    # the string -- some real genre_label values (e.g. "chillhop") don't
-    # contain "lofi" as a substring, so {genre} alone can't be relied on to
-    # satisfy the SEO-keyword-in-first-35-chars convention.
-    _SEO_KEYWORDS = ("lofi", "lo-fi", "study music")
-    for pillar, strategies in _TITLE_PATTERNS_BY_PILLAR.items():
-        for strategy, templates in strategies.items():
-            for template in templates:
-                if "{genre}" not in template:
-                    continue
-                fixed_text = template.replace("{genre}", "").lower()
-                assert any(kw in fixed_text for kw in _SEO_KEYWORDS), (
-                    f"{pillar}/{strategy} template references {{genre}} without a "
-                    f"literal SEO keyword elsewhere: {template!r}"
-                )
-
-
-def test_all_five_pillars_have_at_least_one_genre_referencing_template_per_strategy():
-    for pillar, strategies in _TITLE_PATTERNS_BY_PILLAR.items():
-        for strategy, templates in strategies.items():
-            assert any("{genre}" in t for t in templates), (
-                f"{pillar}/{strategy} has no genre-referencing template"
-            )
 
 
 # ── concept_from_music_params() genre alignment (genre-variety bug fix) ────
-def test_concept_from_music_params_preserves_cross_genre_pool_pick():
+def test_concept_from_music_params_keeps_cross_genre_wording_when_the_music_matches():
     base = _concept_for_pillar("cross_genre")
-    base["genre_label"] = "bossa nova lofi"  # CROSS_GENRE_POOL's deliberate pick
-    updated = concept_from_music_params(
-        music_sub_genre="hip_hop_lofi",  # would map to "lo-fi hip hop" if applied
-        music_mood="a completely different generated mood entirely",
-        base_concept=base,
-    )
-    assert updated["genre_label"] == "bossa nova lofi"
+    base["genre_label"] = "lofi ambient"      # the pool's wording of `ambient`
+    updated = concept_from_music_params(music_sub_genre="ambient", music_mood="",
+                                        base_concept=base)
+    assert updated["genre_label"] == "lofi ambient"
+
+
+def test_concept_from_music_params_never_names_a_genre_that_doesnt_play():
+    base = _concept_for_pillar("cross_genre")
+    base["genre_label"] = "bossa nova lofi"
+    updated = concept_from_music_params(music_sub_genre="hip_hop_lofi",
+                                        music_mood="", base_concept=base)
+    assert updated["genre_label"] == "lo-fi hip hop"
+
+
+def test_every_cross_genre_pick_reaches_the_music_generator():
+    from scripts.composer import _resolve_genre_hint
+    from scripts.generate_seo import CROSS_GENRE_POOL
+    for label, *_ in CROSS_GENRE_POOL:
+        assert _resolve_genre_hint(label), label
 
 
 def test_concept_from_music_params_still_aligns_other_pillars():
@@ -335,18 +221,42 @@ def test_build_description_still_shows_default_when_genre_is_generic():
     concept = _concept_for_pillar("temporal")
     concept["genre_label"] = "lo-fi hip hop"
     desc = build_description(concept, "1 hour")
-    assert desc.lstrip().startswith("lo-fi hip hop")
+    assert desc.startswith("1 hour of lo-fi hip hop beats")
 
 
-def test_build_title_forwards_trends_into_benefit_tail(monkeypatch):
-    captured = {}
 
-    def fake_benefit_tail(trends=None):
-        captured["trends"] = trends
-        return "study, focus"
 
-    monkeypatch.setattr(generate_seo_mod, "_benefit_tail", fake_benefit_tail)
-    concept = _concept_for_pillar("temporal")
-    sentinel_trends = {"trending_titles": ["x"]}
-    build_title(concept, "1 hour", strategy="benefit_list", trends=sentinel_trends)
-    assert captured["trends"] is sentinel_trends
+def test_corrected_cross_genre_concept_drops_the_old_genres_words():
+    base = _concept_for_pillar("cross_genre")
+    base.update(genre_label="lofi ambient", mood_line="texture more than melody.",
+                tags_extra=["ambient lofi", "atmospheric lofi"])
+    updated = concept_from_music_params(music_sub_genre="lofi_house", music_mood="",
+                                        base_concept=base)
+    assert updated["genre_label"] == "lofi house"
+    assert not updated["mood_line"] and not updated["tags_extra"]
+
+
+def test_sleep_and_ambient_videos_are_not_sold_as_study_beats():
+    import random
+    from scripts import generate_seo as g
+    random.seed(3)
+    for genre in ("sleep lofi", "ambient lofi"):
+        concept = {"pillar": "activity", "genre_label": genre, "activity": "coding",
+                   "mood_line": "", "tags_extra": ["coding lofi"], "theme": "blue_hour"}
+        desc = g.build_description({**concept, "activity": "winding down"}, "1 hour", "the blue hour")
+        assert "studying" not in desc.split("\n")[0] and "#studymusic" not in desc
+        tags = g.build_tags(concept, "1 hour")
+        assert f"{genre} beats" not in tags
+
+
+def test_sentences_start_with_capitals():
+    from scripts.generate_seo import _sentence
+    assert _sentence("functional. mostly functional. fine") == "Functional. Mostly functional. Fine."
+
+
+def test_ambiguous_genre_hints_are_not_resolved_arbitrarily():
+    from scripts.composer import _resolve_genre_hint
+    assert _resolve_genre_hint("lofi") is None          # was anime_lofi
+    assert _resolve_genre_hint("jazz") is None          # two jazz genres
+    assert _resolve_genre_hint("house") == "lofi_house"
+    assert _resolve_genre_hint("jazz hop") == "nujabes"  # a published label

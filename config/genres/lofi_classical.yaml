@@ -1,7 +1,7 @@
 key: lofi_classical
 family: acoustic_classical
 composition:
-  piano_program: GM_EP2
+  piano_program: GM_ACOUSTIC_GRAND
   melody_program: GM_CELLO
   countermelody_program: GM_STRINGS
   scales: [major, lydian, major_pent, harmonic_minor]
@@ -21,3 +21,4 @@ drum_sampler_pattern: jazz
 mix: {lpf_hz: 15000, bitcrush_bits: 15, reverb_room: 0.5, reverb_wet: 0.28, tape_wobble_depth: 0.06,
   compress_ratio: 1.6, vinyl_crackle: 0.03, use_ir_reverb: true, sidechain_duck: false}
 song_form: extended
+bass_program: GM_ACOUSTIC_BASS

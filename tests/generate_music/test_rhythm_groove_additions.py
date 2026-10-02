@@ -9,7 +9,7 @@ Covers what was genuinely still missing: the dembow _EUCL_HATS preset and
 rule 126 added to _CA_RULE_POOL.
 """
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     DRUM_PATTERNS,
     _CA_RULE_POOL,
     _ca_step,

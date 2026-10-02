@@ -14,19 +14,18 @@ CONCEPT PILLARS (5 × many combinations = effectively infinite unique videos):
 
 Each concept generates a unique:
   · Title (story-hook format, under 70 chars)
-  · Description (narrative paragraph + chapters + CTA)
+  · Description (short scene-setter + CTA; tracklist added after assembly)
   · Tags (broad + mid + long-tail + concept-specific)
   · Chapter labels matching the concept narrative
 
-Groq generates the concept when available. 300+ fallback pool ensures
-variety even without API access.
+Concepts come from a combinatorial pool of hand-written phrases (300+
+base combinations); nothing here calls an external text generator.
 
 Output: assets/seo_TIMESTAMP.json
 """
 
 import os, json, random, datetime, secrets, re
 
-from scripts.seo_utils import format_timestamp as _secs_to_ts
 
 try:
     from dotenv import load_dotenv
@@ -38,13 +37,8 @@ ASSETS_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets')
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
 
-
-GROQ_KEY      = os.getenv('GROQ_API_KEY')
-GEMINI_KEY    = os.getenv('GEMINI_API_KEY')
-GEMINI_BACKUP = os.getenv('GEMINI_API_KEY_BACKUP')
-
 # ──────────────────────────────────────────────────────────────────────────────
-#  CONCEPT POOLS  (fallback when Groq/Gemini is unavailable)
+#  CONCEPT POOLS
 #  Combinatorial design: temporal × activity × emotional gives thousands of
 #  unique base combos. Each renders a different title + description + tags.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -261,9 +255,9 @@ AESTHETIC_POOL = [
     ("city pop",
      "synthwave haze and neon puddles",
      ["city pop lofi", "city lofi", "urban lofi", "synthwave lofi"]),
-    ("minecraft cozy",
+    ("cozy builder",
      "building a house in a valley at night",
-     ["minecraft lofi", "gaming lofi", "minecraft music", "building lofi"]),
+     ["gaming lofi", "cozy game lofi", "building lofi"]),
     ("vintage library",
      "card catalogues and afternoon light through dusty glass",
      ["vintage lofi", "retro lofi", "library music", "old school lofi"]),
@@ -302,13 +296,13 @@ CROSS_GENRE_POOL = [
      "808s dragging through midnight fog",
      ["lofi phonk", "phonk lofi", "dark phonk lofi", "lofi trap"]),
     ("neo soul lofi",
-     "d'angelo never left. this is his ghost.",
+     "warm rhodes, lazy drums, late-night soul",
      ["neo soul lofi", "soul lofi", "rnb lofi", "smooth lofi"]),
     ("city pop lofi",
      "80s japan. somewhere between disco and dream.",
      ["city pop", "city pop lofi", "japanese city pop", "80s lofi"]),
     ("chillhop",
-     "the genre that named the feeling",
+     "head-nod drums and warm keys",
      ["chillhop", "chillhop music", "chillhop beats", "hip hop lofi"]),
     ("jazz hop",
      "vinyl scratches and saxophone two rooms away",
@@ -316,9 +310,9 @@ CROSS_GENRE_POOL = [
     ("lofi ambient",
      "texture more than melody. presence more than song.",
      ["lofi ambient", "ambient lofi", "ambient study music", "atmospheric lofi"]),
-    ("lofi trap",
-     "808 at 70bpm. all the weight, none of the aggression.",
-     ["lofi trap", "trap lofi", "slow trap", "chill trap"]),
+    ("lofi drill",
+     "sliding 808s at half time. all the weight, none of the aggression.",
+     ["lofi drill", "drill lofi", "chill drill", "uk drill lofi"]),
     ("vaporwave lofi",
      "slowed down. everything softer. nostalgic for things that never happened.",
      ["vaporwave lofi", "aesthetic lofi", "retrowave study music", "90s lofi", "vaporwave beats"]),
@@ -326,163 +320,20 @@ CROSS_GENRE_POOL = [
      "four on the floor. but quieter. but warmer.",
      ["lofi house music", "house beats study", "deep house lofi", "4/4 lofi", "house lofi"]),
     ("bedroom pop lofi",
-     "recorded in a bedroom. heard like a memory.",
+     "small, close, a little out of focus. heard like a memory.",
      ["bedroom pop lofi", "indie lofi", "guitar lofi", "diy study music", "bedroom lofi"]),
     ("lofi rnb",
-     "al green at midnight. muffled through the walls.",
+     "old soul records at midnight. muffled through the walls.",
      ["lofi rnb", "soul lofi", "rnb study music", "r&b lofi beats", "neo soul lofi"]),
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  TITLE TEMPLATES  (100+ combinations guaranteed per concept)
+#  TITLES  -- the three title forms live in scripts/titles.py
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Title patterns — varied structure, duration placement, separators, and story-first hooks
-# Rule: "lofi", "lo-fi", or "study music" must appear within the first 35 characters.
-# Vary the skeleton: don't always use [keyword] · {duration} · [thing].
-#
-# HOOK STRATEGIES — each pillar's patterns are grouped into distinct rhetorical
-# families (not just reshuffled wording of the same idea):
-#   "statement"     — descriptive, straightforward. States the scene/mood
-#                      plainly and lets the concept carry the click.
-#   "benefit_list"  — keyword-first + a benefit/activity keyword list
-#                      (study/focus/relax/sleep), matching the verified
-#                      convention real lofi/ambient-radio channels use (e.g.
-#                      "lofi hip hop radio - beats to relax/study to").
-#                      Replaced the old "curiosity_gap" family, which
-#                      borrowed vlog-clickbait phrasing ("nobody tells you",
-#                      "turns out X actually helps") that doesn't match this
-#                      genre's search/browse-driven audience intent -- and
-#                      reads as templated/repetitive at scale (YouTube's
-#                      "inauthentic content" policy risk).
-#   "spec_led"      — leads with a concrete number/fact (usually the duration)
-#                      instead of mood language — a "specificity" hook that
-#                      trades atmosphere for a hard, scannable fact up front.
-#
-# generate_title_variants() draws exactly one title per strategy so the 3
-# variants it returns are genuinely different hooks, not 3 rolls of the same
-# skeleton family.
-HOOK_STRATEGIES = ("statement", "benefit_list", "spec_led")
+HOOK_STRATEGIES = ("scene", "moment", "radio")   # forms in scripts/titles.py
 
-# {genre} appears in 2 of each strategy's 4 templates below (the other 2 stay
-# genre-free for stylistic variety, so not every title is genre-stuffed) --
-# always paired with a literal "lofi"/"lo-fi"/"study music" token kept
-# separate from {genre} itself, never relying on {genre} alone to satisfy
-# that rule (some genre_label values, e.g. "chillhop", don't contain "lofi").
-TITLE_PATTERNS_TEMPORAL = {
-    "statement": [
-        "lofi hip hop · {genre}, it's {time} and you're still awake — {duration}",
-        "study music · {time}, the deadline blinked first — {duration} 📚",
-        "lofi · {genre}, {time}, headphones in, world out — {duration} 🎵",
-        "lofi hip hop, {time}, still {activity}, {duration}",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {time} · {benefits} — {duration}",
-        "lofi · {time} focus mix — {benefits} · {duration}",
-        "study music · {genre} · {time}, {duration} to {benefits}",
-        "lofi · {time} beats for {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} lofi hip hop · {genre} · {time}, {activity}",
-        "{duration} of lofi for {time}, no filler",
-        "{duration} · study music · {genre} · {time} focus block",
-        "{duration} straight · lofi · {time}, {activity}",
-    ],
-}
 
-TITLE_PATTERNS_ACTIVITY = {
-    "statement": [
-        "lofi hip hop · {genre}, put this on, start {activity}, check back in {duration}",
-        "study music · {activity} until it clicks — {duration} 📚",
-        "lofi · {genre}, headphones on, {activity} open, timer set — {duration}",
-        "study lofi · {duration} of {activity}, no commentary",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {activity} · {benefits} — {duration}",
-        "lofi · beats for {activity} — {benefits} · {duration}",
-        "study music · {genre} · {activity} session, {duration} to {benefits}",
-        "lofi · {activity} beats for {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} lofi hip hop · {genre} · {activity} mix",
-        "{duration} · {activity} · lofi, zero interruptions",
-        "{duration} of lofi · {genre} · built for {activity}",
-        "{duration} · lofi · {activity} session, start to finish",
-    ],
-}
-
-TITLE_PATTERNS_EMOTIONAL = {
-    "statement": [
-        "lofi hip hop · {genre}, {emotional_state} but the cursor is moving again — {duration}",
-        "study music · for the {emotional_state} ones still at their desk — {duration} 🌙",
-        "lofi · {genre}, {emotional_state} and somehow still {activity} — {duration}",
-        "lofi hip hop · {duration} · {emotional_state}. working anyway.",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} for the {emotional_state} — {benefits} · {duration}",
-        "lofi · {emotional_state} focus mix — {benefits} ({duration})",
-        "study music · {genre} · {emotional_state}, still working — {benefits} · {duration}",
-        "lofi · {emotional_state} beats to {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} lofi · {genre} for {emotional_state} focus",
-        "{duration} · {emotional_state}, working anyway · lofi",
-        "{duration} of lofi · {genre} · made for {emotional_state} nights",
-        "{duration} · study music · {emotional_state} but productive",
-    ],
-}
-
-TITLE_PATTERNS_AESTHETIC = {
-    "statement": [
-        "lofi hip hop · {genre}, {aesthetic} light, {activity} open — {duration}",
-        "study music · {aesthetic} energy study block — {duration} 📚",
-        "lofi · {genre}, {aesthetic} room, see what happens — {duration}",
-        "lofi hip hop · {aesthetic} focus session ({duration}, no breaks)",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {aesthetic} · {benefits} — {duration}",
-        "lofi · {aesthetic} beats for {benefits} — {duration}",
-        "study music · {genre} · {aesthetic} focus session · {duration}",
-        "lofi · {aesthetic}, {duration} to {benefits}",
-    ],
-    "spec_led": [
-        "{duration} lofi · {genre} · {aesthetic} aesthetic, {activity}",
-        "{duration} of {aesthetic} lofi for {activity}",
-        "{duration} · {genre} · {aesthetic} · lofi hip hop",
-        "{duration} straight of {aesthetic} lofi",
-    ],
-}
-
-TITLE_PATTERNS_CROSSGENRE = {
-    "statement": [
-        "lofi hip hop · what if {genre} never left the library — {duration}",
-        "study music · {genre} roots, lofi filter, {activity} session — {duration} 🎵",
-        "lofi · {genre} but quieter, {duration} to {activity}",
-        "lofi hip hop · the {genre} {activity} playlist ({duration})",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {benefits} — {duration}",
-        "lofi · {genre} beats for {benefits} — {duration}",
-        "study music · {genre} roots, {duration} to {benefits}",
-        "lofi · {genre}, {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} of {genre} lofi for {activity}",
-        "{duration} · {genre} · lofi hip hop",
-        "{duration} straight lofi · {genre}, no loop",
-        "{genre} lofi · {duration} · {activity}",
-    ],
-}
-
-_TITLE_PATTERNS_BY_PILLAR: dict[str, dict[str, list[str]]] = {
-    "temporal":    TITLE_PATTERNS_TEMPORAL,
-    "activity":    TITLE_PATTERNS_ACTIVITY,
-    "emotional":   TITLE_PATTERNS_EMOTIONAL,
-    "aesthetic":   TITLE_PATTERNS_AESTHETIC,
-    "cross_genre": TITLE_PATTERNS_CROSSGENRE,
-}
-
-# Duration display strings — shown in titles and descriptions
 DURATION_DISPLAY = {
     "test":      "10 sec",
     "30 min":    "30 min",
@@ -515,138 +366,19 @@ DURATION_SECS = {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  CHAPTER SETS  — narrative-aware labels per duration
-# ──────────────────────────────────────────────────────────────────────────────
-
-def _build_chapters(duration: str, concept: dict) -> list:
-    """Dynamically compute chapter timestamps and narrative labels for any duration."""
-    total = DURATION_SECS.get(duration, 7200)
-    city  = concept.get("city", "")
-    time_ = concept.get("time_label", "")
-
-    # Chapter labels are indexed by YouTube search — mix atmospheric + keyword phrases
-    # so a single upload can rank for multiple long-tail queries
-    intros = [
-        "lofi study session begins", "signal found · lo-fi",
-        f"{city.lower()} lofi — signal found" if city else "lofi intro · tune in",
-        "lo-fi beats start here", "ambient swell · lofi hip hop",
-        "tuning in · study music", "frequencies align · chill beats",
-    ]
-    mids_a = [
-        "deep focus · lofi study", "flow state · lo-fi beats",
-        "lofi hip hop · locked in", "study music · full send",
-        f"{time_.lower()} lofi — deep focus" if time_ else "midnight lofi · deep focus",
-        "concentration zone · lofi", "lofi beats · momentum builds",
-    ]
-    mids_b = [
-        "second wind · study lofi", "still studying · lo-fi mix",
-        "lofi chill · hours disappear", "focus music · still going",
-        "ambient lofi · groove settles", "eyes on the page · lofi",
-    ]
-    peaks = [
-        "peak focus · lofi hip hop", "hyperfocus · study music",
-        "deep session · lo-fi beats", "lofi marathon · wired in",
-        "flow state peak · chill music", "no turning back · lofi",
-    ]
-    night_markers = [
-        "midnight study · lofi", "3am lofi drift",
-        "late night study music", "pre-dawn · lo-fi static",
-        "4am study session · lofi", "the dark hours · chill beats",
-    ]
-    outros = [
-        "session ends · lofi fade", "last lofi beat · fade out",
-        "study session complete", "fade to static · lofi outro",
-        "morning creeps in · lo-fi", "signal fades · rest",
-    ]
-
-    # Pick chapter count and time fractions based on total length
-    if total <= 2700:       # ≤45 min → 4 chapters
-        fracs  = [0.00, 0.15, 0.55, 0.92]
-        labels = [
-            random.choice(intros),
-            random.choice(mids_a),
-            random.choice(mids_b),
-            random.choice(outros),
-        ]
-    elif total <= 5400:     # ≤90 min → 5 chapters
-        fracs  = [0.00, 0.08, 0.32, 0.68, 0.93]
-        labels = [
-            random.choice(intros),
-            random.choice(mids_a),
-            random.choice(mids_b),
-            "winding down",
-            random.choice(outros),
-        ]
-    elif total <= 10800:    # ≤3 hours → 6 chapters
-        fracs  = [0.00, 0.05, 0.28, 0.52, 0.78, 0.96]
-        labels = [
-            random.choice(intros),
-            random.choice(mids_a),
-            random.choice(mids_b),
-            random.choice(peaks),
-            "late push",
-            random.choice(outros),
-        ]
-    else:                   # 4h+ → 7 chapters; use atmospheric night-time markers
-        fracs  = [0.00, 0.04, 0.20, 0.38, 0.57, 0.78, 0.94]
-        labels = [
-            random.choice(intros),
-            random.choice(mids_a),
-            random.choice(mids_b),
-            random.choice(night_markers),
-            random.choice(peaks),
-            "pre-dawn" if total >= 14400 else "late push",
-            random.choice(outros),
-        ]
-
-    chapters = []
-    for frac, label in zip(fracs, labels):
-        raw = int(total * frac)
-        # Round to nearest minute (except the mandatory 0:00 start)
-        secs = 0 if raw == 0 else max(60, (raw // 60) * 60)
-        chapters.append((_secs_to_ts(secs), label))
-    return chapters
-
-# ──────────────────────────────────────────────────────────────────────────────
 #  TAG SYSTEM  — broad + mid + long-tail + concept-specific
 # ──────────────────────────────────────────────────────────────────────────────
 
-TAGS_BROAD = [
-    # Order matters — first tag is the primary keyword signal for YouTube
-    "lofi hip hop", "study music", "lofi", "lofi beats", "chillhop",
-    "chill music", "focus music", "relaxing music",
-    "background music", "ambient music", "lo-fi",
+# Tags describe this video only. The old lists named genres the video
+# wasn't (phonk, dark, jazz on every upload) and made claims ("study music
+# that actually works", "music for anxiety"), which is the irrelevant and
+# misleading metadata YouTube's spam policy covers. Tags also carry little
+# ranking weight, so a short accurate list costs nothing.
+TAGS_GENERIC = [
+    "lofi", "lofi beats", "study music", "focus music", "chill music",
+    "background music", "lofi for studying", "instrumental",
 ]
-
-TAGS_MID = [
-    "lofi study beats", "lofi chill mix", "lofi hip hop mix",
-    "ambient lofi", "lofi jazz", "lofi phonk", "dark lofi",
-    "aesthetic lofi", "bedroom lofi", "cozy lofi", "rain lofi",
-    "night lofi", "lofi for focus", "lofi for studying",
-]
-
-TAGS_LONGTAIL = [
-    "lofi music to study and relax to",
-    "chill beats to study to",
-    "lofi hip hop radio beats to study to",
-    "music for concentration and focus",
-    "study music with rain sounds",
-    "late night study music",
-    "lofi for focus and productivity",
-    "background music for studying",
-    "calm music for anxiety and stress",
-    "lo fi hip hop beats",
-    "music to help you focus",
-    "lofi beats no copyright",
-    "lofi music for work from home",
-    "best lofi music 2026",
-    "lofi playlist for studying 2026",
-    "music that feels like a hug",
-    "lofi for the overstimulated brain",
-    "study music that actually works",
-    "background lofi for long sessions",
-    "lofi for night owls",
-]
+_MAX_TAGS = 18
 
 TAGS_DURATION = {
     "30 min":    ["lofi 30 minutes", "30 minute study session", "quick focus lofi", "short lofi mix"],
@@ -697,430 +429,126 @@ _THEME_GEO_TAGS: dict[str, list[str]] = {
 
 
 def build_tags(concept: dict, duration: str, theme_name: str | None = None) -> list:
-    # Strategy: maximize the 500-char YouTube tag budget for new-channel discoverability.
-    # YouTube has NO individual tag character limit — fill the full 500-char budget.
-    # More tag surface = more search entry points = more impressions on a new channel.
-    raw_extra = [_clean_tag(t) for t in concept.get("tags_extra", []) if t.strip("#")]
-
-    # Build ordered candidate list: broad first (primary keyword signal), then widen
+    """At most _MAX_TAGS tags, most specific first: the video's genre, the
+    concept's own tags, its length, the theme's tags, then generic ones."""
+    genre = (concept.get("genre_label") or "").strip()
     candidates: list[str] = []
-
-    # 1. All broad tags — primary keyword must be first for YouTube ranking signal
-    candidates += TAGS_BROAD
-
-    # 2. All duration-specific intent tags
-    candidates += TAGS_DURATION.get(duration, [])
-
-    # 3. All concept-specific tags from concept generator
-    candidates += raw_extra
-
-    # 3b. Theme-tied geographic/cultural tags, if this theme has an entry
+    if genre:
+        g = search_phrase(genre)
+        if g.lower() == "lo-fi hip hop":
+            g = "lofi hip hop"   # the spelling people search
+        dur = DURATION_DISPLAY.get(duration, duration)
+        # How people actually search for a genre: mix, beats, playlist, length.
+        from scripts.titles import purpose
+        kind = "music" if purpose(genre) in ("sleep", "relax") else "beats"   # ambient has no beats
+        candidates += [genre, g, f"{g} mix", f"{g} {kind}", f"{g} {dur}", f"{g} playlist"]
+        if concept.get("activity"):
+            candidates.append(f"{g} for {concept['activity']}")
+    candidates += [_clean_tag(t) for t in concept.get("tags_extra", []) if t.strip("#")]
+    candidates += TAGS_DURATION.get(duration, [])[:2]
     candidates += _THEME_GEO_TAGS.get(theme_name or "", [])
+    candidates += TAGS_GENERIC
 
-    # 4. Shuffled mid-tier tags for genre variety
-    mid_shuffled = TAGS_MID[:]
-    random.shuffle(mid_shuffled)
-    candidates += mid_shuffled
-
-    # 5. Shuffled long-tail phrases — high value for new-channel search discovery
-    longtail_shuffled = TAGS_LONGTAIL[:]
-    random.shuffle(longtail_shuffled)
-    candidates += longtail_shuffled
-
-    # Dedupe and fill up to 490 chars (YouTube hard limit is 500; 10-char buffer).
-    # Also enforce the per-tag cap here, not just in _clean_tag() -- the
-    # TAGS_BROAD/TAGS_DURATION/TAGS_MID/TAGS_LONGTAIL static pools don't route
-    # through _clean_tag, so this is the one choke point every candidate,
-    # regardless of source, actually passes through before being sent upstream.
     seen: set[str] = set()
     out: list[str] = []
-    total_chars = 0
     for t in candidates:
         t = t.strip()[:_MAX_TAG_CHARS].strip()
-        if not t:
-            continue
-        tl = t.lower()
-        char_cost = len(t) + (1 if out else 0)   # +1 for the comma separator
-        if tl not in seen and total_chars + char_cost <= 490:
-            seen.add(tl)
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
             out.append(t)
-            total_chars += char_cost
-    return out
+    return out[:_MAX_TAGS]
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  DESCRIPTION TEMPLATES
 # ──────────────────────────────────────────────────────────────────────────────
 
 DESCRIPTION_HOOKS = [
-    # Atmospheric/story hooks
-    "{mood_line}",
-    "{city_phrase}.",
     "you found this for a reason.",
-    "no ads. no interruptions. just {duration} of lofi frequencies.",
-    "{time_phrase}. {mood_line}.",
-    "close the other tabs. this one stays.",
+    "just {duration} of lofi, start to finish.",
+    "close the other tabs. This one stays.",
     "for the {activity} sessions that go longer than planned.",
-    "{duration} of uninterrupted beats. that's the promise.",
-    "signal found. tuning in.",
-    "ambient transmission from somewhere soft.",
-    "the frequency is always on.",
-    "{city_phrase}. {time_phrase}.",
+    "{duration} of beats, start to finish.",
     "for the ones still awake at this hour.",
-    "{mood_line}. here's {duration}.",
+    "nothing to skip, nothing to change. Press play.",
 ]
 
-DESCRIPTION_BODY = """
-{genre_label} · {duration} for {activity} · no ads, no interruptions.
+# The tracklist (real chapters, one per track) is added once the video is
+# assembled and the order is known; see with_tracklist().
+DESCRIPTION_BODY = """{search_line}
 
 {mood_hook}
 
 {setting_story}
 
-⏱ CHAPTERS
-{chapters}
-
 ─────────────────────────────────────
-🔔 New lo-fi drops weekly — subscribe if this helped
+🔔 Subscribe for more lo-fi
 👍 Like if this found you at the right time
 💬 Tell me what you were working on in the comments
 
-Original compositions, freshly composed and mixed for this upload.
+Original music, written and mixed by this channel's own composing software. Drums use free CC0 one-shot samples; no AI models are involved.
 
-#lofi #lofihiphop #{tag1} #{tag2} #{tag3}"""
+{hashtags}"""
 
 
-def _strip_leading_article(s: str) -> str:
-    """Remove a/an/the from start so templates can add their own article."""
-    for art in ("the ", "an ", "a "):
-        if s.lower().startswith(art):
-            return s[len(art):]
-    return s
+def _sentence(text: str) -> str:
+    """Capitalise the first letter and end with exactly one full stop."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    # Every sentence starts with a capital ("functional. mostly functional."
+    # in the stylised mood lines).
+    text = re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
+    return text if text[-1] in ".!?" else text + "."
 
 
 def _build_setting_story(concept: dict) -> str:
-    """Generate a 1-2 sentence scene-setter unique to this concept."""
-    city    = concept.get("city")
-    time_   = concept.get("time_label")
-    setting = _strip_leading_article(concept.get("setting") or "")  or concept.get("setting")
-    mood    = concept.get("mood_line", "")
-    act     = concept.get("activity", "work")
+    """One or two short sentences: when, the mood, and what it's for. Built
+    from whole phrases only, so every combination stays grammatical."""
+    # Only time-themed concepts lead with their time; for the others the
+    # time label is incidental and can contradict the mood line.
+    time_ = (concept.get("time_label") or "") if concept.get("pillar") == "temporal" else ""
+    mood = concept.get("mood_line") or ""
+    act = concept.get("activity") or "work"
+    dur = concept.get("duration") or "an hour"
+    use = random.choice([
+        f"Good for {act}.",
+        f"Put it on for {act}.",
+        f"{dur} for {act}, start to finish.",
+        f"Made to sit quietly behind {act}.",
+    ])
+    return " ".join(p for p in (_sentence(time_), _sentence(mood), _sentence(use)) if p)
 
-    m = mood.capitalize() + '.' if mood else ''
-    dur = concept.get('duration', '2 hours')
-    templates = []
 
-    if city and time_ and setting:
-        templates += [
-            f"Imagine: a {setting} in {city}, {time_}. {m} Just you, your {act}, and this.",
-            f"It's {time_} somewhere in {city}. The {setting} is quiet. This is your background.",
-            f"{city}, {time_}. The {setting} hums. You've got {act} to finish. This stays on.",
-            f"A {setting} in {city} at {time_}. {m} {dur} of uninterrupted focus.",
-            f"You're in a {setting} in {city}. It's {time_}. Nothing else matters right now.",
-            f"{city} has a specific energy at {time_}. This was made for that exact moment.",
-            f"The {setting} in {city} at {time_} — that's the vibe. {m}",
-            f"Turn this on. Find a {setting} in {city}. Let {time_} do the rest.",
-            f"{time_.capitalize()} in {city}. You've got {act}. The {setting} has you.",
-            f"For every {act} session that started at {time_} in a {setting} in {city}.",
-        ]
-    elif city and time_:
-        templates += [
-            f"{city} at {time_}. {m} {dur} to stay in it.",
-            f"Something about {city} at {time_} hits different. Here's the soundtrack.",
-            f"{time_.capitalize()} in {city}. Put this on. Don't overthink it.",
-            f"Built for {city} {time_} sessions. {m}",
-            f"It's {time_} in {city} and you need this.",
-            f"{city}, {time_}. {m} That's it. That's the description.",
-        ]
-    elif city and setting:
-        templates += [
-            f"A {setting} in {city}. {m} {dur} of this.",
-            f"The {setting} energy in {city} — captured. {m}",
-            f"For {act} in a {city} {setting}. Nothing more, nothing less.",
-        ]
-    elif city:
-        templates += [
-            f"{city} has a particular energy. This is made for it.",
-            f"Somewhere in {city}, someone is still awake. Here's their playlist.",
-            f"Built for {city}. {m} {dur} of lofi that fits.",
-            f"If {city} had a sound for {act}, this would be it.",
-            f"{city} {act} sessions deserve a proper soundtrack. Here it is.",
-            f"For the people in {city} who stay up to get things done.",
-        ]
-    elif time_ and setting:
-        templates += [
-            f"A {setting} at {time_}. {m} {dur} of focus.",
-            f"{time_.capitalize()}. A {setting}. Your {act}. This.",
-            f"The {setting} at {time_} hits different. {m}",
-        ]
-    elif time_:
-        templates += [
-            f"{time_.capitalize()}. {m} Here's {dur} of lofi to carry you through.",
-            f"The {time_} crowd knows. Made for {act} sessions that refuse to end.",
-            f"{time_.capitalize()} {act} sessions have a specific texture. This is it.",
-            f"Put this on at {time_}. See what happens to your {act}.",
-            f"For {time_} workers who need a soundtrack, not a distraction.",
-            f"{m} {time_.capitalize()} energy, {dur} long.",
-        ]
-    elif setting:
-        templates += [
-            f"The {setting} vibe — captured. {m} {dur} of this.",
-            f"Built for {setting} {act} sessions. {m}",
-            f"Everything a {setting} should sound like.",
-        ]
-    else:
-        templates += [
-            f"A lo-fi session for your {act}. {m}",
-            f"Beats that disappear into the background so your focus can come to the foreground.",
-            f"{m} {dur} of lofi. Your {act} will thank you.",
-            f"No algorithm. No playlist filler. Just {dur} of focused lofi.",
-            f"For {act} that needs a soundtrack without the distraction.",
-            f"The background that doesn't compete with what's in the foreground. {m}",
-        ]
+def _fmt_ts(secs: float) -> str:
+    secs = int(secs)
+    h, rem = divmod(secs, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
-    return random.choice(templates) if templates else ""
+
+def with_tracklist(description: str, tracks: list[dict]) -> str:
+    """Insert a tracklist with each track's real start time. YouTube turns
+    it into chapters when there are at least three, starting at 0:00."""
+    if not tracks:
+        return description
+    seen: dict[str, int] = {}
+    rows = []
+    for t in tracks:
+        seen[t["title"]] = seen.get(t["title"], 0) + 1
+        n = seen[t["title"]]
+        rows.append(f"{_fmt_ts(t['start'])} {t['title']}" + (f" ({n})" if n > 1 else ""))
+    lines = "\n".join(rows)
+    block = f"TRACKLIST\n{lines}\n\n"
+    marker = "─────"
+    i = description.find(marker)
+    out = description[:i] + block + description[i:] if i != -1 else description + "\n\n" + block
+    return out[:4900]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  CONCEPT GENERATION
 # ──────────────────────────────────────────────────────────────────────────────
-
-def _build_concept_prompt(trends: dict | None = None) -> str:
-    """Build the Groq concept prompt, optionally enriched with live trend data."""
-    trend_block = ""
-    if trends:
-        titles = trends.get("trending_titles", [])[:8]
-        season = trends.get("season", "")
-        s_kw   = trends.get("seasonal_keywords", [])[:3]
-        groq_a = trends.get("groq_analysis", "")
-        gemini = trends.get("gemini_insight", "")
-
-        if titles:
-            trend_block += f"\nCURRENT TRENDS (use for inspiration — do NOT copy):\n"
-            trend_block += f"Season: {season}. Seasonal searches: {', '.join(s_kw)}.\n"
-            trend_block += "Top-performing titles this week:\n"
-            for t in titles:
-                trend_block += f"  • {t[:80]}\n"
-        if groq_a:
-            trend_block += f"\nStrategic analysis of what's working:\n{groq_a[:400]}\n"
-        elif gemini:
-            trend_block += f"\nWeb trend insight:\n{gemini[:300]}\n"
-        if trend_block:
-            trend_block += (
-                "\nYour concept should be FRESH — tap into the emotional need these titles serve "
-                "but take it somewhere new. What are listeners ACTUALLY searching for that nobody's made yet?\n"
-            )
-
-    return f"""\
-You are a lo-fi YouTube channel writer. Generate one unique video concept — a place, moment, or feeling that anchors 1-3 hours of music.
-{trend_block}
-TARGET EMOTIONAL REGISTER: "productive melancholy" — tired, a little sad, but still working. Soft enough to exist in. Heavy enough to mean something. Think: desk lamp at 3am, rain you didn't plan for, a city that doesn't know your name yet.
-
-GENRE DIVERSITY — pick one that fits the concept organically, then build the setting around it:
-- "lo-fi hip hop": urban bedroom, city windows at night, headphones as armor against the world
-- "lofi jazz": late-night bar after last call, dimly lit practice room, cigarette smoke and brushed snares
-- "chillhop": sunny afternoon that asks nothing of you, café terrace, the slow hours between things
-- "bossa nova lofi": coastal city, open window, warm breeze and old vinyl scratching
-- "neo-soul lofi": Sunday morning, kitchen radio, something cooking, groove with a soft ache in it
-- "lofi ambient": liminal spaces, fog, transit — nowhere and everywhere, the mind going quiet
-- "city pop lofi": 80s Japan nostalgia, neon reflections on wet asphalt, night drives, cassette tape warmth
-- "dark lofi": late and heavy, the hours you wouldn't explain to anyone, cinematic weight
-
-GOOD concepts — specific moment or story, someone can picture exactly where they are:
-- "finishing something you started two years ago, alone, past midnight"
-- "rain on a window you've watched from desks in four different apartments"
-- "the hour after the deadline passes and the silence feels unfamiliar"
-- "Sunday neo-soul morning, headphones in, watching the street wake up slowly"
-- "4am, still here, the kind of tired that clarifies everything"
-- "the playlist you'd make if you knew nobody would hear it"
-
-BAD concepts — NEVER generate these:
-- "soft rain on wooden roofs" (noun + adjective, no story, no person, no ache)
-- "cozy study vibes" (aesthetic label, not a moment)
-- "rainy night lofi" (genre description, not a concept)
-- "peaceful evening studying" (generic, no specificity, no tension)
-- ANY concept naming a city, country, neighborhood, or real-world location (no Tokyo, Paris, Brooklyn, etc.)
-
-Output ONLY valid JSON:
-{{
-  "pillar": "emotional",
-  "concept": "one-sentence story or moment (max 90 chars)",
-  "city": null,
-  "setting": "specific place or general setting — NO city or country names",
-  "time_label": "exact time or occasion — never just 'night' or 'evening'",
-  "mood_line": "one line that IS the feeling — write like a poet, not a marketer (max 70 chars, no period)",
-  "activity": "what the listener is doing — specific enough to picture (not just 'studying')",
-  "genre_label": "lofi sub-genre label",
-  "aesthetic": "aesthetic tag or null",
-  "tags_extra": ["5 specific searchable tags unique to THIS concept"]
-}}
-
-Rules:
-- pillar: one of "temporal","activity","emotional","aesthetic","cross_genre" — NEVER "geographic"
-- city: always null — do NOT name any city, country, or place
-- concept: evokes a MOMENT not a category, NO location names
-- mood_line: the feeling itself in words. AVOID: "for the study sessions", "chill beats for X". DO: "still here, still going", "softer than grief, louder than silence", "the whole world is asleep except you", "for the hours that don't belong to anyone"
-- activity: specific enough to picture — "coding a side project", "drawing what you're afraid to show anyone", "writing a letter you won't send", not just "working"
-- genre_label: one of "lo-fi hip hop","lofi jazz","chillhop","bossa nova lofi","neo-soul lofi","lofi ambient","city pop lofi","dark lofi"
-- tags_extra: 5 searchable tags specific to this concept, not generic "lofi study"
-- Be creative. Vary pillars. Output ONLY JSON.
-"""
-
-
-def pick_concept_groq(trends: dict | None = None) -> dict | None:
-    """Use Groq to generate a unique video concept, enriched with live trend data."""
-    if not GROQ_KEY:
-        return None
-    try:
-        from groq import Groq
-        client = Groq(api_key=GROQ_KEY)
-        prompt = _build_concept_prompt(trends)
-
-        # Inject a random 'Creative Seed' to force LLM to break from cached patterns
-        creative_seed = random.randint(0, 1000000)
-        prompt += f"\n\n[CREATIVE SEED: {creative_seed}]\n"
-        prompt += "Use this seed to explore a completely different creative direction than previous runs."
-
-        resp   = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=1.1,
-        )
-        raw = resp.choices[0].message.content.strip()
-        if "```" in raw:
-            raw = "\n".join(l for l in raw.split("\n") if not l.strip().startswith("```"))
-        s, e = raw.find("{"), raw.rfind("}") + 1
-        concept = json.loads(raw[s:e])
-        concept.setdefault("genre_label", "lo-fi hip hop")
-        concept.setdefault("tags_extra",  [])
-        concept.setdefault("city",        None)
-        concept.setdefault("aesthetic",   None)
-        print(f"  [Groq] concept: {concept.get('concept', '')[:80]}")
-        return concept
-    except Exception as ex:
-        print(f"  [Groq concept] failed ({ex}), using pool")
-        return None
-
-
-def pick_concept_gemini(trends: dict | None = None) -> dict | None:
-    """Use Gemini to generate a unique video concept — primary generator."""
-    for key in [GEMINI_KEY, GEMINI_BACKUP]:
-        if not key:
-            continue
-        try:
-            from google import genai
-            client = genai.Client(api_key=key)
-            prompt = _build_concept_prompt(trends)
-
-            # Inject a random 'Creative Seed' to force LLM to break from cached patterns
-            creative_seed = random.randint(0, 1000000)
-            prompt += f"\n\n[CREATIVE SEED: {creative_seed}]\n"
-            prompt += "Use this seed to explore a completely different creative direction than previous runs."
-
-            resp = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            raw = resp.text.strip()
-            if "```" in raw:
-                raw = "\n".join(l for l in raw.split("\n") if not l.strip().startswith("```"))
-            s, e = raw.find("{"), raw.rfind("}") + 1
-            concept = json.loads(raw[s:e])
-            concept.setdefault("genre_label", "lo-fi hip hop")
-            concept.setdefault("tags_extra",  [])
-            concept.setdefault("city",        None)
-            concept.setdefault("aesthetic",   None)
-            print(f"  [Gemini] concept: {concept.get('concept', '')[:80]}")
-            return concept
-        except Exception as ex:
-            print(f"  [Gemini concept] failed ({ex}), trying next key")
-    return None
-
-
-def build_title_groq(concept: dict, duration: str, trends: dict | None = None) -> str | None:
-    """
-    Use Groq to generate a trend-aware YouTube title that balances SEO + emotional hook.
-    Falls back to None (caller will use static pattern generator).
-    """
-    if not GROQ_KEY:
-        return None
-    try:
-        from groq import Groq
-        client   = Groq(api_key=GROQ_KEY)
-        dur_str  = DURATION_DISPLAY.get(duration, duration)
-        season   = trends.get("season", "") if trends else ""
-        trend_titles = (trends.get("trending_titles", [])[:6] if trends else [])
-
-        trend_ctx = ""
-        if trend_titles:
-            trend_ctx = "Top-performing titles this week (DO NOT copy — use as pattern inspiration):\n"
-            trend_ctx += "\n".join(f"  • {t[:70]}" for t in trend_titles)
-            trend_ctx += "\n\n"
-        if season:
-            trend_ctx += f"Current season: {season}.\n"
-
-        prompt = f"""\
-Write ONE YouTube title for a lofi music video. It should feel like something a real person \
-would write in their notes app at 2am — specific, a little cinematic, not trying too hard.
-
-{trend_ctx}Concept: {concept.get('concept', '')}
-Mood: {concept.get('mood_line', '')}
-Activity: {concept.get('activity', '')}
-Duration: {dur_str}
-Genre: {concept.get('genre_label', 'lo-fi hip hop')}
-City: {concept.get('city') or 'none'}
-Time: {concept.get('time_label', '')}
-
-[UNIQUENESS SEED: {random.randint(0, 1000000)}]
-Use this seed to explore a different title structure or hook than previous attempts.
-
-What a great title does:
-- Captures a MOMENT, not a category ("you said five more minutes 40 minutes ago" > "late night focus")
-- Uses an unexpected structure — not always [keyword] · [duration] · [thing]
-- Duration can go at the end, in parentheses, or mid-sentence — not always slot 2
-- The SEO keyword (lofi/study music) appears early but doesn't have to open the sentence
-- Reads like something you'd actually say, not a metadata label
-
-Structures to try (pick one that fits the concept):
-"lofi hip hop · [scene], [observation] — {dur_str}"
-"study music · [specific moment] ({dur_str})"
-"lofi · {dur_str} · [action]. [short consequence]."
-"lofi hip hop · [twist on expectation] · {dur_str}"
-"lofi · [specific image], [specific image] — {dur_str} 🌙"
-
-Hard rules:
-1. "lofi", "lofi hip hop", or "study music" in the first 35 characters
-2. Include {dur_str}
-3. Total length 50-70 characters. Target 55-65.
-   CRITICAL: first 40 characters must carry the complete hook — mobile truncates there.
-   Make char 1-40 self-contained. Extend with duration/context after char 40.
-   Do NOT pad with filler words to hit 65+ chars — hook quality matters more than length.
-4. One emoji max, not at the start
-5. No ALL CAPS, no "...", no "vibes", no "chill out", no "relax"
-6. The interesting part must come from the CONCEPT, not filler words
-
-Output ONLY the title — no quotes, no explanation."""
-
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.85,   # higher = more creative, narrative variety
-        )
-        title = resp.choices[0].message.content.strip().strip('"').strip("'")
-        if len(title) > 100:
-            print(f"  [Groq] title too long ({len(title)} chars, YouTube limit 100), using pattern fallback")
-            return None
-        # Validate SEO rule 1: "lofi", "lo-fi", or "study music" must be in first 35 chars
-        _SEO_KEYWORDS = ("lofi", "lo-fi", "study music", "lofi hip hop", "chillhop")
-        title_prefix = title[:35].lower()
-        if not any(kw in title_prefix for kw in _SEO_KEYWORDS):
-            print(f"  [Groq] title fails SEO check (no lofi/study keyword in first 35 chars): '{title[:50]}...'")
-            return None
-        print(f"  [Groq] title: {title}")
-        return title
-    except Exception as ex:
-        print(f"  [Groq title] failed ({ex}), using pattern generator")
-        return None
-
 
 def _pillar_weights() -> dict[str, float]:
     """
@@ -1130,7 +558,7 @@ def _pillar_weights() -> dict[str, float]:
 
     Thin wrapper kept for pick_concept_from_pool()'s call site -- the real
     implementation is scripts/analytics.py's pillar_weights(), which is now
-    backed by a Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py)
+    backed by Beta-Bernoulli posterior means (scripts/bandit.py)
     over a composite engagement score instead of a raw CTR-ratio multiplier,
     and shares its binarization/posterior-ratio logic with
     duration_weights()/title_variant_weights() instead of each having its
@@ -1145,9 +573,21 @@ def _pillar_weights() -> dict[str, float]:
         return default
 
 
-_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 45, 70  # mirrors build_title_groq()'s
-# existing 55-65 guidance, widened since these hand-written templates have
-# less fine-grained control over final length than a freeform LLM completion.
+# Preferred title length band (research: 40-60 characters read fully on
+# mobile). A preference when picking among candidates, not a hard limit.
+_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 40, 62
+
+_UPLOAD_LOG = os.path.join(os.path.dirname(__file__), "..", "upload_log.json")
+
+
+def published_titles() -> set[str]:
+    """Titles already on the channel (upload_log.json), so a daily channel
+    doesn't post the same title twice."""
+    try:
+        with open(_UPLOAD_LOG) as f:
+            return {e.get("title") for e in json.load(f) if isinstance(e, dict) and e.get("title")}
+    except (OSError, ValueError):
+        return set()
 
 
 def generate_title_variants(
@@ -1155,58 +595,61 @@ def generate_title_variants(
     duration: str,
     trends: dict | None = None,
     n: int = 3,
+    taken: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return up to n unique title candidates for this concept, each drawn
-    from a DIFFERENT hook-strategy family (HOOK_STRATEGIES: "statement",
-    "benefit_list", "spec_led") so the variants are genuinely different
-    creative hooks -- not n rolls of the same skeleton family. Procedural
-    template-pattern titles (build_title) are primary; Groq is only used as
-    an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1), tagged with the
-    synthetic strategy label "llm_failsafe" for the returned strategies list.
-
-    Each attempt prefers a candidate landing in the [_TITLE_TARGET_MIN,
-    _TITLE_TARGET_MAX] char range (falls back to the first deduped candidate
-    if none of the 12 attempts land in range -- these pattern pools are
-    small, so "best of a small set" rather than a guarantee).
-
-    Returns (titles, strategies) -- two parallel lists, `strategies[i]` is
-    the hook-strategy family `titles[i]` was built from. If n > len(
-    HOOK_STRATEGIES), strategies repeat (cycled) for the extra slots.
+    """Up to n distinct titles, one per title form (HOOK_STRATEGIES: scene,
+    moment, radio), never one already published (`taken`, default: the
+    upload log). Returns (titles, strategies) as parallel lists;
+    `strategies[i]` is the form that really built `titles[i]`, so the
+    bandit credits the right form.
     """
+    taken = published_titles() if taken is None else taken
     variants: list[str] = []
     strategies: list[str] = []
 
-    for i in range(n):
-        strategy = HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)]
-        candidate = None
+    def _best(strategy: str) -> str | None:
+        found = None
         for _attempt in range(12):
             cand = build_title(concept, duration, strategy=strategy, trends=trends)
-            if cand not in variants:
-                candidate = candidate or cand
-                if _TITLE_TARGET_MIN <= len(cand) <= _TITLE_TARGET_MAX:
-                    candidate = cand
-                    break
-        if candidate is None:
-            # This strategy's small pattern set was exhausted by dedup --
-            # fall back to any strategy rather than dropping the slot.
-            for _attempt in range(12):
-                cand = build_title(concept, duration, trends=trends)
-                if cand not in variants:
-                    candidate = candidate or cand
-                    if _TITLE_TARGET_MIN <= len(cand) <= _TITLE_TARGET_MAX:
-                        candidate = cand
-                        break
-        if candidate is not None:
-            variants.append(candidate)
-            strategies.append(strategy)
+            if cand in variants or cand in taken:
+                continue
+            found = found or cand
+            if _TITLE_TARGET_MIN <= len(cand) <= _TITLE_TARGET_MAX:
+                return cand
+        return found
 
-    if len(variants) < n and os.getenv("LOFI_LLM_FAILSAFE") == "1":
-        groq_title = build_title_groq(concept, duration, trends)
-        if groq_title and groq_title not in variants:
-            variants.append(groq_title)
-            strategies.append("llm_failsafe")
+    for i in range(n):
+        first = HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)]
+        # A form whose few titles are all used falls back to the others.
+        for strategy in (first, *[s for s in HOOK_STRATEGIES if s != first]):
+            title = _best(strategy)
+            if title:
+                variants.append(title)
+                strategies.append(strategy)
+                break
+    if not variants:   # every phrase already used: a repeat beats no title
+        variants, strategies = [build_title(concept, duration, "scene", trends)], ["scene"]
+    return variants, strategies
 
-    return variants[:n], strategies[:len(variants[:n])]
+
+_SEASON_WORDS = {"winter": (12, 1, 2), "spring": (3, 4, 5), "summer": (6, 7, 8),
+                 "autumn": (9, 10, 11), "last day of the year": (12,)}
+
+
+def _in_season(label: str, month: int | None = None) -> bool:
+    """A label naming a season (or New Year's Eve) only fits that time of year."""
+    month = month or datetime.datetime.now(datetime.timezone.utc).month
+    for word, months in _SEASON_WORDS.items():
+        if word in label:
+            return month in months
+    return True
+
+
+def _clip_words(text: str, limit: int) -> str:
+    """Shorten to `limit` characters without cutting a word in half."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:—-– ")
 
 
 def pick_concept_from_pool() -> dict:
@@ -1215,10 +658,10 @@ def pick_concept_from_pool() -> dict:
     _pillars = list(_pw.keys())
     pillar   = random.choices(_pillars, weights=[_pw[p] for p in _pillars], k=1)[0]
     act      = random.choice(ACTIVITY_POOL)
-    time_  = random.choice(TIME_POOL)
+    time_  = random.choice([t for t in TIME_POOL if _in_season(t[0])])
 
     if pillar == "temporal":
-        time2 = random.choice(TIME_POOL)
+        time2 = random.choice([t for t in TIME_POOL if _in_season(t[0])])
         concept = {
             "pillar":      "temporal",
             "concept":     f"{time2[0]} {act[0]} session · {time2[1]}",
@@ -1251,11 +694,11 @@ def pick_concept_from_pool() -> dict:
         emo = random.choice(EMOTIONAL_POOL)
         concept = {
             "pillar":      "emotional",
-            "concept":     f"lofi for the {emo[0]} — {emo[1][:60]}",
+            "concept":     f"lofi for the {emo[0]} — {_clip_words(emo[1], 60)}",
             "city":        None,
             "setting":     "wherever you are",
             "time_label":  time_[0],
-            "mood_line":   emo[1][:60],
+            "mood_line":   _clip_words(emo[1], 60),
             "activity":    act[0],
             "genre_label": "lo-fi hip hop",
             "aesthetic":   None,
@@ -1296,75 +739,76 @@ def pick_concept_from_pool() -> dict:
 
 
 def pick_concept(trends: dict | None = None) -> dict:
-    """Get a concept — procedural pool (analytics-weighted, hundreds of hand-
-    written combinations) is primary and always used. Gemini/Groq are only
-    ever reached as an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1)."""
-    if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-        concept = pick_concept_gemini(trends) or pick_concept_groq(trends)
-        if concept:
-            return concept
+    """Get a concept from the analytics-weighted procedural pool.
+
+    `trends` is accepted for call-site compatibility and currently unused."""
     return pick_concept_from_pool()
 
 
 # Maps internal sub_genre keys → SEO genre_label strings used in titles/descriptions.
 # Any sub_genre not in this dict falls back to "lo-fi hip hop".
 _SUBGENRE_TO_GENRE_LABEL: dict[str, str] = {
+    # Each genre under the name people search for it. These feed titles,
+    # tags, hashtags and genre playlists; several used to name a different
+    # genre (house as "city pop lofi", phonk as "dark lofi", vaporwave as
+    # "lofi ambient", anime and piano as "lofi jazz").
     "dark_lofi":      "dark lofi",
-    "lofi_phonk":     "dark lofi",
-    "vaporwave":      "lofi ambient",
-    "ambient":        "lofi ambient",
+    "lofi_phonk":     "lofi phonk",
+    "vaporwave":      "vaporwave",
+    "ambient":        "ambient lofi",
     "lofi_jazz":      "lofi jazz",
-    "jazz_cafe":      "lofi jazz",
-    "nujabes":        "lofi jazz",
-    "neo_soul":       "neo-soul lofi",
+    "jazz_cafe":      "jazz cafe lofi",
+    "nujabes":        "jazz hop",
+    "neo_soul":       "neo soul lofi",
     "bossa_lofi":     "bossa nova lofi",
-    "lofi_rnb":       "neo-soul lofi",
+    "lofi_rnb":       "r&b lofi",
     "chillhop":       "chillhop",
     "hip_hop_lofi":   "lo-fi hip hop",
-    "lo_fi_funk":     "lo-fi hip hop",
-    "chill_beats":    "chillhop",
-    "lofi_house":     "city pop lofi",
-    "cozy_cafe":      "lo-fi hip hop",
-    "morning_lofi":   "lo-fi hip hop",
-    "anime_lofi":     "lofi jazz",
-    "summer_vibes":   "city pop lofi",
-    "bedroom_pop":    "lo-fi hip hop",
+    "lo_fi_funk":     "lofi funk",
+    "chill_beats":    "chill lofi beats",
+    "lofi_house":     "lofi house",
+    "cozy_cafe":      "cafe lofi",
+    "morning_lofi":   "morning lofi",
+    "anime_lofi":     "anime lofi",
+    "summer_vibes":   "summer lofi",
+    "bedroom_pop":    "bedroom pop",
     "city_pop":       "city pop lofi",
     "study_lofi":     "lo-fi hip hop",
-    "piano_lofi":     "lofi jazz",
-    "lofi_classical": "lofi ambient",
-    # 3 new research-driven subgenres (config/genres/README.md's "add a new
-    # subgenre" step 2). Note: lofi_drill/lofi_world (added in a prior pass)
-    # were never actually added here and silently fall back to "lo-fi hip
-    # hop" -- that looks like an unintentional gap in that pass, not a
-    # pattern worth repeating, so these 3 get real labels instead.
-    "sleep_lofi":     "lofi ambient",
+    "piano_lofi":     "piano lofi",
+    "lofi_classical": "classical lofi",
+    "sleep_lofi":     "sleep lofi",
     "lofi_garage":    "lofi garage",
     "lofi_synthwave": "synthwave lofi",
+    "lofi_drill":     "lofi drill",
+    "lofi_world":     "indian lofi",
 }
 
 
 def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concept: dict) -> dict:
     """
-    Return a copy of base_concept with genre_label and mood_line overridden
-    to match what was actually generated. Called after generate_tracks() so
-    SEO titles reflect the real music, not the pre-generation guess.
+    Return a copy of base_concept with genre_label set to the genre that was
+    actually generated. Called after generate_tracks() so SEO titles reflect
+    the real music, not the pre-generation guess.
 
-    Exception: the "cross_genre" pillar's genre_label is left untouched. Its
-    concept came from a specific, curated CROSS_GENRE_POOL pick -- that pick
-    IS the pillar's whole reason for existing, and overriding it with
-    _SUBGENRE_TO_GENRE_LABEL's coarser alias would silently discard a more
-    specific, deliberate choice in favor of a less specific one (confirmed
-    2026-08-26: this was clobbering the pool's pick on every cross_genre
-    video, making its title/concept mismatch).
+    A "cross_genre" concept keeps its own wording ("lofi ambient", "vaporwave
+    lofi") when the music really is that genre; when the music turned out to
+    be something else, the label is replaced, because a title must never name
+    a genre that doesn't play.
     """
     updated = dict(base_concept)
-    if base_concept.get("pillar") != "cross_genre":
-        genre_label = _SUBGENRE_TO_GENRE_LABEL.get(music_sub_genre)
-        if genre_label:
-            updated["genre_label"] = genre_label
-    if music_mood and len(music_mood.split()) >= 3:
-        updated["mood_line"] = music_mood
+    genre_label = _SUBGENRE_TO_GENRE_LABEL.get(music_sub_genre)
+    if base_concept.get("pillar") == "cross_genre":
+        from scripts.composer import _resolve_genre_hint
+        if _resolve_genre_hint(base_concept.get("genre_label") or "") == music_sub_genre:
+            genre_label = None
+        elif genre_label:
+            # The pool pick's mood line and tags describe its genre ("texture
+            # more than melody" is ambient); they go with its label.
+            updated.update(mood_line="", tags_extra=[], concept=genre_label)
+    if genre_label:
+        updated["genre_label"] = genre_label
+    # music_mood is the first track's name ("Until the Small Hours"): a song
+    # title, not a mood line, so the concept's own mood line stays.
     return updated
 
 
@@ -1372,91 +816,27 @@ def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concep
 #  TITLE BUILDER
 # ──────────────────────────────────────────────────────────────────────────────
 
-_BENEFIT_KEYWORDS = ["study", "focus", "relax", "sleep", "chill", "unwind"]
-
-
-def _benefit_tail(trends: dict | None = None) -> str:
-    """Comma-joined 2-3 word benefit-list tail for the "benefit_list" hook
-    strategy, matching the verified lofi/ambient-radio convention
-    (keyword-first + Study/Focus/Relax/Sleep list), e.g. real competitor
-    titles already scraped into assets/trend_cache.json: "lofi hip hop
-    radio - beats to relax/study to". Trend-aware when real competitor
-    titles are available (ranks the vocabulary by what's actually showing up
-    this week); falls back to a uniform-random sample otherwise.
-    """
-    if trends:
-        from scripts.trend_research import extract_title_benefit_signals
-        ranked = extract_title_benefit_signals(trends)
-        if ranked:
-            return ", ".join(ranked[:random.choice([2, 3])])
-    return ", ".join(random.sample(_BENEFIT_KEYWORDS, random.choice([2, 3])))
+_THUMB_TEXT: dict[str, str] = {}   # title -> the short phrase its thumbnail shows
 
 
 def build_title(concept: dict, duration: str, strategy: str | None = None,
                  trends: dict | None = None) -> str:
-    """Build one title from the concept's pillar pattern set.
-
-    `strategy` picks a specific hook-strategy family (one of HOOK_STRATEGIES:
-    "statement", "benefit_list", "spec_led"). If omitted (or unrecognized),
-    a pattern is drawn from the pooled union of all strategies for that
-    pillar — this preserves the old flat-random behavior for any caller that
-    doesn't care which hook family it gets.
-
-    `trends` (optional) ranks the "benefit_list" strategy's keyword tail by
-    real scraped competitor titles instead of a uniform-random sample -- see
-    _benefit_tail(). Unused by patterns that don't reference {benefits}.
-    """
-    dur_str  = DURATION_DISPLAY.get(duration, duration)
-    pillar   = concept.get("pillar", "temporal")
-    city     = concept.get("city") or "city"
-    setting  = concept.get("setting", "room")
-    time_l   = concept.get("time_label", "late night")
-    activity = concept.get("activity", "study")
-    mood      = concept.get("mood_line", "chill")
-    aesthetic = concept.get("aesthetic", "cozy")
-    genre     = concept.get("genre_label", "lo-fi hip hop")
-    # Derive a clean short adjective for emotional patterns.
-    # mood_line is often a poetic phrase — extract only the first 1-2 words
-    # and map common phrases to clean adjectives.
-    _EMO_MAP = [
-        ("overwhelm",  "overwhelmed"), ("anxious",    "anxious"),
-        ("burnt out",  "burnt out"),   ("burnout",    "burnt out"),
-        ("lonely",     "lonely"),      ("alone",      "alone"),
-        ("nostalgic",  "nostalgic"),   ("melancholy", "melancholy"),
-        ("stressed",   "stressed"),    ("numb",       "numb"),
-        ("hopeful",    "hopeful"),     ("motivated",  "motivated"),
-        ("exhaust",    "exhausted"),   ("tired",      "tired"),
-        ("sad",        "sad"),         ("lost",       "lost"),
-        ("calm",       "calm"),        ("focused",    "focused"),
-        ("grief",      "melancholy"),  ("weight",     "heavy-hearted"),
-        ("quiet",      "quietly wired"), ("silence",  "silent"),
-    ]
-    mood_lower = mood.lower()
-    emo = next((v for k, v in _EMO_MAP if k in mood_lower), "tired but focused")
-
-    # Compute benefits (may itself draw from random.choice/random.sample)
-    # BEFORE the pattern pick below, so the pattern-selection random.choice()
-    # call stays the last one made in this function -- tests spy on
-    # random.choice to verify which candidate pool a strategy drew from.
-    format_kwargs = {
-        "time": time_l, "activity": activity, "duration": dur_str,
-        "emotional_state": emo, "aesthetic": aesthetic, "genre": genre,
-        "benefits": _benefit_tail(trends),
-    }
-
-    patterns_by_strategy = _TITLE_PATTERNS_BY_PILLAR.get(pillar, TITLE_PATTERNS_TEMPORAL)
-    if strategy in patterns_by_strategy:
-        candidates = patterns_by_strategy[strategy]
-    else:
-        # Unknown/omitted strategy -- pool every strategy's patterns together
-        # (preserves the old flat-random-across-all-10 behavior).
-        candidates = [p for plist in patterns_by_strategy.values() for p in plist]
-    pattern = random.choice(candidates)
-    title = pattern.format(**format_kwargs)
-
-    # Trim to 100 chars (YouTube hard limit) at a word boundary
-    if len(title) > 100:
-        title = title[:100].rsplit(" ", 1)[0].rstrip(" ·—,-")
+    """One title in one of the HOOK_STRATEGIES forms (see scripts/titles.py):
+    "scene" ("rain on the window 🌧️ [lofi hip hop · 1 hour]"), "moment"
+    ("reading after midnight ☕ [lofi jazz · 1 hour]") or "radio" ("lofi hip
+    hop 🌧️ rainy beats to study & relax to"). An unknown strategy picks one."""
+    from scripts import titles
+    if strategy not in HOOK_STRATEGIES:
+        strategy = random.choice(HOOK_STRATEGIES)
+    title, thumb = titles.build(
+        strategy,
+        theme=concept.get("theme") or "cozy_rain",
+        genre=concept.get("genre_label") or "lo-fi hip hop",
+        activity=(concept.get("activity") or "studying").lower(),
+        duration=DURATION_DISPLAY.get(duration, duration),
+        trends=trends,
+    )
+    _THUMB_TEXT[title] = thumb
     return title
 
 
@@ -1464,69 +844,74 @@ def build_title(concept: dict, duration: str, strategy: str | None = None,
 #  DESCRIPTION BUILDER
 # ──────────────────────────────────────────────────────────────────────────────
 
-def build_description(concept: dict, duration: str) -> str:
-    city     = concept.get("city") or ""
-    time_l   = concept.get("time_label", "")
-    mood     = concept.get("mood_line", "chill")
+def search_phrase(genre: str) -> str:
+    """The genre as people type it into search: always with "lofi" in it."""
+    genre = (genre or "lofi").strip()
+    return genre if re.search(r"lo-?fi", genre, re.I) else f"{genre} lofi"
+
+
+_PURPOSE_USES = {"sleep": ("sleeping", "resting", "relaxing"),
+                 "relax": ("relaxing", "reading", "meditation"),
+                 "groove": ("working", "cooking", "unwinding"),
+                 "study": ("studying", "working", "relaxing")}
+_PURPOSE_HASHTAG = {"sleep": "sleepmusic", "relax": "relaxingmusic",
+                    "groove": "chillmusic", "study": "studymusic"}
+
+
+def _search_line(genre: str, duration: str, activity: str) -> str:
+    """The first line YouTube shows under the title in search results: what
+    the video is, how long, and what it's for, in the words people search."""
+    from scripts.titles import purpose
+    p = purpose(genre)
+    uses = []
+    for u in (activity, *_PURPOSE_USES[p]):
+        if u and u.lower() not in uses:
+            uses.append(u.lower())
+    uses = uses[:3]
+    use_text = f"{', '.join(uses[:-1])} and {uses[-1]}" if len(uses) > 1 else uses[0]
+    noun = "music" if p in ("sleep", "relax") else "beats"
+    return _sentence(f"{duration} of {search_phrase(genre)} {noun} for {use_text}")
+
+
+def build_description(concept: dict, duration: str, scene: str = "") -> str:
+    from scripts.titles import fits_time_of_day, purpose
     activity = concept.get("activity", "work")
     genre    = concept.get("genre_label", "lo-fi hip hop")
-    setting  = concept.get("setting", "room")
+    theme    = concept.get("theme") or ""
 
-    city_phrase  = f"Somewhere in {city}" if city else "wherever you are"
-    time_phrase  = time_l if time_l else "late"
-
-    # Fill concept with formatting helpers
     concept_ctx = dict(concept)
-    concept_ctx["city_phrase"]  = city_phrase
-    concept_ctx["time_phrase"]  = time_phrase
-    concept_ctx["duration"]     = DURATION_DISPLAY.get(duration, duration)
+    concept_ctx["duration"] = DURATION_DISPLAY.get(duration, duration)
+    # Text must agree with the picture: a mood line or hook naming the wrong
+    # time of day (afternoon light over a night window) gives way to the
+    # title's own scene.
+    for key in ("mood_line", "time_label"):
+        if theme and not fits_time_of_day(theme, concept_ctx.get(key) or ""):
+            concept_ctx[key] = scene if key == "mood_line" else ""
+    hooks = [h for h in DESCRIPTION_HOOKS if not theme or fits_time_of_day(theme, h)]
 
-    # Mood hook line (atmospheric, goes AFTER the SEO-first opening)
-    hook_template = random.choice(DESCRIPTION_HOOKS)
-    try:
-        mood_hook = hook_template.format(**concept_ctx)
-    except KeyError:
-        mood_hook = mood
-
-    # Setting story paragraph
+    mood_hook = random.choice(hooks or DESCRIPTION_HOOKS).format(**concept_ctx)
+    mood_hook = mood_hook[0].upper() + mood_hook[1:]
     setting_story = _build_setting_story(concept_ctx)
 
-    # Chapters
-    chapters = _build_chapters(duration, concept)
-    chapters_str = "\n".join(f"{ts} — {label}" for ts, label in chapters)
-
-    # Hashtags: first 3 appear ABOVE the video title on watch page — high-traffic only.
-    # Hardcoded pool ensures lofi/studymusic always appear; duration tag as third.
-    _HTAG_POOL = ["studymusic", "lofihiphop", "lofibeats", "chillhop", "focusmusic",
-                  "studylofi", "lofimusic", "chillbeats"]
+    # Hashtags: the first three show above the title, so they must describe
+    # this video: lofi, its actual genre, its length. No duplicates.
     dur_tags = TAGS_DURATION.get(duration, [])
-    dur_htag = _clean_tag(dur_tags[0]).replace(" ", "") if dur_tags else "lofi3hours"
-    _htag_candidates = _HTAG_POOL[:]
-    random.shuffle(_htag_candidates)
-    tag1 = _htag_candidates[0]
-    tag2 = _htag_candidates[1]
-    tag3 = dur_htag
+    candidates = ["lofi", _clean_tag(genre).replace(" ", ""),
+                  _clean_tag(dur_tags[0]).replace(" ", "") if dur_tags else "",
+                  _PURPOSE_HASHTAG[purpose(genre)]]
+    hashtags, seen = [], set()
+    for h in candidates:
+        if h and h not in seen and re.fullmatch(r"\w+", h):
+            seen.add(h)
+            hashtags.append(f"#{h}")
 
     desc = DESCRIPTION_BODY.format(
-        duration=DURATION_DISPLAY.get(duration, duration),
-        genre_label=genre,
-        activity=activity,
+        search_line=_search_line(genre, DURATION_DISPLAY.get(duration, duration), activity),
         mood_hook=mood_hook,
         setting_story=setting_story,
-        chapters=chapters_str,
-        tag1=tag1, tag2=tag2, tag3=tag3,
+        hashtags=" ".join(hashtags[:4]),
     )
-    # Guard: YouTube's hard limit is 60 hashtags (exceeding it silences all hashtags).
-    # Cap at 5 because 3-5 is the optimal range for discovery.
-    _htag_count = len(re.findall(r'#\w+', desc))
-    if _htag_count > 5:
-        _found = 0
-        def _htag_filter(m):
-            nonlocal _found
-            _found += 1
-            return m.group(0) if _found <= 5 else ""
-        desc = re.sub(r'#\w+', _htag_filter, desc)
-    return desc[:4900]   # YouTube hard limit is 5000 chars; leave buffer
+    return desc.strip()[:4900]   # YouTube's limit is 5000; the tracklist goes in later
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1534,7 +919,7 @@ def build_description(concept: dict, duration: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def generate_seo(theme_name: str = None, duration: str = None,
-                 use_ollama: bool = False, concept: dict = None,
+                 concept: dict = None,
                  trends: dict | None = None) -> tuple:
     """
     Generate SEO metadata for a video.
@@ -1542,8 +927,8 @@ def generate_seo(theme_name: str = None, duration: str = None,
     Args:
         theme_name: Visual theme (cozy_rain, purple_dusk, etc.)
         duration:   Video duration label ("1 hour", "2 hours", etc.)
-        use_ollama: Use local Ollama to polish description
-        concept:    Pre-generated concept dict (pass from run.py to avoid double Groq call)
+        concept:    Pre-generated concept dict (pass from run.py so the title,
+                    visual and music all describe the same concept)
         trends:     TrendSnapshot from trend_research.get_trend_snapshot()
 
     Returns: (seo_dict, seo_file_path)
@@ -1555,15 +940,17 @@ def generate_seo(theme_name: str = None, duration: str = None,
         print("  [SEO] Generating concept...")
         concept = pick_concept(trends)
 
-    # Generate 3 title variants (one per hook-strategy family -- statement,
-    # benefit_list, spec_led); pick one for upload diversity tracking,
-    # weighted by TWO independent bandit signals multiplied together: past
-    # per-hook-strategy performance for this pillar (title_variant_weights,
-    # coarse -- "which creative hook family wins") and per-surface-text-
-    # feature performance (title_feature_weights, finer -- "does a
-    # target-length/emoji/benefit-list title win", mined from the same
-    # already-logged title text). Both fall back to a neutral 1.0 for any
-    # strategy/feature without >=5 samples of performance data yet.
+    # Three title variants, one per form (scene, moment, radio); one is
+    # picked, weighted by two bandit signals multiplied together: past
+    # performance of each form for this pillar (title_variant_weights) and
+    # of surface features such as length (title_feature_weights). Both are
+    # a neutral 1.0 until a form or feature has >=5 scored videos.
+    from scripts.titles import activity_for
+    concept = {**concept, "theme": theme_name or concept.get("theme") or "cozy_rain"}
+    activity = (concept.get("activity") or "studying").lower()
+    concept["activity"] = activity_for(concept.get("genre_label") or "", activity)
+    if concept["activity"] != activity:      # its tags ("coding lofi") went with it
+        concept["tags_extra"] = []
     title_variants, variant_strategies = generate_title_variants(concept, duration, trends, n=3)
     from scripts.analytics import (
         title_variant_weights as _title_variant_weights,
@@ -1586,56 +973,18 @@ def generate_seo(theme_name: str = None, duration: str = None,
     chosen_idx        = random.choices(range(len(title_variants)), weights=_weights, k=1)[0]
     title             = title_variants[chosen_idx]
     chosen_strategy   = variant_strategies[chosen_idx] if chosen_idx < len(variant_strategies) else None
-    description = build_description(concept, duration)
+    description = build_description(concept, duration, scene=_THUMB_TEXT.get(title, ""))
     tags        = build_tags(concept, duration, theme_name=theme_name)
 
-    # Inject trending tags if available — lofi-relevant only, no cross-genre pollution
-    if trends:
-        _LOFI_ALLOW = {
-            "lofi", "lo-fi", "lo fi", "chill", "study", "focus", "ambient",
-            "jazz", "beats", "hip hop", "hiphop", "relax", "sleep", "night",
-            "rain", "chillhop", "vaporwave", "phonk", "bossa", "neo soul",
-            "bedroom", "music", "instrumental", "playlist", "2025", "2026",
-        }
-        existing_lower = {t.lower() for t in tags}
-        yt_tags = [
-            _clean_tag(t) for t in trends.get("trending_tags", [])
-            if any(kw in t.lower() for kw in _LOFI_ALLOW)
-            and _clean_tag(t).lower() not in existing_lower
-        ][:3]
-        combined = tags + yt_tags
-        seen: set[str] = set()
-        merged: list[str] = []
-        total_chars = 0
-        for t in combined:
-            tl = t.lower()
-            char_cost = len(t) + (1 if merged else 0)
-            if tl not in seen and total_chars + char_cost <= 490:
-                seen.add(tl)
-                merged.append(t)
-                total_chars += char_cost
-        tags = merged
-
-    if use_ollama:
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["ollama", "run", "llama3.2",
-                 f"Rewrite this YouTube description to be more evocative and atmospheric "
-                 f"for a lo-fi music channel. Keep chapter timestamps exactly as-is. "
-                 f"Under 500 chars total. Original:\n\n{description[:600]}"],
-                capture_output=True, text=True, timeout=40,
-            )
-            if result.returncode == 0 and len(result.stdout.strip()) > 80:
-                description = result.stdout.strip()
-        except Exception:
-            pass
+    # Other channels' trending tags are not copied in: the old keyword filter
+    # let through anything containing "music", including other artists' and
+    # channels' names.
 
     _now_utc = datetime.datetime.now(datetime.timezone.utc)
     ts = _now_utc.strftime("%Y%m%d_%H%M%S")
     # Unique ref stamped into description — used for cross-device duplicate detection.
     # YouTube search doesn't support description search, so we list recent videos and
-    # grep descriptions ourselves. The ref is invisible to viewers (end of description).
+    # grep descriptions ourselves. It is visible, as the last line of the description.
     ref_id = f"lofi:{ts}_{secrets.token_hex(2)}"
     description = description.rstrip() + f"\n\n{ref_id}"
 
@@ -1653,6 +1002,8 @@ def generate_seo(theme_name: str = None, duration: str = None,
         "mood":             concept.get("mood_line", ""),
         "city":             concept.get("city"),
         "activity":         concept.get("activity", ""),
+        "genre_label":      concept.get("genre_label", ""),
+        "thumb_text":       _THUMB_TEXT.get(title, ""),
         "generated_at":     _now_utc.isoformat(),
         "ref_id":           ref_id,
         "title_variants":           title_variants,
@@ -1675,7 +1026,7 @@ if __name__ == "__main__":
     import sys
     theme    = sys.argv[1] if len(sys.argv) > 1 else None
     duration = sys.argv[2] if len(sys.argv) > 2 else "2 hours"
-    seo, path = generate_seo(theme, duration, use_ollama=False)
+    seo, path = generate_seo(theme, duration)
     print("\n--- CONCEPT ---")
     print(seo["concept"])
     print("\n--- TITLE ---")

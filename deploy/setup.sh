@@ -6,12 +6,14 @@
 #
 # What it does (only the mechanical parts — interactive Cloudflare login is
 # prompted, never automated):
-#   1. install cloudflared binary to ~/.local/bin (if missing)
+#   0. check .env: refuse to expose the panel without WEBUI_PASSWORD, and
+#      generate WEBUI_SECRET so logins survive restarts
+#   1. install cloudflared (Cloudflare's signed apt repo when apt exists)
 #   2. install + enable the lofi-webui user service
 #   3. install + enable the lofi-auto timer (daily render+upload, default
-#      midnight) — the timer just arms the schedule, so it's safe to enable
-#      immediately; change the schedule from the web UI's Automation tab,
-#      dashboard.py, or `python publish.py auto-service schedule ...`
+#      midnight), the daily analytics sync timer, and (with Tailscale) the
+#      cert renewal timer. Change the upload schedule from the web UI's
+#      Automation tab or `python publish.py auto-service schedule ...`
 #   4. enable user lingering so services start at boot without login
 #   5. create the named tunnel + DNS route + config.yml (once you're logged in)
 #   6. enable + start the cloudflared user service
@@ -38,37 +40,89 @@ if [ -f "$ROOT/.env" ]; then
   HOSTNAME="${base#http*://}"; HOSTNAME="${HOSTNAME%%/*}"
 fi
 
-# ── 1. cloudflared binary ─────────────────────────────────────────────────────
+env_get() { [ -f "$ROOT/.env" ] && grep -E "^$1=" "$ROOT/.env" | head -1 | cut -d= -f2- | tr -d '"' || true; }
+
+# ── 0b. panel credentials ─────────────────────────────────────────────────────
+if [ -z "$(env_get WEBUI_PASSWORD)" ]; then
+  warn "WEBUI_PASSWORD is not set in .env. The panel is exposed to the internet"
+  echo "    through the tunnel, so set a strong password first, then re-run."
+  exit 1
+fi
+if [ -z "$(env_get WEBUI_SECRET)" ]; then
+  say "Generating WEBUI_SECRET (keeps logins valid across restarts) ..."
+  printf 'WEBUI_SECRET=%s\n' "$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$ROOT/.env"
+  chmod 600 "$ROOT/.env"
+fi
+WEBUI_PORT="$(env_get WEBUI_PORT)"; WEBUI_PORT="${WEBUI_PORT:-8080}"
+if [ -z "$(env_get LOFI_STREAM_ALERT_WEBHOOK)" ]; then
+  warn "No alert URL (LOFI_STREAM_ALERT_WEBHOOK) in .env: failed unattended runs"
+  echo "    will only show up in the logs. Set one in the panel's Settings page."
+fi
+
+# ── 1. cloudflared ────────────────────────────────────────────────────────────
 if ! command -v cloudflared >/dev/null 2>&1 && [ ! -x "$BIN/cloudflared" ]; then
-  say "Installing cloudflared to $BIN ..."
-  arch="$(uname -m)"; case "$arch" in
-    x86_64) cf_arch=amd64 ;; aarch64|arm64) cf_arch=arm64 ;; *) cf_arch=amd64 ;;
-  esac
-  curl -fsSL -o "$BIN/cloudflared" \
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}"
-  chmod +x "$BIN/cloudflared"
+  if command -v apt-get >/dev/null 2>&1; then
+    say "Installing cloudflared from Cloudflare's signed apt repository ..."
+    sudo mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
+      | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+      | sudo tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+    sudo apt-get update -q && sudo apt-get install -y -q cloudflared
+  else
+    warn "No apt: downloading the cloudflared binary from GitHub without signature"
+    echo "    verification. Check it against the release's published checksum."
+    arch="$(uname -m)"; case "$arch" in
+      x86_64) cf_arch=amd64 ;; aarch64|arm64) cf_arch=arm64 ;; *) cf_arch=amd64 ;;
+    esac
+    curl -fsSL -o "$BIN/cloudflared" \
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cf_arch}"
+    chmod +x "$BIN/cloudflared"
+  fi
 else
   say "cloudflared already present."
 fi
 CFLARED="$(command -v cloudflared || echo "$BIN/cloudflared")"
 
+# Unit files carry @ROOT@ / @CLOUDFLARED@ placeholders, filled in here so they
+# work from wherever the repo is cloned.
+install_unit() {
+  sed -e "s#@ROOT@#$ROOT#g" -e "s#@CLOUDFLARED@#$CFLARED#g" "$ROOT/deploy/$1" > "$UNIT_DIR/$1"
+}
+
 # ── 2. web UI service ─────────────────────────────────────────────────────────
 say "Installing lofi-webui user service ..."
-cp "$ROOT/deploy/lofi-webui.service" "$UNIT_DIR/lofi-webui.service"
+install_unit lofi-webui.service
 systemctl --user daemon-reload
 systemctl --user enable --now lofi-webui.service
 say "lofi-webui status: $(systemctl --user is-active lofi-webui.service)"
 
 # ── 3. auto-upload timer (daily, default midnight) ────────────────────────────
 say "Installing lofi-auto timer + service ..."
-cp "$ROOT/deploy/lofi-auto.service" "$UNIT_DIR/lofi-auto.service"
-cp "$ROOT/deploy/lofi-auto.timer" "$UNIT_DIR/lofi-auto.timer"
+install_unit lofi-auto.service
+install_unit lofi-auto.timer
 # Triggered via lofi-auto.service's OnFailure= -- never enabled/started
 # directly, systemd just needs to be able to find it when that fires.
-cp "$ROOT/deploy/lofi-auto-notify-failure.service" "$UNIT_DIR/lofi-auto-notify-failure.service"
+install_unit lofi-auto-notify-failure.service
 systemctl --user daemon-reload
 systemctl --user enable --now lofi-auto.timer
 say "lofi-auto.timer status: $(systemctl --user is-active lofi-auto.timer)"
+
+# ── 3b. analytics sync (feeds title/pillar weighting and thumbnail swaps) ─────
+say "Installing lofi-analytics timer + service ..."
+install_unit lofi-analytics.service
+install_unit lofi-analytics.timer
+systemctl --user daemon-reload
+systemctl --user enable --now lofi-analytics.timer
+
+# ── 3c. Tailscale cert renewal (only when Tailscale is in use) ────────────────
+if command -v tailscale >/dev/null 2>&1; then
+  say "Installing lofi-cert-renew timer + service ..."
+  install_unit lofi-cert-renew.service
+  install_unit lofi-cert-renew.timer
+  systemctl --user daemon-reload
+  systemctl --user enable --now lofi-cert-renew.timer
+fi
 
 # ── 4. linger (start at boot without an active login session) ─────────────────
 if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
@@ -102,7 +156,7 @@ credentials-file: $CF_DIR/$UUID.json
 
 ingress:
   - hostname: $HOSTNAME
-    service: http://127.0.0.1:8080
+    service: http://127.0.0.1:$WEBUI_PORT
   - service: http_status:404
 YAML
 
@@ -110,7 +164,7 @@ say "Routing DNS $HOSTNAME -> tunnel ..."
 "$CFLARED" tunnel route dns "$TUNNEL_NAME" "$HOSTNAME" || warn "DNS route may already exist — ok."
 
 say "Installing cloudflared user service ..."
-cp "$ROOT/deploy/cloudflared-lofi.service" "$UNIT_DIR/cloudflared-lofi.service"
+install_unit cloudflared-lofi.service
 systemctl --user daemon-reload
 systemctl --user enable --now cloudflared-lofi.service
 say "cloudflared status: $(systemctl --user is-active cloudflared-lofi.service)"

@@ -18,7 +18,7 @@ import math
 import datetime
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -161,9 +161,10 @@ TITLE_TEMPLATES = {
 # ── Title-card text derivation ────────────────────────────────────────────────
 
 _EMOJI_RE   = re.compile(
-    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]+"
+    "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\uFE0F\u200D]+"
 )
-_TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\))\s*$")
+# A trailing "— ...", "(...)" or "[genre · length]" tag (scripts/titles.py).
+_TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\)|\[[^\[\]]*\])\s*$")
 # Researched 2026-08-16 (YouTube thumbnail CTR guides, consistent across
 # sources): high-CTR thumbnails run 0-3 "high-impact" words, not a full
 # clause -- 28 chars was landing 5-6 words ("3 hours in. remote work"),
@@ -173,46 +174,70 @@ _TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\))\s*$")
 # templates, so keep deriving from the real title rather than gutting to a
 # bare 3-word cap) -- word-boundary trimming in _derive_short_title below
 # still applies at this new budget.
-_SHORT_TITLE_MAX_CHARS = 20
+_SCENE_TITLE_RE = re.compile(r"^([^\[\]]+?)\s*" + _EMOJI_RE.pattern + r"\s*\[[^\[\]]*\]\s*$")
+_SHORT_TITLE_MAX_CHARS = 24   # == scripts/titles.THUMB_MAX_CHARS
+
+
+_DANGLING = {"of", "for", "to", "and", "the", "a", "an", "in", "on", "at", "with",
+             "but", "or", "your", "my", "still", "straight", "no", "from", "by"}
+# Words that only say "what genre / how long"; a clause made of nothing else
+# describes no scene and is useless on a thumbnail.
+_TAG_WORDS = {"lofi", "lo-fi", "hip", "hop", "study", "music", "beats", "chill",
+              "mix", "of", "straight", "hour", "hours", "min", "minutes", "jazz",
+              "soul", "neo", "city", "pop", "house", "rnb", "bossa", "nova",
+              "ambient", "vaporwave", "chillhop", "phonk", "synthwave", "garage",
+              "classical", "piano", "funk", "drill", "dark", "bedroom", "anime"}
+
+
+_NOT_A_SCENE = re.compile(r"\b\d+\s*(hour|hours|min)\b|^no\b|\bone long set\b|\bcheck back\b")
+
+
+def _is_tag_only(clause: str) -> bool:
+    """True for clauses that describe no scene: only genre/duration words,
+    a duration ("1 hour to sleep"), or a disclaimer ("no commentary")."""
+    words = [w.strip(",.").lower() for w in clause.split()]
+    return (all(w in _TAG_WORDS or w.isdigit() for w in words)
+            or bool(_NOT_A_SCENE.search(clause.lower())))
+
+
+def _clean_end(text: str) -> str:
+    """Strip trailing punctuation, numbers and words that can't end a phrase."""
+    words = text.strip(" ,·—-").split()
+    while words and (words[-1].lower().strip(",.") in _DANGLING or words[-1].strip(",.").isdigit()):
+        words.pop()
+    return " ".join(words).strip(" ,·—-")
 
 
 def _derive_short_title(full_title: str) -> str | None:
     """
-    Derive a short, thumbnail-card-sized phrase from the actual generated SEO
-    title (e.g. "lofi hip hop · it's midnight and you're still awake — 2
-    hours" -> "it's midnight and you're still awake"), so the thumbnail and
-    the video title agree on what the video is about instead of the
-    thumbnail drawing an unrelated phrase from a small static per-theme pool.
-    Returns None if the derived phrase isn't usable (too short/long after
-    trimming), so the caller can fall back to the theme's template pool.
+    Short, thumbnail-sized phrase from the real SEO title, so thumbnail and
+    title describe the same video. Picks the most descriptive whole clause
+    that fits (clauses are separated by " · ", "," and " — "), skipping
+    clauses that are only genre/duration tags, and never ends on a dangling
+    word. Returns None when nothing usable is left, so the caller falls back
+    to the theme's template phrases.
     """
     if not full_title:
         return None
+    # "scene 🌧️ [genre · length]" (scripts/titles.py): the scene is the
+    # thumbnail text, whole -- commas and numbers included.
+    m = _SCENE_TITLE_RE.match(full_title)
+    if m and len(m.group(1).split()) <= 4 and len(m.group(1).strip()) <= _SHORT_TITLE_MAX_CHARS:
+        return m.group(1).strip().lower()
     text = _EMOJI_RE.sub("", full_title).strip()
-    # Drop the leading "lofi hip hop · " / "study music · " / "lofi · " tag.
-    if " · " in text:
-        text = text.split(" · ", 1)[1]
-    # Drop a trailing " — <duration>" or "(<duration>)" clause.
     text = _TRAILING_DURATION_RE.sub("", text).strip(" -—·")
-    if len(text) > _SHORT_TITLE_MAX_CHARS:
-        # Trim to the last full word that fits, rather than rejecting
-        # outright -- most generated clauses run a little over budget, and a
-        # clean word-boundary cut still reads better than falling back to an
-        # unrelated static template phrase.
-        words, trimmed = text.split(), ""
-        for word in words:
-            candidate = f"{trimmed} {word}".strip()
-            if len(candidate) > _SHORT_TITLE_MAX_CHARS:
-                break
-            trimmed = candidate
-        text = trimmed
-        if text.count("(") > text.count(")"):
-            # Truncation landed inside an unclosed parenthetical -- cut
-            # before it rather than leaving a dangling "(" on the card.
-            text = text.rsplit("(", 1)[0].strip()
-    if len(text) < 4:
+    clauses = [c.strip() for c in re.split(r"\s+·\s+|,\s+|\s+—\s+", text) if c.strip()]
+    # Only whole clauses: cutting a longer clause short gives half-phrases
+    # like "made for tired", so if nothing fits, use the theme's own phrases.
+    fitting = [_clean_end(c) for c in clauses
+               if len(c) <= _SHORT_TITLE_MAX_CHARS and not _is_tag_only(c)]
+    fitting = [c for c in fitting if len(c.split()) >= 2 and not _is_tag_only(c)]
+    if not fitting:
         return None
-    return text.lower()
+    best = max(fitting, key=len)
+    if len(best) < 4 or len(best.split()) < 2:
+        return None
+    return best.lower()
 
 
 # ── Font management ────────────────────────────────────────────────────────────
@@ -291,75 +316,6 @@ def _text_size(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
 
 # ── Background builder ─────────────────────────────────────────────────────────
 
-def _build_bg(theme: str, seed: int) -> Image.Image:
-    """Atmospheric programmatic background: gradient + dual glow + stars + bokeh."""
-    rng = np.random.default_rng(seed)
-    c   = THEMES[theme]
-
-    # 1. Smooth gradient (smoothstep curve for more interesting sky feel)
-    top = np.array(c["bg_top"], dtype=np.float32)
-    bot = np.array(c["bg_bot"], dtype=np.float32)
-    arr = np.zeros((TH, TW, 3), dtype=np.float32)
-    for y in range(TH):
-        t = y / TH
-        t_s = t * t * (3 - 2 * t)   # smoothstep
-        arr[y] = top * (1 - t_s) + bot * t_s
-
-    ys_g = np.arange(TH)[:, None].astype(np.float32)
-    xs_g = np.arange(TW)[None, :].astype(np.float32)
-
-    # 2. Primary glow orb — accent color, upper-right area
-    accent = np.array(c["accent"], dtype=np.float32)
-    gx = int(TW * 0.68);  gy = int(TH * 0.28)
-    dist  = np.sqrt((xs_g - gx)**2 + (ys_g - gy)**2)
-    glow  = np.clip(1.0 - dist / 340, 0, 1) ** 2.0
-    for ch in range(3):
-        arr[:, :, ch] = np.clip(arr[:, :, ch] + accent[ch] * glow * 0.30, 0, 255)
-
-    # 3. Secondary warm glow — lower-left, warmer tint (depth/lamp feel)
-    g2x = int(TW * 0.16);  g2y = int(TH * 0.74)
-    dist2 = np.sqrt((xs_g - g2x)**2 + (ys_g - g2y)**2)
-    glow2 = np.clip(1.0 - dist2 / 230, 0, 1) ** 3.0
-    warm  = np.array([
-        min(255, c["bg_top"][0] + 55),
-        min(255, c["bg_top"][1] + 18),
-        max(0,   c["bg_top"][2] - 18),
-    ], dtype=np.float32)
-    for ch in range(3):
-        arr[:, :, ch] = np.clip(arr[:, :, ch] + warm[ch] * glow2 * 0.20, 0, 255)
-
-    img  = Image.fromarray(arr.astype(np.uint8))
-    draw = ImageDraw.Draw(img, "RGBA")
-
-    # 4. Stars — upper 55% of frame only
-    n_stars = int(rng.integers(60, 95))
-    for _ in range(n_stars):
-        sx     = int(rng.uniform(30, TW - 30))
-        sy     = int(rng.uniform(12, TH * 0.54))
-        bright = int(rng.uniform(125, 215))
-        # Weighted towards tiny stars
-        sz     = int(rng.choice([1, 1, 2], p=[0.65, 0.25, 0.10]))
-        sc     = (bright, bright, min(255, bright + 22), 255)
-        if sz == 1:
-            draw.point((sx, sy), fill=sc)
-        else:
-            draw.ellipse([sx-1, sy-1, sx+1, sy+1], fill=sc)
-
-    # 5. Bokeh — soft semi-transparent accent blobs (depth of field feel)
-    n_bokeh = int(rng.integers(7, 14))
-    for _ in range(n_bokeh):
-        bx  = int(rng.uniform(0, TW))
-        by  = int(rng.uniform(0, TH))
-        br  = int(rng.uniform(20, 70))
-        bla = int(rng.uniform(8, 32))
-        bc  = (min(255, int(accent[0] * 0.88)),
-               min(255, int(accent[1] * 0.88)),
-               min(255, int(accent[2] * 0.88)),
-               bla)
-        draw.ellipse([bx - br, by - br, bx + br, by + br], fill=bc)
-
-    return img
-
 
 # ── Bloom ──────────────────────────────────────────────────────────────────────
 
@@ -382,70 +338,6 @@ def _apply_bloom(img: Image.Image, threshold: int = 130,
 
 
 # ── Theme-specific atmosphere FX ───────────────────────────────────────────────
-
-def _add_theme_fx(img: Image.Image, theme: str, rng: np.random.Generator) -> Image.Image:
-    """Overlay subtle atmospheric elements that hint at the theme's setting."""
-    draw = ImageDraw.Draw(img, "RGBA")
-
-    if theme in ("cozy_rain", "forest_rain"):
-        # Diagonal rain streaks
-        n = int(rng.integers(35, 60))
-        for _ in range(n):
-            x    = int(rng.uniform(0, TW))
-            y0   = int(rng.uniform(0, TH * 0.85))
-            ln   = int(rng.uniform(14, 38))
-            a    = int(rng.uniform(20, 50))
-            draw.line([(x, y0), (x + int(ln * 0.12), y0 + ln)],
-                      fill=(190, 215, 255, a), width=1)
-
-    elif theme == "winter_snow":
-        # Soft snow dots scattered across frame
-        n = int(rng.integers(45, 75))
-        for _ in range(n):
-            x = int(rng.uniform(0, TW))
-            y = int(rng.uniform(0, TH))
-            a = int(rng.uniform(35, 85))
-            draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill=(225, 238, 255, a))
-
-    elif theme == "neon_tokyo":
-        # Subtle retro perspective grid on lower half
-        hy = int(TH * 0.42)
-        vp = TW // 2
-        ac = THEMES[theme]["accent"]
-        line_col = (int(ac[0] * 0.25), int(ac[1] * 0.25), int(ac[2] * 0.25), 38)
-        for i in range(-9, 10):
-            draw.line([(vp, hy), (vp + i * 115, TH)], fill=line_col, width=1)
-        rows = 6
-        for j in range(rows):
-            frac = j / rows
-            y    = hy + int((TH - hy) * frac * frac)
-            a    = int(38 * frac)
-            draw.line([(0, y), (TW, y)],
-                      fill=(int(ac[0]*0.2), int(ac[1]*0.2), int(ac[2]*0.2), a), width=1)
-
-    elif theme in ("sakura_night", "spring_dawn"):
-        # Oval petal shapes drifting across upper frame
-        ac = THEMES[theme]["accent"]
-        n  = int(rng.integers(14, 24))
-        for _ in range(n):
-            px = int(rng.uniform(0, TW))
-            py = int(rng.uniform(0, TH * 0.68))
-            pr = int(rng.uniform(5, 12))
-            a  = int(rng.uniform(45, 95))
-            draw.ellipse([px - pr, py - pr // 2, px + pr, py + pr // 2],
-                         fill=(*ac, a))
-
-    elif theme == "amber_night":
-        # Subtle warm horizontal haze bands (candlelight flicker suggestion)
-        ac = THEMES[theme]["accent"]
-        n  = int(rng.integers(3, 6))
-        for _ in range(n):
-            y = int(rng.uniform(TH * 0.55, TH))
-            a = int(rng.uniform(8, 20))
-            h = int(rng.uniform(4, 14))
-            draw.rectangle([(0, y), (TW, y + h)], fill=(*ac, a))
-
-    return img
 
 
 # ── Vignette ──────────────────────────────────────────────────────────────────
@@ -556,6 +448,25 @@ def _select_side(theme_name: str, variant: int) -> str:
 _TITLE_FONT_SIZES = (108, 94, 82, 72, 64)
 
 
+_LINE_GAP = 4   # between the two lines of a wrapped title
+
+
+def _two_line_fit(draw, text: str, font_path: str, max_text_w: int):
+    """(font, [line1, line2]) at the largest size where the most balanced
+    two-line split of `text` fits, or None for a one-word title."""
+    words = text.split()
+    if len(words) < 2:
+        return None
+    for size in _TITLE_FONT_SIZES:
+        font = _load_font(font_path, size)
+        best = min(((" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words))),
+                   key=lambda pr: max(_text_size(draw, pr[0], font)[0],
+                                      _text_size(draw, pr[1], font)[0]))
+        if max(_text_size(draw, ln, font)[0] for ln in best) <= max_text_w:
+            return font, list(best)
+    return None
+
+
 def _fit_title_font(draw: ImageDraw.ImageDraw, text: str, font_path: str, max_text_w: int):
     """Shrink the title font until it fits max_text_w, so narrower (thirds/
     edge) cards don't overflow their frosted-glass backing. Falls back to the
@@ -572,87 +483,34 @@ def _fit_title_font(draw: ImageDraw.ImageDraw, text: str, font_path: str, max_te
 def _card_position(layout: str, side: str, card_w: int, card_h: int) -> tuple[int, int]:
     """Compute the (x, y) top-left origin of the text card for a layout."""
     if layout == "thirds":
-        cx_frac = 0.24 if side == "left" else 0.76
+        cx_frac = 0.255 if side == "left" else 0.745
         card_x  = int(TW * cx_frac) - card_w // 2
         card_x  = max(40, min(TW - 40 - card_w, card_x))
-        card_y  = int(TH * 0.60) - card_h // 2   # sits on the lower third line
+        # On the lower third line, but never above 40% of the height: the
+        # wall shelf (scripts/thumbnail_scene.py) sits at 36%.
+        card_y  = max(int(TH * 0.60) - card_h // 2, int(TH * 0.40))
+        card_y  = min(card_y, TH - card_h - 40)
     elif layout == "edge":
         margin = 56
         card_x = margin if side == "left" else TW - margin - card_w
         card_x = max(40, min(TW - 40 - card_w, card_x))
         card_y = TH - card_h - 64             # low band hugging the bottom edge
-    else:  # centered
+    else:  # centered: a title band above the (lowered) window
         card_x = (TW - card_w) // 2
-        card_y = int(TH * 0.52) - card_h // 2   # slightly below centre
+        card_y = 30
     return card_x, card_y
 
 
 def _max_card_width(layout: str) -> int:
-    # Widened 2026-08-16 alongside the bigger _TITLE_FONT_SIZES -- the old,
-    # narrower caps (0.44/0.62) were the actual reason titles kept landing on
-    # the smallest font-size step regardless of how big the range went.
-    if layout == "thirds":
-        return int(TW * 0.56)
-    if layout == "edge":
-        return int(TW * 0.74)
-    return TW - 64   # centered
+    """Side cards stay on the wall half, clear of the window and the
+    listener (scripts/thumbnail_scene._window_box); the centered card is a
+    title band above the window."""
+    if layout in ("thirds", "edge"):
+        return int(TW * 0.47)
+    return int(TW * 0.62)
 
 
-# ── Scene silhouette ────────────────────────────────────────────────────────────
-#
-# The single biggest gap versus competing lofi-channel thumbnails: this
-# generator was pure abstract gradient + text, with no focal subject. Nearly
-# every high-CTR lofi thumbnail (Lofi Girl etc.) leads with a recognizable
-# illustrated scene. Added here as flat, single-tone silhouette shapes built
-# from plain PIL polygon/ellipse primitives -- no external art assets, no AI
-# image generation, same toolkit already used for the rain streaks / neon
-# grid / petals in `_add_theme_fx`.
-
-def _scene_colors(theme: str) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
-    """(fill, rim) colors for a scene silhouette: a near-black fill (reads as
-    a silhouette regardless of theme tint) and an accent-colored rim used
-    sparingly for backlit edge details (headphone band, steam, vinyl grooves)."""
-    c = THEMES[theme]
-    fill = (
-        max(0, c["bg_top"][0] // 3),
-        max(0, c["bg_top"][1] // 3),
-        max(0, c["bg_top"][2] // 3),
-        235,
-    )
-    rim = (*c["accent"], 100)
-    return fill, rim
-
-
-def _silhouette_listener(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
-    """Person-at-desk-with-headphones bust -- universal fallback subject."""
-    scale = min(w, h)
-    head_r = scale * 0.17
-    head_cy = cy - scale * 0.18
-    shoulder_w = scale * 0.55
-    shoulder_top = head_cy + head_r * 0.7
-    shoulder_bot = cy + scale * 0.42
-    draw.polygon([
-        (cx - shoulder_w * 0.35, shoulder_top),
-        (cx + shoulder_w * 0.35, shoulder_top),
-        (cx + shoulder_w * 0.5, shoulder_bot),
-        (cx - shoulder_w * 0.5, shoulder_bot),
-    ], fill=fill)
-    draw.ellipse([cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r], fill=fill)
-    band_r = head_r * 1.25
-    draw.arc(
-        [cx - band_r, head_cy - band_r * 1.1, cx + band_r, head_cy + band_r * 0.9],
-        200, 340, fill=rim, width=max(2, int(scale * 0.02)),
-    )
-    cup_r = head_r * 0.42
-    draw.ellipse([cx - band_r - cup_r * 0.3, head_cy - cup_r,
-                  cx - band_r + cup_r * 1.1, head_cy + cup_r], fill=fill, outline=rim, width=2)
-    draw.ellipse([cx + band_r - cup_r * 1.1, head_cy - cup_r,
-                  cx + band_r + cup_r * 0.3, head_cy + cup_r], fill=fill, outline=rim, width=2)
-    x0 = cx - shoulder_w * 0.5 - cup_r
-    x1 = cx + shoulder_w * 0.5 + cup_r
-    y0 = head_cy - band_r * 1.1
-    y1 = shoulder_bot
-    return (x0, y0, x1, y1)
+# ── Desk-object silhouettes (used by scripts/thumbnail_scene.py) ────────────────
 
 
 def _silhouette_cat(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
@@ -742,159 +600,26 @@ def _silhouette_coffee_cup(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, f
     return (x0, y0, x1, y1)
 
 
-def _silhouette_vinyl_cassette(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
-    """Spinning vinyl record: disc + concentric grooves + label."""
-    scale = min(w, h)
-    r = scale * 0.4
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
-    for frac in (0.78, 0.6, 0.42):
-        draw.ellipse([cx - r * frac, cy - r * frac, cx + r * frac, cy + r * frac],
-                      outline=rim, width=1)
-    label_r = r * 0.28
-    draw.ellipse([cx - label_r, cy - label_r, cx + label_r, cy + label_r], fill=rim)
-    hole_r = r * 0.04
-    draw.ellipse([cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r], fill=fill)
-    return (cx - r, cy - r, cx + r, cy + r)
-
-
-def _silhouette_window_scene(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
-    """Window frame with a small skyline glimpsed through the lower pane."""
-    scale = min(w, h)
-    fw, fh = scale * 0.6, scale * 0.82
-    x0, y0, x1, y1 = cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2
-    frame_w = max(4, int(scale * 0.035))
-    draw.rounded_rectangle([x0, y0, x1, y1], radius=scale * 0.03, outline=fill, width=frame_w)
-    draw.line([(cx, y0), (cx, y1)], fill=fill, width=frame_w)
-    my = y0 + (y1 - y0) * 0.55
-    draw.line([(x0, my), (x1, my)], fill=fill, width=frame_w)
-    n = 4
-    pane_w = (x1 - x0) / n
-    for i in range(n):
-        bx0 = x0 + pane_w * i + 3
-        bx1 = x0 + pane_w * (i + 1) - 3
-        bh  = (fh * 0.5) * rng.uniform(0.25, 0.55)
-        draw.rectangle([bx0, y1 - bh, bx1, y1 - 2], fill=fill)
-    return (x0, y0, x1, y1)
-
-
-# Per-theme scene pools -- deterministic index picks a scene that fits the
-# theme's setting (rain -> window, house/vaporwave -> vinyl, cozy themes ->
-# cat/plant/coffee), same "pick from a themed pool via stable hash" pattern
-# TITLE_TEMPLATES already uses.
-SCENE_POOL = {
-    "cozy_rain":      ("window_scene", "listener", "coffee_cup"),
-    "midnight_cafe":  ("coffee_cup", "listener", "vinyl_cassette"),
-    "purple_dusk":    ("listener", "vinyl_cassette", "plant"),
-    "amber_night":    ("coffee_cup", "plant", "listener"),
-    "winter_snow":    ("window_scene", "cat", "listener"),
-    "autumn_study":   ("plant", "cat", "coffee_cup"),
-    "spring_dawn":    ("plant", "cat", "listener"),
-    "neon_tokyo":     ("window_scene", "vinyl_cassette", "listener"),
-    "summer_lofi":    ("plant", "listener", "vinyl_cassette"),
-    "blue_hour":      ("listener", "window_scene", "vinyl_cassette"),
-    "forest_rain":    ("window_scene", "cat", "plant"),
-    "sakura_night":   ("plant", "listener", "cat"),
-    "vaporwave":      ("vinyl_cassette", "listener", "window_scene"),
-    "lofi_house":     ("vinyl_cassette", "listener", "coffee_cup"),
-    "lofi_classical": ("vinyl_cassette", "listener", "plant"),
-    "bedroom_pop":    ("listener", "vinyl_cassette", "plant"),
-    "lofi_rnb":       ("vinyl_cassette", "coffee_cup", "listener"),
-}
-
-_SCENE_FUNCS = {
-    "listener":      _silhouette_listener,
-    "cat":           _silhouette_cat,
-    "plant":         _silhouette_plant,
-    "coffee_cup":    _silhouette_coffee_cup,
-    "vinyl_cassette": _silhouette_vinyl_cassette,
-    "window_scene":  _silhouette_window_scene,
-}
-
-
-def _select_scene(theme_name: str, variant: int) -> str:
-    """Deterministically pick a scene from (theme_name, variant), same
-    reproducibility guarantee as `_select_layout`/`_select_side`."""
-    pool = SCENE_POOL.get(theme_name, ("listener", "vinyl_cassette", "plant"))
-    idx = (_stable_int(theme_name + "|scene") + variant) % len(pool)
-    return pool[idx]
-
-
-def _scene_slot(layout: str, side: str) -> tuple[int, int, int, int]:
-    """Region (cx, cy, max_w, max_h) on the side opposite the text card where
-    a scene silhouette can be drawn without touching it."""
-    opp = "right" if side == "left" else "left"
-    if layout == "thirds":
-        cx = int(TW * (0.76 if opp == "right" else 0.24))
-        return cx, int(TH * 0.46), int(TW * 0.30), int(TH * 0.62)
-    if layout == "edge":
-        cx = int(TW * (0.82 if opp == "right" else 0.18))
-        return cx, int(TH * 0.36), int(TW * 0.30), int(TH * 0.56)
-    # centered: the card spans nearly the full width mid-frame, so there's
-    # only room for a corner accent -- tucked bottom-right, clear of both the
-    # top-left duration badge and the mid-frame card. Pulled in from the
-    # extreme corner (and sized up a bit) so it doesn't disappear into the
-    # heaviest vignette falloff -- a corner accent nobody can see isn't
-    # earning its keep.
-    return int(TW * 0.86), int(TH * 0.80), int(TW * 0.20), int(TH * 0.26)
-
-
-def _check_scene_card_collision(scene_bbox, card_bbox) -> bool:
-    """True if the two axis-aligned boxes overlap."""
-    if scene_bbox is None:
-        return False
-    sx0, sy0, sx1, sy1 = scene_bbox
-    cx0, cy0, cx1, cy1 = card_bbox
-    return sx0 < cx1 and sx1 > cx0 and sy0 < cy1 and sy1 > cy0
-
-
-def _draw_scene_silhouette(
-    img: Image.Image,
-    theme: str,
-    layout: str,
-    side: str,
-    variant: int,
-    rng: np.random.Generator,
-    avoid_bbox: tuple[int, int, int, int],
-) -> tuple[Image.Image, tuple[float, float, float, float] | None]:
-    """
-    Draw a themed silhouette scene into the slot opposite the text card. The
-    collision check runs against the *reserved slot box* before any pixels
-    are drawn (rather than drawing then undoing), shrinking once and finally
-    skipping the scene entirely rather than ever drawing over the card.
-    Returns (img, scene_bbox); scene_bbox is None if nothing was drawn.
-    """
-    scene_name = _select_scene(theme, variant)
-    fn = _SCENE_FUNCS[scene_name]
-    fill, rim = _scene_colors(theme)
-    cx, cy, max_w, max_h = _scene_slot(layout, side)
-
-    for scale_mult in (1.0, 0.65):
-        w, h = int(max_w * scale_mult), int(max_h * scale_mult)
-        reserved = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
-        if not _check_scene_card_collision(reserved, avoid_bbox):
-            draw = ImageDraw.Draw(img, "RGBA")
-            bbox = fn(draw, cx, cy, w, h, fill, rim, rng)
-            return img, bbox
-    return img, None
-
-
 # ── Elegant frosted-glass text card ───────────────────────────────────────────
 
 def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
-                    duration: str, layout: str, side: str) -> dict:
+                    duration: str, layout: str, side: str, genre: str = "") -> dict:
     """
     Compute the text card's fonts/sizes/position without drawing anything.
     Font metrics don't depend on image content, so this is deterministic
     given the same inputs -- callers that need to know the card's real
-    footprint *before* it's drawn (scene silhouette placement) can call this
-    directly and get exactly the geometry `_draw_text_card` will later use.
+    footprint *before* it's drawn can call this directly and get exactly the
+    geometry `_draw_text_card` will later use.
     """
     font_path = _resolve_title_font()
 
     # Mixed case title — much more elegant than ALL CAPS
     title_text = short_title.title()
-    sub_text   = f"lofi  ·  {duration}"
-    deco_text  = "*"
+    # The duration is already on the corner badge; don't print it twice.
+    # The genre that plays ("jazz hop", "sleep lofi"), not a generic tag.
+    sub_text   = (genre or "lofi beats").strip().lower()
+    # No deco mark: the intended ✦ isn't in the title font and rendered as "*".
+    deco_text  = ""
 
     pad_x    = 44
     pad_top  = 18
@@ -902,22 +627,42 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
     rule_gap = 10    # gap above and below the accent rule
 
     max_card_w = _max_card_width(layout)
-    title_font, tw_t, th_t = _fit_title_font(draw, title_text, font_path, max_card_w - pad_x * 2)
+    avail = max_card_w - pad_x * 2
+    title_font, tw_t, th_t = _fit_title_font(draw, title_text, font_path, avail)
+    title_lines = [title_text]
+    # Side cards are half the frame wide: a long phrase gets two balanced
+    # lines at a bigger size rather than one line at the smallest size (or,
+    # for the longest phrases, past the card's edge). The centered title band
+    # stays one line so it clears the window below it.
+    if layout != "centered" and (title_font.size < 94 or tw_t > avail):
+        two = _two_line_fit(draw, title_text, font_path, avail)
+        if two and (two[0].size > title_font.size or tw_t > avail):
+            title_font, title_lines = two
     sub_font   = _load_font(font_path, 30)
     deco_font  = _load_font(font_path, 26)
 
     tw_s, th_s = _text_size(draw, sub_text,  sub_font)
-    tw_d, th_d = _text_size(draw, deco_text, deco_font)
+    tw_d, th_d = (0, 0) if not deco_text else _text_size(draw, deco_text, deco_font)
+    # Glyph boxes start below the draw origin (the font's top bearing), so
+    # the title's real bottom edge is its box bottom, not its box height.
+    stroke = max(3, title_font.size // 16)
+    line_h = [draw.textbbox((0, 0), ln, font=title_font, stroke_width=stroke)[3]
+              for ln in title_lines]
+    tw_t = max(_text_size(draw, ln, title_font)[0] for ln in title_lines)
+    th_t = sum(line_h) + _LINE_GAP * (len(title_lines) - 1)
+    th_s = draw.textbbox((0, 0), sub_text, font=sub_font)[3]
 
     # Card dimensions: pad around the widest element
     inner_w  = max(tw_t, tw_s, tw_d)
     card_w   = min(inner_w + pad_x * 2, max_card_w)
-    card_h   = pad_top + th_d + 10 + th_t + rule_gap + 2 + rule_gap + th_s + pad_bot
+    deco_h   = th_d + 10 if deco_text else 0
+    card_h   = pad_top + deco_h + th_t + rule_gap + 2 + rule_gap + th_s + pad_bot
 
     card_x, card_y = _card_position(layout, side, card_w, card_h)
 
     return dict(
-        title_text=title_text, sub_text=sub_text, deco_text=deco_text,
+        title_text=title_text, title_lines=title_lines, line_h=line_h,
+        sub_text=sub_text, deco_text=deco_text,
         title_font=title_font, sub_font=sub_font, deco_font=deco_font,
         tw_t=tw_t, th_t=th_t, tw_s=tw_s, th_s=th_s, tw_d=tw_d, th_d=th_d,
         pad_x=pad_x, pad_top=pad_top, pad_bot=pad_bot, rule_gap=rule_gap,
@@ -934,6 +679,7 @@ def _draw_text_card(
     side: str = "left",
     glass_alpha: int = 155,
     force_solid_dark: bool = False,
+    genre: str = "",
 ) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """
     Text card with frosted-glass backing, composed per `layout`:
@@ -949,7 +695,7 @@ def _draw_text_card(
     c    = THEMES[theme]
     draw = ImageDraw.Draw(img, "RGBA")
 
-    g = _card_geometry(draw, theme, short_title, duration, layout, side)
+    g = _card_geometry(draw, theme, short_title, duration, layout, side, genre)
     title_text, sub_text, deco_text = g["title_text"], g["sub_text"], g["deco_text"]
     title_font, sub_font, deco_font = g["title_font"], g["sub_font"], g["deco_font"]
     tw_t, th_t = g["tw_t"], g["th_t"]
@@ -978,9 +724,10 @@ def _draw_text_card(
 
     # ── Deco mark ✦ ──
     cur_y = card_y + pad_top
-    dx    = card_x + (card_w - tw_d) // 2
-    draw.text((dx, cur_y), deco_text, font=deco_font, fill=(*c["accent"], 210))
-    cur_y += th_d + 10
+    if deco_text:
+        dx = card_x + (card_w - tw_d) // 2
+        draw.text((dx, cur_y), deco_text, font=deco_font, fill=(*c["accent"], 210))
+        cur_y += th_d + 10
 
     # ── Title ──
     # Real stroke_width outline (native since Pillow 6.2, not a hand-rolled
@@ -989,11 +736,13 @@ def _draw_text_card(
     # readable at the ~120px-wide grid preview size regardless of what's
     # behind it, since a soft drop-shadow alone still washes into a busy/
     # similarly-toned background once downsampled that small.
-    tx = card_x + (card_w - tw_t) // 2
-    draw.text((tx, cur_y), title_text, font=title_font,
-              fill=(*c["text_main"], 255),
-              stroke_width=max(3, title_font.size // 16), stroke_fill=(0, 0, 0, 235))
-    cur_y += th_t + rule_gap
+    for ln, lh in zip(g["title_lines"], g["line_h"]):
+        lw = _text_size(draw, ln, title_font)[0]
+        draw.text((card_x + (card_w - lw) // 2, cur_y), ln, font=title_font,
+                  fill=(*c["text_main"], 255),
+                  stroke_width=max(3, title_font.size // 16), stroke_fill=(0, 0, 0, 235))
+        cur_y += lh + _LINE_GAP
+    cur_y += rule_gap - _LINE_GAP
 
     # ── Accent rule ──
     rx0 = card_x + pad_x
@@ -1133,7 +882,9 @@ def _draw_watermark(img: Image.Image) -> Image.Image:
                 radius=1, fill=(210, 210, 210, 130),
             )
 
-        text = "lofi factory"
+        # Same channel name the video frame shows (one brand, not two).
+        from scripts.visual_v2.config import CHANNEL_NAME
+        text = CHANNEL_NAME.lower()
         x, y = gx + len(heights) * (bar_w + 3) + 6, TH - 38
         d.text((x + 1, y + 1), text, fill=(0, 0, 0, 80), font=font)
         d.text((x, y),         text, fill=(210, 210, 210, 100), font=font)
@@ -1156,6 +907,8 @@ def generate_thumbnail(
     duration:   str = "2 hours",
     title:      str = None,
     variant:    int = 0,
+    text:       str | None = None,
+    genre:      str = "",
 ) -> tuple[str, str]:
     if theme_name not in THEMES:
         theme_name = "cozy_rain"
@@ -1168,12 +921,14 @@ def generate_thumbnail(
     # thumbnail and video title never disagree about what the video is
     # about; fall back to the theme's static template pool when the real
     # title isn't usable as thumbnail text (too long, no title passed, etc).
-    short_title = _derive_short_title(title)
+    # `text` is the scene phrase the title was built from (scripts/titles.py),
+    # so thumbnail and title name the same scene.
+    short_title = (text or "").strip() or _derive_short_title(title)
     if short_title is None:
         choices     = TITLE_TEMPLATES.get(theme_name, TITLE_TEMPLATES["cozy_rain"])
         short_title = choices[variant % len(choices)]
 
-    seed = abs(variant * 137 + hash(theme_name) % 10000)
+    seed = abs(variant * 137 + _stable_int(theme_name) % 10000)   # hash() is salted per process
     rng  = np.random.default_rng(seed)
 
     # Deterministic per-track composition: same (theme, variant) always
@@ -1205,9 +960,13 @@ def generate_thumbnail(
 
     print(f"[THUMB] {theme_name} | '{short_title}' | {duration} | layout={layout}/{side}")
 
-    base_img = _build_bg(theme_name, seed)
+    # The room (wall, window with the theme's view, lamp-lit desk, someone
+    # listening) goes in before bloom so the lamp, moon and lights glow.
+    from scripts.thumbnail_scene import draw_room, split_tone, window_side_for
+    base_img = draw_room(Image.new("RGB", (TW, TH)), THEMES[theme_name], theme_name,
+                         window_side_for(layout, side), rng)
     base_img = _apply_bloom(base_img)
-    base_img = _add_theme_fx(base_img, theme_name, rng)
+    base_img = split_tone(base_img, THEMES[theme_name])
     base_img = _apply_vignette(base_img, strength=0.44)
     base_img = _apply_film_grain(base_img, seed)
     base_img = _draw_duration_badge(base_img, theme_name, duration)
@@ -1218,11 +977,8 @@ def generate_thumbnail(
     # card-background opacity; if it still fails the small-preview contrast
     # check, fall back to the centered layout with a forced near-black
     # (highest-contrast) card background rather than silently shipping an
-    # unreadable thumbnail. The scene silhouette is placed first each attempt,
-    # into the slot opposite whichever (layout, side) that attempt uses, and
-    # is checked against that attempt's real card geometry (via
-    # `_card_geometry`) before a single scene pixel is drawn -- so it can
-    # never end up behind/under the text card.
+    # unreadable thumbnail. The room scene is already in the background, with
+    # its window on the side away from the title.
     attempts = [
         (layout,     side, 155, False),
         (layout,     side, 205, False),
@@ -1232,18 +988,10 @@ def generate_thumbnail(
     img = None
     for i, (lyt, sd, alpha, solid_dark) in enumerate(attempts):
         candidate = base_img.copy()
-        measure_draw = ImageDraw.Draw(candidate, "RGBA")
-        geom = _card_geometry(measure_draw, theme_name, short_title, duration, lyt, sd)
-        pending_card_bbox = (
-            geom["card_x"], geom["card_y"],
-            geom["card_x"] + geom["card_w"], geom["card_y"] + geom["card_h"],
-        )
-        candidate, _scene_bbox = _draw_scene_silhouette(
-            candidate, theme_name, lyt, sd, variant, rng, avoid_bbox=pending_card_bbox,
-        )
         candidate, card_bbox = _draw_text_card(
             candidate, theme_name, short_title, duration,
             layout=lyt, side=sd, glass_alpha=alpha, force_solid_dark=solid_dark,
+            genre=genre,
         )
         ok, ratio = _check_card_legibility(candidate, card_bbox, c["text_main"])
         if ok or i == len(attempts) - 1:

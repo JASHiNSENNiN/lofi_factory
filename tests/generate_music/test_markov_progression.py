@@ -1,6 +1,6 @@
 import random
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     VOICING_OPTIONS,
     _build_progression_markov,
     _JAZZY_MARKERS,

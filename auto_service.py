@@ -14,9 +14,8 @@ override (~/.config/systemd/user/lofi-auto.timer.d/schedule.conf) so it
 survives re-running deploy/setup.sh, which only touches the base unit files.
 
 This module is the single place that knows how to reflect/control the
-schedule — publish.py's `auto-service` CLI subcommand, dashboard.py's TUI
-panel, and webui/automation.py all import it so the three surfaces stay in
-sync.
+schedule — publish.py's `auto-service` CLI subcommand and
+webui/automation.py both import it so the two stay in sync.
 """
 from __future__ import annotations
 
@@ -143,12 +142,6 @@ def stop() -> None:
     rc, out = _systemctl("stop")
     if rc != 0:
         raise RuntimeError(out or "systemctl stop failed")
-
-
-def restart() -> None:
-    rc, out = _systemctl("restart")
-    if rc != 0:
-        raise RuntimeError(out or "systemctl restart failed")
 
 
 def set_enabled(enabled: bool) -> None:

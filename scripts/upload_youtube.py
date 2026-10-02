@@ -43,18 +43,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
-# Revenue/RPM tracking (webui Settings -> "Connect monetary analytics") needs
-# yt-analytics-monetary.readonly on top of the scopes above. Deliberately a
-# SEPARATE constant, not merged into SCOPES: every existing user's next
-# unrelated login (or lofi-auto's unattended token refresh) must NOT be hit
-# with a surprise new consent screen just because this module got imported.
-# Only the explicit, clearly-labeled opt-in flow in webui/youtube_oauth.py
-# (monetary_authorization_url() / monetary_handle_callback()) requests this,
-# and it stores its token separately (token_monetary.json, see
-# webui/config.py's TOKEN_FILE_MONETARY) rather than overwriting token.json.
-# tests/test_upload_youtube_scopes.py asserts SCOPES never accidentally grows
-# to include this.
-MONETARY_SCOPES = SCOPES + [
+# Revenue/RPM tracking (webui Settings -> "Connect monetary analytics") is a
+# separate opt-in token (token_monetary.json) that can only READ analytics:
+# no upload, edit or delete rights, so a leak of that file can't touch the
+# channel. Never merged into SCOPES, so normal logins and the unattended
+# token refresh never see an extra consent screen.
+MONETARY_SCOPES = [
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
 ]
 
@@ -81,15 +76,25 @@ def get_authenticated_service():
     if not creds or not creds.valid:
         refreshed = False
         if creds and creds.expired and creds.refresh_token:
+            from google.auth.exceptions import RefreshError
             try:
                 creds.refresh(Request())
                 refreshed = True
-            except Exception as e:
-                print(f"[AUTH] Token refresh failed ({e}) — re-authenticating...")
+            except RefreshError as e:
+                # Revoked or expired grant: the token is useless now. Anything
+                # else (network down, Google 5xx) is transient, and deleting
+                # the token there would force a manual re-login for nothing.
+                print(f"[AUTH] Token was rejected ({e}); you need to reconnect YouTube.")
                 os.remove(TOKEN_FILE)
                 creds = None
 
         if not refreshed:
+            if not sys.stdin.isatty():
+                # Unattended (systemd timer, web panel job): an interactive
+                # login would wait forever for a browser that never comes.
+                print("[ERROR] YouTube isn't connected. Connect it in the web panel "
+                      "(Settings > Connect YouTube) or run this command in a terminal.")
+                sys.exit(1)
             if not os.path.exists(CLIENT_SECRET):
                 print(f"[ERROR] client_secret.json not found at {CLIENT_SECRET}")
                 print("  Download it from Google Cloud Console > APIs > Credentials")
@@ -148,12 +153,19 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None)
             "description": description[:4900],   # YouTube hard limit is 5000 chars
             "tags": tags,
             "categoryId": seo.get("category_id", "10"),
+            # Title/description language. No defaultAudioLanguage: the music
+            # is instrumental, and "en" claimed English vocals.
             "defaultLanguage": "en",
-            "defaultAudioLanguage": "en",
         },
         "status": {
             "privacyStatus": privacy,
-            "madeForKids": made_for_kids,
+            # status.madeForKids is read-only (YouTube's verdict); the
+            # writable declaration is selfDeclaredMadeForKids. Sending the
+            # read-only field left every upload without a declaration.
+            "selfDeclaredMadeForKids": made_for_kids,
+            # Procedurally composed music over drawn visuals: no realistic
+            # altered or synthetic people, places or events to disclose.
+            "containsSyntheticMedia": False,
             **({"publishAt": publish_at} if publish_at else {}),
         },
     }
@@ -239,26 +251,30 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None)
 
 
 def _add_to_playlist(youtube, video_id: str, seo: dict):
-    """Add video to a pillar-curated playlist. Assignment is data-driven by
-    SEO pillar (temporal/activity/emotional/aesthetic/cross_genre), with the
-    old duration-based mapping kept only as a fallback during migration --
-    see scripts/playlist_curation.py for the full pillar->env-var table and
-    migration notes."""
-    from scripts.playlist_curation import resolve_playlist_id
-    playlist_id = resolve_playlist_id(seo)
-    if not playlist_id:
-        return
+    """Add the video to its genre playlist (opt-in, YT_GENRE_PLAYLISTS=1) and
+    to the playlist configured for its pillar, if any. See
+    scripts/playlist_curation.py."""
+    from scripts.generate_seo import search_phrase
+    from scripts.playlist_curation import genre_playlist_id, resolve_playlist_id
+    targets = []
     try:
-        youtube.playlistItems().insert(
-            part="snippet",
-            body={"snippet": {
-                "playlistId": playlist_id,
-                "resourceId": {"kind": "youtube#video", "videoId": video_id},
-            }},
-        ).execute()
-        print(f"  Added to playlist (pillar={seo.get('pillar', '?')}): {playlist_id}")
+        if seo.get("genre_label"):
+            targets.append(genre_playlist_id(youtube, search_phrase(seo["genre_label"])))
     except Exception as e:
-        print(f"  [WARN] Playlist add failed: {e}")
+        print(f"  [WARN] Genre playlist lookup failed: {e}")
+    targets.append(resolve_playlist_id(seo))
+    for playlist_id in dict.fromkeys(t for t in targets if t):
+        try:
+            youtube.playlistItems().insert(
+                part="snippet",
+                body={"snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                }},
+            ).execute()
+            print(f"  Added to playlist {playlist_id}")
+        except Exception as e:
+            print(f"  [WARN] Playlist add failed: {e}")
 
 
 def find_latest(directory, pattern):
@@ -314,13 +330,9 @@ def main():
     video_id, url = upload_video(youtube, video_path, seo, thumb_path)
 
     # Log upload
-    log_path = os.path.join(ROOT, "upload_log.json")
-    log = []
-    if os.path.exists(log_path):
-        with open(log_path) as f:
-            log = json.load(f)
     import datetime as _dt
-    log.append({
+    from scripts.fileutil import append_json_list
+    append_json_list(os.path.join(ROOT, "upload_log.json"), {
         "type":             "upload",
         "video_id":         video_id,
         "url":              url,
@@ -335,7 +347,7 @@ def main():
         "video_file":       os.path.basename(video_path),
         # Composition-selection feedback (which sub-genre/BPM/generation
         # engine got used) — see scripts/analytics.py's sub_genre_weights()/
-        # bpm_bucket_weights()/engine_weights(). Defaults keep this log-append
+        # bpm_bucket_weights(). Defaults keep this log-append
         # from crashing on an older-format `seo` dict that predates these
         # fields (e.g. a seo_*.json file generated before this feature).
         "sub_genre":        seo.get("sub_genre", ""),
@@ -343,8 +355,6 @@ def main():
         "music_engine":     seo.get("music_engine") or "v1",
         "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
     })
-    with open(log_path, "w") as f:
-        json.dump(log, f, indent=2)
 
     print(f"\n[DONE] {url}")
 

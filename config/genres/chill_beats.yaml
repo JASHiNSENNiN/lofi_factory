@@ -5,7 +5,7 @@ composition:
   melody_program: GM_VIBRAPHONE
   countermelody_program: GM_WARM_PAD
   scales: [pent, dorian, natural_minor]
-  drum_pattern_indices: [1, 7, 9, 10, 13]
+  drum_pattern_indices: [9, 7, 13]
   bpm_range: [62, 76]
   energy: low
   progression_indices: [7, 12, 13, 19, 20, 33, 35, 36]
@@ -16,3 +16,7 @@ drum_sampler_pattern: null
 mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.45, reverb_wet: 0.25, tape_wobble_depth: 0.14,
   compress_ratio: 2.5, vinyl_crackle: 0.08, use_ir_reverb: false, sidechain_duck: false}
 song_form: ambient
+bass_program: GM_FINGER_BASS
+generated_drums: true
+melody_density: sparse
+# Separation pass: slow and spacey: half-time and sparse drums, sparse melody.

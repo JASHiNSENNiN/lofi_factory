@@ -8,7 +8,7 @@ tests).
 
 import pytest
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     CHH,
     KICK,
     OHH,

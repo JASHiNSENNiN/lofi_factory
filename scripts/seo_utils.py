@@ -1,5 +1,5 @@
 """
-seo_utils.py — shared helpers used by generate_seo.py, lofi_inator/seo.py, and
+seo_utils.py — shared helpers used by generate_seo.py and
 scripts/upload_youtube.py, which each independently reimplemented the same
 timestamp-formatting and tag-budget-trimming logic.
 """

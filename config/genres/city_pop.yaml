@@ -2,10 +2,10 @@ key: city_pop
 family: cozy_bright
 composition:
   piano_program: GM_EP2
-  melody_program: GM_FLUTE
-  countermelody_program: GM_GUITAR_JAZZ
+  melody_program: GM_ALTO_SAX
+  countermelody_program: GM_GUITAR_CLEAN
   scales: [major_pent, pent, major]
-  drum_pattern_indices: [0, 6, 8, 12]
+  drum_pattern_indices: [8, 17, 6]
   # research/subgenres/city_pop.md: "city pop lives in the 95-120 BPM range,
   # with mid-tempo groove being a defining characteristic" -- old (78,92)
   # undershot and overlapped almost entirely with cozy_cafe/anime_lofi.
@@ -27,10 +27,13 @@ composition:
 # too little feels stiff." Tightened down from (0.55,0.63) to the research
 # file's recommended [0.53, 0.60] -- city_pop should swing less than
 # cozy_cafe/bedroom_pop, not more.
-swing_range: [0.53, 0.60]
+swing_range: [0.5, 0.56]
 cozy_bias: false
 texture: {program: GM_MARIMBA, style: pop}
 drum_sampler_pattern: null
 mix: {lpf_hz: 13000, bitcrush_bits: 13, reverb_room: 0.3, reverb_wet: 0.16, tape_wobble_depth: 0.12,
   compress_ratio: 2.2, vinyl_crackle: 0.06, use_ir_reverb: false, sidechain_duck: false}
 song_form: null
+bass_program: GM_SLAP_BASS
+# Genre rework: slap bass, clean 16th-note guitar, sax lead, boogie/disco
+# four-on-the-floor, straight 16ths, 90-110 BPM (after5.fr, beatkey.app city pop guides).

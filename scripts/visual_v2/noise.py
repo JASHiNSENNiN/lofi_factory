@@ -23,13 +23,6 @@ def looping_noise(n_frames: int, n_harmonics: int = 6, seed: int = 0) -> np.ndar
     return ((sig - mn) / (mx - mn)).astype(np.float32)
 
 
-def clamp_col(r: int, g: int, b: int) -> tuple:
-    """Clamp RGB tuple to [0, 255]."""
-    return (max(0, min(255, r)),
-            max(0, min(255, g)),
-            max(0, min(255, b)))
-
-
 # ─── Vectorized 2D Perlin / fractal (fBm) noise ────────────────────────────
 
 def _quintic(t: np.ndarray) -> np.ndarray:

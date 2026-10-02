@@ -29,7 +29,7 @@ upload, even when a track scores below its MIN_QUALITY_SCORE threshold —
 callers keep the best-scoring attempt/existing file and log the failures for
 later debugging via the recipe log, rather than dropping a day's video. See
 build_midi()'s "Never blocks the daily upload over this" comment in
-generate_music_gemini.py for the original rationale, which
+composer.py for the original rationale, which
 score_audio_quality() below deliberately keeps consistent with.
 """
 
@@ -144,7 +144,7 @@ def score_track_quality(mel_ev: list[tuple], piano_ev: list[tuple], drum_ev: lis
 # Everything below runs on the RENDERED audio (numpy samples from the WAV
 # file) and therefore plugs into the pipeline at a different, LATER stage:
 # after FluidSynth render + the lofi_fx.py FX chain, not before it — see
-# generate_track() in generate_music_gemini.py / generate_music_v2.py, right
+# generate_track() in composer.py / generate_music_v2.py, right
 # after the `_lofi_fx(...)` call that produces the final published WAV.
 # score_audio_quality() is the audio-domain counterpart of
 # score_track_quality() above, in the same "small set of simple pass/fail
@@ -153,7 +153,7 @@ def score_track_quality(mel_ev: list[tuple], piano_ev: list[tuple], drum_ev: lis
 # BLOCKING BEHAVIOR: purely diagnostic, exactly like the MIDI gates above —
 # this module's existing design never blocks upload even when a track scores
 # below MIN_QUALITY_SCORE (see build_midi()'s "Never blocks the daily upload
-# over this" comment in generate_music_gemini.py); the retry loop just keeps
+# over this" comment in composer.py); the retry loop just keeps
 # the best-scoring attempt. score_audio_quality() follows that same
 # philosophy: it is called AFTER the WAV that is going to be uploaded already
 # exists (there is nothing left to retry — re-rendering audio is expensive

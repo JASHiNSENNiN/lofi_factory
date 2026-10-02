@@ -4,18 +4,17 @@ All return numpy arrays composited in generate.py.
 """
 
 import json
-import math
 import os
 import random
 import time
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 
 from .config import W, H, VISUALS_DIR
 from .themes import THEMES
 
 # Append-only diagnostic log of which background technique fired, mirroring
-# the music side's recipe log (generate_music_gemini._append_recipe_log) —
+# the music side's recipe log (composer._append_recipe_log) —
 # deliberately a separate file/module (visual_v2 stays decoupled from the
 # music generator) but the same append-only-JSONL pattern for the same
 # reason: cheap, race-free, and answers "why did today's video look
@@ -47,10 +46,11 @@ def make_gradient_bg(theme: str, seed: int = 11) -> np.ndarray:
     pattern. See reaction_diffusion.py.
     """
     c = THEMES[theme]
-    if random.random() < 0.12:
+    rng = random.Random(seed)   # seeded, so --visual-seed reproduces the choice
+    if rng.random() < 0.12:
         try:
             from .reaction_diffusion import gray_scott_bg, PRESETS
-            preset = random.choice(list(PRESETS.keys()))
+            preset = rng.choice(list(PRESETS.keys()))
             result = gray_scott_bg(c, W, H, preset=preset, seed=seed)
             _log_bg_choice(theme, 'gray_scott', preset)
             return result

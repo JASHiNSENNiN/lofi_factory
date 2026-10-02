@@ -10,8 +10,8 @@ OnFailure=lofi-auto-notify-failure.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/jashin/lofi_factory
-ExecStart=/home/jashin/lofi_factory/venv/bin/python publish.py auto
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/venv/bin/python publish.py auto
 # run.py (invoked by `auto`) loads .env itself for any API keys it needs
 # Real, finite wall-clock cap -- confirmed live on 2026-08-16 that
 # TimeoutStartSec=0 (no timeout) let a run wedge in mem_cgroup_handle_over_high

@@ -52,7 +52,7 @@ def test_chord_symbols_come_from_existing_voicing_table():
     # Every chord symbol the harmony engine emits must already exist in the
     # pipeline's VOICING_OPTIONS table, so generated progressions always get
     # a real (not default-fallback) voicing downstream.
-    from scripts.generate_music_gemini import VOICING_OPTIONS
+    from scripts.composer import VOICING_OPTIONS
     for center in TONAL_CENTERS:
         for mode in ("major", "minor"):
             for seed in range(5):

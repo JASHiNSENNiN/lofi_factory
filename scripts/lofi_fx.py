@@ -20,6 +20,11 @@ territory and, unlike per-note detune, entirely legitimate to add post-render.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:   # annotations only; numpy is imported where it's used
+    import numpy as np
+
 import random
 import os
 from scipy.signal import lfilter as _lfilter, resample_poly as _resample_poly
@@ -43,16 +48,9 @@ _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_
 # Jazz/piano genres benefit most — acoustic room reflections are more natural than
 # algorithmic Schroeder reverb for these instruments.
 #
-# assets/ir/*.wav: 3 impulses (a small room, a salon-sized chamber, a concert
-# hall) from Aleksey Vaneev / Voxengo's free "IM Reverbs" pack
-# (https://www.voxengo.com/impulses/) — free for any use including
-# commercial, redistribution permitted unaltered with the license preserved
-# (see assets/ir/license.txt, included alongside per that requirement; same
-# unaltered-plus-credit pattern as assets/drums/*.wav's CC0 sourcing, though
-# this pack's own terms aren't CC0 itself). Needs the `audiomentations`
-# dependency (see requirements.txt) — previously imported here but never
-# actually declared, so this path was unreachable even before the files
-# were missing.
+# The room impulses are synthesized (see _synthesize_room_ir), like the
+# plate: no third-party impulse files, so no redistribution terms to meet.
+# Convolution is done with scipy (see _convolve_ir).
 _IR_GENRES = genre_presets.build_ir_genres()
 _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 
@@ -100,7 +98,7 @@ def apply_lofi_fx(wav_in: str, wav_out: str, sub_genre: str | None = None,
     Falls back to the legacy ffmpeg chain if pedalboard import fails.
 
     `transitions`: optional list of (sample_position, fx_name) from
-    generate_music_gemini.build_midi()'s section_transitions return value
+    composer.build_midi()'s section_transitions return value
     (see section_transition_fx_for) -- ignored by the ffmpeg fallback, which
     is a bare-bones legacy path with no numpy-array FX of its own.
     """
@@ -314,10 +312,12 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     # conservative integrated loudness.
     processed = _apply_lufs_mastering(processed, sr)
 
-    # Final peak-safety ceiling to -1dB.
+    # Final peak-safety ceiling: -1.5 dBFS sample peak, so inter-sample peaks
+    # after AAC encoding stay under YouTube's -1 dBTP.
     peak = np.max(np.abs(processed)) + 1e-9
-    if peak > 0.89:
-        processed = processed * (0.89 / peak)
+    ceiling = 10 ** (-1.5 / 20)
+    if peak > ceiling:
+        processed = processed * (ceiling / peak)
 
     sf.write(wav_out, processed.T, sr, subtype="PCM_16")
 
@@ -425,11 +425,11 @@ def _apply_wow_flutter(audio: "np.ndarray", sr: int, depth: float) -> "np.ndarra
 # applies its effect to a short window of `audio` ending at `at_sample` (the
 # section-boundary point) -- content at/after `at_sample` is left untouched
 # so the next section picks up normally; only the window leading into the
-# boundary is affected. See generate_music_gemini.py's
+# boundary is affected. See composer.py's
 # _SECTION_TRANSITION_FX for which effect pairs with which section-boundary
 # label pair, and that module's note on the remaining per-track pipeline
 # wiring (converting a section's bar offset to `at_sample` and calling
-# these) that's follow-up work beyond this session.
+# these) is not done yet.
 
 def _apply_vinyl_stop(audio: "np.ndarray", sr: int, at_sample: int,
                       duration_s: float = 0.6) -> "np.ndarray":
@@ -703,9 +703,7 @@ def _apply_lufs_mastering(audio: "np.ndarray", sr: int,
 
 
 # ── Multiband + parallel mastering-chain compression ─────────────────────────
-# New research this session (no prior research/theory/*.md doc covers the
-# mastering chain beyond mixing-texture.md's 7 scoped items): a 2-band
-# crossover at 120-200Hz (isolating kick/bass from everything above) is a
+# A 2-band crossover at 120-200Hz (isolating kick/bass from everything above) is a
 # common mastering-chain multiband setup, used as a problem-solving/glue
 # tool after EQ and before the limiter -- here, before the LUFS-mastering +
 # peak-ceiling stage that already plays that "limiter" role. Parallel
@@ -866,6 +864,53 @@ def _synthesize_plate_ir(sr: int = 44100, duration_s: float = 1.1) -> "np.ndarra
     return ir.astype(np.float32)
 
 
+# Procedural room impulses: (file name, RT60 seconds, pre-delay ms, damping Hz).
+# Small room / chamber / hall characters, replacing the third-party files.
+_ROOM_IRS = (
+    ("procedural_room.wav",    0.45, 6,  6500.0),
+    ("procedural_chamber.wav", 1.0,  14, 5000.0),
+    ("procedural_hall.wav",    2.0,  25, 3800.0),
+)
+
+
+def _synthesize_room_ir(rt60: float, predelay_ms: float, damping_hz: float,
+                        sr: int = 44100, seed: int = 0) -> "np.ndarray":
+    """Room-style impulse response: a few discrete early reflections, then a
+    noise tail decaying 60 dB over rt60 and darkening as it decays (air and
+    wall absorption take the highs first)."""
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    n = int(sr * (rt60 * 1.2 + predelay_ms / 1000))
+    ir = np.zeros(n, dtype=np.float64)
+    start = int(sr * predelay_ms / 1000)
+    ir[0] = 1.0                                           # direct sound
+    for _ in range(8):                                    # early reflections
+        k = start + int(rng.uniform(0, 0.04) * sr)
+        if k < n:
+            ir[k] += rng.uniform(0.25, 0.6) * rng.choice([-1, 1])
+    t = np.arange(n - start, dtype=np.float64) / sr
+    tail = rng.standard_normal(n - start) * np.exp(-6.91 * t / rt60) * 0.35
+    alpha = np.exp(-2.0 * np.pi * damping_hz / sr)        # one-pole low-pass
+    tail = _lfilter([1.0 - alpha], [1.0, -alpha], tail)
+    ir[start:] += tail
+    ir = ir / (float(np.max(np.abs(ir))) + 1e-9) * 0.9
+    return ir.astype(np.float32)
+
+
+def _ensure_room_ir_files() -> list[str]:
+    """Write the procedural room impulses to assets/ir/ once and return their paths."""
+    import soundfile as sf
+    os.makedirs(_IR_DIR, exist_ok=True)
+    paths = []
+    for seed, (name, rt60, predelay, damping) in enumerate(_ROOM_IRS):
+        path = os.path.join(_IR_DIR, name)
+        if not os.path.exists(path):
+            sf.write(path, _synthesize_room_ir(rt60, predelay, damping, seed=seed), 44100,
+                     subtype="PCM_16")
+        paths.append(path)
+    return paths
+
+
 def _ensure_plate_ir_file() -> str:
     """Write the procedural plate IR to assets/ir/ once (idempotent -- skips
     synthesis if the file already exists on disk) and return its path, so
@@ -938,34 +983,49 @@ def _apply_ir_reverb(audio: "np.ndarray", sr: int,
     the remaining (room/hall/salon-character) files, excluding the plate --
     keeps the two IR "pools" from mixing across the boom-bap/jazz-piano
     genre split they're each tuned for. Returns the wet signal (same shape
-    as input), or None if no IR files exist or audiomentations is
-    unavailable.
+    as input), or None if no IR file is usable.
     """
-    import glob as _glob
 
     if sub_genre in _PLATE_IR_GENRES:
         ir_path = _ensure_plate_ir_file()
     else:
-        all_files = (_glob.glob(os.path.join(_IR_DIR, "*.wav"))
-                     + _glob.glob(os.path.join(_IR_DIR, "*.flac")))
-        ir_files = [f for f in all_files if os.path.basename(f) != _PLATE_IR_FILENAME]
-        if not ir_files:
-            return None
-        ir_path = random.choice(ir_files)
+        ir_path = random.choice(_ensure_room_ir_files())
 
     try:
-        import numpy as np
-        from audiomentations import ApplyImpulseResponse
-        # ApplyImpulseResponse expects (channels, samples) float32 numpy array.
-        # Constructor param is `ir_path` (singular, accepts a str/Path or a
-        # list) -- the previous `ir_paths=[...]` kwarg here doesn't exist on
-        # this library and raised TypeError every call, silently swallowed
-        # by this function's own except-and-return-None below.
-        transform = ApplyImpulseResponse(ir_path=ir_path, p=1.0, leave_length_unchanged=True)
-        wet = transform(audio.copy().astype(np.float32), sample_rate=sr)
-        return wet
+        return _convolve_ir(audio, sr, ir_path)
     except Exception:
         return None
+
+
+def _resample(x: "np.ndarray", orig_sr: int, target_sr: int) -> "np.ndarray":
+    """Polyphase resampling along the last axis (scipy; replaces librosa)."""
+    from math import gcd
+    import numpy as np
+    from scipy.signal import resample_poly
+    if orig_sr == target_sr:
+        return x
+    g = gcd(int(orig_sr), int(target_sr))
+    return resample_poly(x, target_sr // g, orig_sr // g, axis=-1).astype(np.float32)
+
+
+def _convolve_ir(audio: "np.ndarray", sr: int, ir_path: str) -> "np.ndarray":
+    """Convolution reverb, channel by channel, peak-normalised to 0.5 and cut
+    to the input length: the same result audiomentations' ApplyImpulseResponse
+    gave, without that dependency. `audio` is (channels, samples) or 1-D."""
+    import numpy as np
+    import soundfile as sf
+    from scipy.signal import fftconvolve
+    ir, ir_sr = sf.read(ir_path, dtype="float32", always_2d=True)
+    ir = _resample(ir.T, ir_sr, sr)                    # (ir_channels, n)
+    if audio.ndim == 1:
+        ir = ir.mean(axis=0, keepdims=True)
+    samples = np.atleast_2d(audio.astype(np.float32))
+    wet = np.stack([fftconvolve(ch, ir[i % len(ir)])[: samples.shape[1]]
+                    for i, ch in enumerate(samples)]).astype(np.float32)
+    peak = float(np.max(np.abs(wet)))
+    if peak > 0:
+        wet *= 0.5 / peak
+    return wet[0] if audio.ndim == 1 else wet
 
 
 def _make_crackle(n_samples: int, amplitude: float, sr: int = 44100) -> "np.ndarray":

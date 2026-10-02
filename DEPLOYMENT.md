@@ -115,7 +115,6 @@ journalctl --user -u lofi-auto -f                   # same thing, direct
 journalctl --user -u lofi-webui -f
 systemctl --user restart lofi-webui
 
-./lofi                                              # TUI dashboard (dashboard.py), SSH-resilient
 ```
 
 **Rollback**: `git log --oneline`, `git checkout <previous-commit>`,

@@ -12,9 +12,8 @@ at track start.
 """
 import random
 
-import mido
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     PROGRESSIONS,
     _GLIDE_808_GENRES,
     _GLIDE_BEND_RANGE_SEMITONES,

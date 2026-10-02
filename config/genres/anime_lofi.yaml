@@ -1,17 +1,21 @@
 key: anime_lofi
 family: cozy_bright
 composition:
-  piano_program: GM_EP2
-  melody_program: GM_VIBRAPHONE
+  piano_program: GM_ACOUSTIC_GRAND
+  melody_program: GM_ACOUSTIC_GRAND
   countermelody_program: GM_VIBRAPHONE
   scales: [major_pent, pent, major]
   drum_pattern_indices: [0, 1, 4, 13]
   bpm_range: [80, 94]
   energy: null
-  progression_indices: [22, 25, 16, 18, 24, 44, 45, 46, 49]
+  progression_indices: [22, 25, 16, 18, 24, 44, 45, 46, 49, 48, 60]
 swing_range: [0.57, 0.65]
 cozy_bias: true
 drum_sampler_pattern: null
 mix: {lpf_hz: 13500, bitcrush_bits: 14, reverb_room: 0.3, reverb_wet: 0.15, tape_wobble_depth: 0.1,
   compress_ratio: 2.0, vinyl_crackle: 0.04, use_ir_reverb: false, sidechain_duck: false}
 song_form: null
+bass_program: GM_FINGER_BASS
+# Genre rework: anime lofi is piano-led (skoove.com, masterthescore.com).
+# Separation pass: the "royal road" IV-V-iii-vi (#48 in C, #60 in G), the
+# signature anime/J-pop progression (masterthescore.com).

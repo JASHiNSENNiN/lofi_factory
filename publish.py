@@ -6,7 +6,7 @@ run.py — use this after the pipeline has produced a video.
 
 SUBCOMMANDS
   upload          Upload the latest (or specified) video as a regular upload
-  live            Stream ONE existing video for a fixed duration (dashboard-
+  live            Stream ONE existing video for a fixed duration (panel-
                   controlled, no auto-reconnect). For an indefinite 24/7
                   auto-reconnecting radio stream instead, use
                   `python run.py --stream` (scripts/stream_live.py).
@@ -80,8 +80,8 @@ STREAM_PRESETS = {
 
 # ── AUTH ────────────────────────────────────────────────────────────────────
 # Delegates to scripts/upload_youtube.py — the OAuth flow used identically by
-# run.py, scripts/analytics.py, scripts/stream_live.py, scripts/youtube_live_manager.py,
-# and scripts/lofi_inator/pipeline.py. Kept as a thin wrapper here so existing
+# run.py, scripts/analytics.py, scripts/stream_live.py and
+# scripts/youtube_live_manager.py. Kept as a thin wrapper here so existing
 # `get_youtube()` call sites throughout this file don't need to change.
 
 def get_youtube():
@@ -113,19 +113,30 @@ def get_video_duration(path: str) -> float:
 
 
 def find_latest_valid_video(min_secs: float = MIN_UPLOAD_SECS) -> str | None:
-    """Return the most recent valid video, deleting any corrupt files found along the way."""
+    """Newest finished render that's at least min_secs long. Files touched in
+    the last 10 minutes are skipped (a render may still be writing them), and
+    nothing is deleted."""
     candidates = sorted(
         glob.glob(os.path.join(ROOT, "output", "lofi_*.mp4")),
         key=os.path.getmtime, reverse=True,
     )
     for path in candidates:
-        dur = get_video_duration(path)
-        if dur >= min_secs:
+        if time.time() - os.path.getmtime(path) < 600:
+            continue
+        if get_video_duration(path) >= min_secs:
             return path
-        size_mb = os.path.getsize(path) / 1024 / 1024
-        print(f"  [upload] Corrupt video ({size_mb:.0f} MB, unreadable) — deleting: {os.path.basename(path)}")
-        os.remove(path)
+        print(f"  [upload] Skipping unreadable or short video: {os.path.basename(path)}")
     return None
+
+
+def paired_asset(pattern: str, video_path: str) -> str | None:
+    """The asset (seo_*.json / thumb_*.jpg) made in the same run as video_path:
+    the newest one written before the video was finished. A/B alternates
+    (*_alt.jpg) are never picked."""
+    video_mtime = os.path.getmtime(video_path)
+    candidates = [p for p in glob.glob(os.path.join(ROOT, "assets", pattern))
+                  if not p.endswith("_alt.jpg") and os.path.getmtime(p) <= video_mtime + 60]
+    return max(candidates, key=os.path.getmtime) if candidates else None
 
 
 def load_seo(seo_path: str | None) -> dict:
@@ -137,25 +148,17 @@ def load_seo(seo_path: str | None) -> dict:
 
 
 def append_upload_log(entry: dict):
-    log = []
-    if os.path.exists(UPLOAD_LOG):
-        with open(UPLOAD_LOG) as f:
-            try:
-                log = json.load(f)
-            except Exception:
-                log = []
-    log.append(entry)
-    with open(UPLOAD_LOG, "w") as f:
-        json.dump(log, f, indent=2)
+    from scripts.fileutil import append_json_list
+    append_json_list(UPLOAD_LOG, entry)
 
 
 _live_state_lock = threading.Lock()   # guards live_state.json across threads
 
 
 def save_live_state(data: dict):
+    from scripts.fileutil import atomic_write_json
     with _live_state_lock:
-        with open(STATE_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_write_json(STATE_FILE, data)
 
 
 def load_live_state() -> dict | None:
@@ -206,58 +209,6 @@ def _sleep_until_next_loop(tag: str, interval_secs: float):
     time.sleep(interval_secs)
 
 
-# ── LOFI-INATOR ────────────────────────────────────────────────────────────────
-
-def _run_lofi_inator_once(args):
-    """Discover trending mainstream songs and publish lofi covers to 'lofi-inator' playlist."""
-    from scripts.lofi_inator.pipeline import run_lofi_inator
-
-    youtube = None
-    if not args.save_only:
-        youtube = get_youtube()
-
-    print(f"\n[lofi-inator] limit={args.limit}  theme={args.theme or 'auto'}  "
-          f"duration={args.duration}  save_only={args.save_only}")
-
-    results = run_lofi_inator(
-        limit=args.limit,
-        theme=args.theme,
-        duration=args.duration,
-        dry_run=args.save_only,
-        youtube=youtube,
-    )
-
-    uploaded = [r for r in results if r["status"] == "uploaded"]
-    skipped  = [r for r in results if r["status"] == "skipped"]
-    saved    = [r for r in results if r["status"] == "saved"]
-    failed   = [r for r in results if r["status"] == "failed"]
-
-    print(f"\n[lofi-inator] Done: {len(uploaded)} uploaded, {len(skipped)} skipped, "
-          f"{len(saved)} saved-only, {len(failed)} failed")
-    for r in uploaded:
-        print(f"  ✓ {r['song'].artist} — {r['song'].title}: {r['video_url']}")
-    for r in saved:
-        print(f"  ~ {r['song'].artist} — {r['song'].title}: {r.get('title', '')}")
-    for r in failed:
-        print(f"  ✗ {r['song'].artist} — {r['song'].title}: {r.get('error', '?')}")
-
-
-def cmd_lofi_inator(args):
-    if not getattr(args, "loop", False):
-        _run_lofi_inator_once(args)
-        return
-
-    interval = parse_interval(args.interval)
-    print(f"[lofi-inator] Looping forever — batch of {args.limit} every "
-          f"{format_duration(int(interval))} (Ctrl-C to stop)")
-    while True:
-        try:
-            _run_lofi_inator_once(args)
-        except Exception as e:
-            print(f"[lofi-inator] Iteration failed: {e}")
-        _sleep_until_next_loop("lofi-inator", interval)
-
-
 # ── AUTO (generate + upload) ────────────────────────────────────────────────
 
 # Unattended `auto` runs (systemd timer, no one present to watch/cancel) size
@@ -278,12 +229,12 @@ def cmd_lofi_inator(args):
 # no more manual re-tuning of a constant every time reality changes.
 AUTO_FALLBACK_DURATION = "30 min"   # forced tier after repeated failures, below
 AUTO_FALLBACK_AFTER_FAILURES = 2
-# Reserve for everything in a run that ISN'T the final encode: music/visual/
-# SEO/thumbnail generation (~25-30min observed) plus upload time plus a
-# margin of error. Deliberately generous -- better to undershoot the
-# possible duration than blow the timeout again.
-_AUTO_NON_ENCODE_OVERHEAD_SECS = 2400
-_AUTO_SAFETY_FACTOR = 0.75   # extra margin below the raw computed budget
+# Time for everything except the final encode: the visual loop, SEO,
+# thumbnail and upload (fixed), plus music generation, which grows with the
+# number of tracks a duration needs (assemble_video.tracks_for_duration).
+_AUTO_BASE_OVERHEAD_SECS = 1500
+_AUTO_SECS_PER_TRACK = 60      # wall time per track with 3 parallel workers
+_AUTO_SAFETY_FACTOR = 0.75     # use at most this share of the systemd timeout
 
 _AUTO_STATE_FILE = os.path.join(ROOT, "assets", ".auto_run_state.json")
 
@@ -297,9 +248,8 @@ def _load_auto_state() -> dict:
 
 
 def _save_auto_state(state: dict) -> None:
-    os.makedirs(os.path.dirname(_AUTO_STATE_FILE), exist_ok=True)
-    with open(_AUTO_STATE_FILE, "w") as f:
-        json.dump(state, f)
+    from scripts.fileutil import atomic_write_json
+    atomic_write_json(_AUTO_STATE_FILE, state)
 
 
 def _record_auto_result(success: bool) -> None:
@@ -335,19 +285,25 @@ def _dynamic_max_safe_duration() -> str:
     """The biggest duration tier this box can actually finish encoding
     within the live systemd timeout, given its own real recently-measured
     encode speed -- see the module comment above AUTO_FALLBACK_DURATION."""
-    from scripts.assemble_video import DURATION_MAP, estimated_encode_speed, _vaapi_available
+    from scripts.assemble_video import (DURATION_MAP, estimated_encode_speed,
+                                        _vaapi_available, tracks_for_duration)
     speed = estimated_encode_speed(used_vaapi=_vaapi_available())
-    budget_secs = (_live_timeout_start_secs() - _AUTO_NON_ENCODE_OVERHEAD_SECS) * _AUTO_SAFETY_FACTOR
-    max_safe_target_secs = max(budget_secs, 0) * speed
+    budget = _live_timeout_start_secs() * _AUTO_SAFETY_FACTOR
+
+    def needed(secs: int) -> float:
+        return (_AUTO_BASE_OVERHEAD_SECS
+                + tracks_for_duration(secs) * _AUTO_SECS_PER_TRACK
+                + secs / max(speed, 0.01))
+
     tiers = sorted(
         ((label, secs) for label, secs in DURATION_MAP.items()
-         if label not in ("single", "all night")),
+         if label != "all night"),
         key=lambda kv: kv[1],
     )
-    fitting = [label for label, secs in tiers if secs <= max_safe_target_secs]
+    fitting = [label for label, secs in tiers if needed(secs) <= budget]
     chosen = fitting[-1] if fitting else tiers[0][0]  # smallest tier as last resort
     print(f"[AUTO] Dynamic duration: measured speed {speed:.2f}x, "
-          f"safe budget {max_safe_target_secs / 60:.0f}min → picked {chosen!r}")
+          f"budget {budget / 60:.0f}min → picked {chosen!r}")
     return chosen
 
 
@@ -376,7 +332,12 @@ def _run_auto_once(args) -> bool:
     # Snapshot existing files so we can identify what's NEW after generation
     before_videos = set(_glob.glob(os.path.join(output_dir, "lofi_*.mp4")))
     before_seo    = set(_glob.glob(os.path.join(assets_dir, "seo_*.json")))
-    before_thumbs = set(_glob.glob(os.path.join(assets_dir, "thumb_*.jpg")))
+    # The A/B alternate (thumb_*_alt.jpg) is written after the primary, so it
+    # must be excluded here or "newest thumbnail" picks it as the primary.
+    def _primary_thumbs():
+        return {p for p in _glob.glob(os.path.join(assets_dir, "thumb_*.jpg"))
+                if not p.endswith("_alt.jpg")}
+    before_thumbs = _primary_thumbs()
 
     run_script = os.path.join(ROOT, "run.py")
     duration = getattr(args, "duration", None) or _pick_auto_duration()
@@ -405,7 +366,7 @@ def _run_auto_once(args) -> bool:
     # Find the files that are new (didn't exist before the run)
     new_videos = set(_glob.glob(os.path.join(output_dir, "lofi_*.mp4"))) - before_videos
     new_seo    = set(_glob.glob(os.path.join(assets_dir, "seo_*.json")))    - before_seo
-    new_thumbs = set(_glob.glob(os.path.join(assets_dir, "thumb_*.jpg")))   - before_thumbs
+    new_thumbs = _primary_thumbs() - before_thumbs
 
     if not new_videos:
         print("[AUTO] No new video was created — aborting to avoid re-uploading old content.")
@@ -431,10 +392,22 @@ def _run_auto_once(args) -> bool:
     )
     try:
         cmd_upload(upload_args)
+    except SystemExit as e:
+        # cmd_upload exits on refusals (no login, too short, no metadata)
+        # and with 0 when the video is already on YouTube. Record it either
+        # way: unrecorded failures never triggered the fallback tier, and in
+        # --loop mode the exit used to end the loop.
+        if e.code not in (0, None):
+            _record_auto_result(success=False)
+            if not getattr(args, "loop", False):
+                raise
+            return False
     except Exception:
         _record_auto_result(success=False)
         raise
     _record_auto_result(success=True)
+    from scripts.cleanup import cleanup_after_upload
+    cleanup_after_upload(ROOT, new_video)
     return True
 
 
@@ -508,70 +481,10 @@ def cmd_auto_service(args):
 
 # ── DASHBOARD ───────────────────────────────────────────────────────────────
 
-def cmd_dashboard(args):
-    """Launch the Textual TUI dashboard (run via ./lofi for SSH resilience)."""
-    dash = os.path.join(ROOT, "dashboard.py")
-    if not os.path.exists(dash):
-        print("[ERROR] dashboard.py not found in project root.")
-        sys.exit(1)
-    os.execv(sys.executable, [sys.executable, dash])
-
-
-# ── CRON INSTALLER (non-systemd fallback) ───────────────────────────────────
-# The deployed scheduling mechanism is the systemd user timer (deploy/lofi-auto.timer
-# + deploy/lofi-auto.service, controlled via `publish.py auto-service` / auto_service.py).
-# This crontab-based installer exists only as a fallback for hosts without systemd —
-# prefer `auto-service install` when systemd is available.
-
-def cmd_cron(args):
-    """Install/remove/show a daily crontab entry that auto-generates and uploads a video.
-    Non-systemd fallback — see module note above. Prefer `publish.py auto-service` normally."""
-    import subprocess as _sp
-    script   = os.path.abspath(__file__)
-    venv_py  = os.path.join(ROOT, "venv", "bin", "python")
-    python   = venv_py if os.path.exists(venv_py) else sys.executable
-    log_file = os.path.join(ROOT, "cron_auto.log")
-
-    # The cron command: daily at the chosen hour, run publish.py auto, append log
-    hour  = getattr(args, "hour", 9)
-    entry = f"0 {hour} * * * cd {ROOT} && {python} {script} auto >> {log_file} 2>&1"
-    marker = "# lofi_factory auto-upload"
-    tagged = f"{entry}  {marker}"
-
-    # Read current crontab
-    result = _sp.run(["crontab", "-l"], capture_output=True, text=True)
-    current = result.stdout if result.returncode == 0 else ""
-    lines   = [l for l in current.splitlines() if marker not in l]
-
-    if args.cron_cmd == "install":
-        lines.append(tagged)
-        new_crontab = "\n".join(lines) + "\n"
-        _sp.run(["crontab", "-"], input=new_crontab, text=True, check=True)
-        print(f"[CRON] Installed: daily at {hour:02d}:00 UTC")
-        print(f"       Log: {log_file}")
-        print(f"       Entry: {entry}")
-
-    elif args.cron_cmd == "remove":
-        new_crontab = "\n".join(lines) + "\n"
-        _sp.run(["crontab", "-"], input=new_crontab, text=True, check=True)
-        print("[CRON] Removed auto-upload cron entry.")
-
-    elif args.cron_cmd == "status":
-        if any(marker in l for l in current.splitlines()):
-            matches = [l for l in current.splitlines() if marker in l]
-            print("[CRON] Auto-upload is ACTIVE:")
-            for m in matches:
-                print(f"  {m}")
-        else:
-            print("[CRON] No auto-upload cron entry found.")
-            print("  Install with: python publish.py cron install")
-
-
 # ── SHORTS (repurpose a long-form video into a vertical Short) ──────────────
 
 def cmd_shorts(args):
-    """Delegates to scripts/generate_shorts.py's run_pipeline() -- same pattern
-    as cmd_lofi_inator delegating to scripts.lofi_inator.pipeline."""
+    """Delegates to scripts/generate_shorts.py's run_pipeline()."""
     from scripts.generate_shorts import run_pipeline
 
     youtube = None
@@ -598,6 +511,16 @@ def cmd_shorts(args):
     print(f"  Title: {result['metadata']['title']}")
     if result["uploaded"]:
         print(f"  ✓ Uploaded: {result['url']}")
+        # Logged as its own type: the panel lists it, while analytics and the
+        # posting-time model (which read only "upload") keep to long videos.
+        append_upload_log({
+            "type":         "short",
+            "video_id":     result["video_id"],
+            "url":          result["url"],
+            "title":        result["metadata"]["title"],
+            "source_video": os.path.basename(result["source_video"]),
+            "timestamp":    datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        })
     else:
         print("  Not uploaded (--save-only)")
     if result["crosspost"]:
@@ -662,7 +585,7 @@ def cmd_stats(args):
             order="date", maxResults=5,
         ).execute()
         if recent.get("items"):
-            print(f"\n  Recent uploads:")
+            print("\n  Recent uploads:")
             vid_ids = [i["id"]["videoId"] for i in recent["items"]]
             vdetail = youtube.videos().list(
                 part="snippet,statistics", id=",".join(vid_ids)
@@ -720,9 +643,9 @@ def cmd_playlist(args):
             title = p["snippet"]["title"]
             count = p["contentDetails"]["itemCount"]
             print(f"  {pid}  ({count:>3} videos)  {title}")
-        print(f"\n  Add IDs to .env, e.g.: YT_PLAYLIST_ACTIVITY=PLxxx  (pillar-based -- see "
-              f"scripts/playlist_curation.py; legacy YT_PLAYLIST_STUDY/YT_PLAYLIST_SLEEP "
-              f"still work as a fallback)")
+        print("\n  Add IDs to .env, e.g.: YT_PLAYLIST_ACTIVITY=PLxxx  (pillar-based -- see "
+              "scripts/playlist_curation.py; legacy YT_PLAYLIST_STUDY/YT_PLAYLIST_SLEEP "
+              "still work as a fallback)")
 
     elif args.playlist_cmd == "create":
         # Gated behind --confirm-create: playlist creation is channel-visible
@@ -754,6 +677,20 @@ def cmd_playlist(args):
 
 # ── UPLOAD ──────────────────────────────────────────────────────────────────
 
+def _to_rfc3339_utc(value: str) -> str | None:
+    """'2026-05-16T20:00:00', '...Z' or '...+02:00' -> '2026-05-16T20:00:00.000Z'.
+    A time without an offset is taken as UTC. None if it doesn't parse."""
+    if "T" not in value:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def cmd_upload(args):
     youtube = get_youtube()
 
@@ -766,16 +703,12 @@ def cmd_upload(args):
     else:
         video_path = find_latest_valid_video()
         if not video_path:
-            print("[upload] No valid video found — regenerating using existing music tracks...")
-            run_script = os.path.join(ROOT, "run.py")
-            result = subprocess.run([sys.executable, run_script, "--skip-upload", "--skip-music"])
-            if result.returncode != 0:
-                print("[ERROR] Regeneration failed. Run manually: python run.py")
-                sys.exit(1)
-            video_path = find_latest_valid_video()
-            if not video_path:
-                print("[ERROR] Regenerated video is still unreadable — check assembly logs.")
-                sys.exit(1)
+            print("[ERROR] No finished video in output/. Render one first: python run.py --skip-upload")
+            sys.exit(1)
+
+    # Pair the SEO file and thumbnail with this video, not with whatever is newest.
+    args.seo = args.seo or paired_asset("seo_*.json", video_path)
+    args.thumb = args.thumb or paired_asset("thumb_*.jpg", video_path)
 
     # Already-uploaded guard — check YouTube by ref_id embedded in description.
     # Immune to: title collisions, different devices, cross-machine runs.
@@ -816,7 +749,7 @@ def cmd_upload(args):
             print(f"[ERROR] Video is only {dur:.0f}s ({dur/60:.1f} min). Use --force to upload anyway.")
             sys.exit(1)
 
-    thumb_path = args.thumb or find_latest(os.path.join(ROOT, "assets"), "thumb_*.jpg")
+    thumb_path = args.thumb
     seo        = dict(load_seo(args.seo))
 
     # CLI overrides on top of the SEO file
@@ -824,19 +757,24 @@ def cmd_upload(args):
         seo["title"] = args.title
     if args.privacy:
         seo["privacy"] = args.privacy
-    seo.setdefault("title", "lo-fi beats to study/relax to 🌙")
-    seo.setdefault("description", "Cozy lo-fi music. No copyright. Free to use.")
+    if not seo.get("title"):
+        print("[ERROR] No SEO file found for this video and no --title given; "
+              "refusing to upload with placeholder metadata.")
+        sys.exit(1)
+    seo.setdefault("description", "Lo-fi beats.")
     seo.setdefault("tags", ["lofi", "chillhop", "study music"])
 
     # Scheduled publish: --schedule-at sets privacyStatus=private + publishAt
     schedule_at = getattr(args, "schedule_at", None)
     if schedule_at:
-        # Normalise to RFC3339 UTC format required by YouTube API
-        schedule_at = schedule_at.replace("+00:00", "").rstrip("Z")
-        if "T" not in schedule_at:
-            print("[ERROR] --schedule-at must be ISO format: 2026-05-16T20:00:00")
+        schedule_at = _to_rfc3339_utc(schedule_at)
+        if not schedule_at:
+            print("[ERROR] --schedule-at must be an ISO date-time, e.g. 2026-05-16T20:00:00 "
+                  "(UTC) or 2026-05-16T20:00:00+02:00")
             sys.exit(1)
-        schedule_at = schedule_at + ".000Z"
+        if schedule_at <= datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"):
+            print(f"[ERROR] --schedule-at {schedule_at} is in the past.")
+            sys.exit(1)
 
     print(f"\n[UPLOAD] {os.path.basename(video_path)}")
     print(f"  Title:   {seo['title']}")
@@ -861,7 +799,7 @@ def cmd_upload(args):
         "seo_ref":          seo.get("ref_id", ""),
         "video_file":       os.path.basename(video_path),
         # Composition-selection feedback — see scripts/analytics.py's
-        # sub_genre_weights()/bpm_bucket_weights()/engine_weights(). Defaults
+        # sub_genre_weights()/bpm_bucket_weights(). Defaults
         # keep this from crashing on an older-format seo dict.
         "sub_genre":        seo.get("sub_genre", ""),
         "bpm":              seo.get("bpm"),
@@ -888,36 +826,42 @@ def cmd_upload(args):
 
 # ── AUTO TITLE ──────────────────────────────────────────────────────────────
 
-def _generate_live_title() -> str:
+def _live_concept(stream_seo: dict | None) -> dict:
+    """A fresh concept for a live title, pinned to what the stream really
+    shows and plays (its video's theme and genre); only the wording varies."""
+    sys.path.insert(0, ROOT)
+    from scripts.generate_seo import pick_concept
+    trends = None
+    try:
+        from scripts.trend_research import get_trend_snapshot
+        trends = get_trend_snapshot()
+    except Exception:
+        pass
+    concept = pick_concept(trends)
+    stream_seo = stream_seo or {}
+    if stream_seo.get("theme"):
+        concept["theme"] = stream_seo["theme"]
+    # The video's genre, or a neutral one: never a random pool genre.
+    concept["genre_label"] = stream_seo.get("genre_label") or "lo-fi hip hop"
+    return concept
+
+
+def _live_title(concept: dict) -> str:
+    from scripts.generate_seo import build_title
+    title = build_title(concept, "all night")
+    return title.replace("all night", "24/7 live").strip()[:100]
+
+
+def _generate_live_title(stream_seo: dict | None = None) -> str:
     """
-    Generate a unique live broadcast title using the SEO concept engine.
-    Procedural (pick_concept/build_title) is primary; Groq is only used as an
-    explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1).
-    Hard 30s timeout — if APIs hang, falls back to default immediately.
-    Returns empty string on any failure (caller uses its own fallback).
+    A live broadcast title in the channel's title style, for the stream's
+    own theme and genre. Hard 30s timeout (trend fetch can hang); returns
+    an empty string on any failure (caller uses its own fallback).
     """
     import concurrent.futures
 
-    def _inner():
-        sys.path.insert(0, ROOT)
-        from scripts.generate_seo import pick_concept, build_title
-
-        trends = None
-        try:
-            from scripts.trend_research import get_trend_snapshot
-            trends = get_trend_snapshot()
-        except Exception:
-            pass
-
-        concept = pick_concept(trends)
-        title = build_title(concept, "all night")
-        if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-            from scripts.generate_seo import build_title_groq
-            title = build_title_groq(concept, "all night", trends) or title
-        return title.replace("all night", "24/7 live").strip()[:100]
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(_inner)
+        future = ex.submit(lambda: _live_title(_live_concept(stream_seo)))
         try:
             return future.result(timeout=30)
         except concurrent.futures.TimeoutError:
@@ -971,7 +915,6 @@ def _generate_live_description(concept: dict) -> str:
 def _do_midnight_refresh(broadcast_id: str):
     """Generate a fresh title + description and push it to the live broadcast."""
     try:
-        from scripts.generate_seo import pick_concept, build_title
         from scripts.youtube_live_manager import get_youtube_service
         # save_live_state / load_live_state are defined in publish.py itself
 
@@ -980,19 +923,10 @@ def _do_midnight_refresh(broadcast_id: str):
             print("  [midnight] No YouTube credentials — skipping refresh")
             return
 
-        trends = None
-        try:
-            from scripts.trend_research import get_trend_snapshot
-            trends = get_trend_snapshot()
-        except Exception:
-            pass
-
-        concept = pick_concept(trends)
-        title   = build_title(concept, "all night")
-        if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-            from scripts.generate_seo import build_title_groq
-            title = build_title_groq(concept, "all night", trends) or title
-        title   = title.replace("all night", "24/7 live").strip()[:100]
+        state = load_live_state() or {}
+        concept = _live_concept({"theme": state.get("theme"),
+                                 "genre_label": state.get("genre_label")})
+        title   = _live_title(concept)
         description = _generate_live_description(concept)
 
         # scheduledStartTime is required by the update API
@@ -1151,7 +1085,7 @@ def _start_ffmpeg_stream(video_path: str, stream_key: str, preset: dict) -> subp
     # stderr → log file (not PIPE — unread pipes deadlock when buffer fills ~10 min)
     log_path = os.path.join(ROOT, "ffmpeg_stream.log")
     log_f    = open(log_path, "w")
-    print(f"  Streaming → {rtmp_url[:50]}...")
+    print(f"  Streaming → {RTMP_BASE}/****")
     print(f"  ffmpeg log: {log_path}")
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_f)
@@ -1171,7 +1105,7 @@ def cmd_live(args):
     """
     Stream ONE existing finished video, looped, for a fixed --duration via the
     YouTube Broadcast API. Owns its own broadcast lifecycle and live_state.json
-    schema (including ffmpeg_pid) that `publish.py end` and the dashboard/webui
+    schema (including ffmpeg_pid) that `publish.py end` and the web panel
     directly depend on to monitor/kill the stream — this is intentionally NOT
     delegated to scripts/stream_live.py, which is a different tool: an
     indefinite, auto-reconnecting 24/7 stream that continuously generates new
@@ -1182,7 +1116,9 @@ def cmd_live(args):
 
     # Resolve files
     video_path = args.video or find_latest(os.path.join(ROOT, "output"), "lofi_*.mp4")
-    seo        = load_seo(args.seo)
+    # The SEO file made with this video, not whichever is newest.
+    seo        = load_seo(args.seo or (paired_asset("seo_*.json", video_path)
+                                       if video_path and os.path.exists(video_path) else None))
     preset     = STREAM_PRESETS.get(args.quality, STREAM_PRESETS["720p15"])
 
     if not video_path or not os.path.exists(video_path):
@@ -1193,7 +1129,7 @@ def cmd_live(args):
         title = args.title
     else:
         print("  Generating broadcast title...")
-        title = (_generate_live_title()
+        title = (_generate_live_title(seo)
                  or seo.get("title")
                  or "lo-fi beats • 24/7 chill music 🌙")
     description = seo.get("description", "Cozy lo-fi music streaming 24/7.")
@@ -1203,24 +1139,29 @@ def cmd_live(args):
     now_utc = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30)
     scheduled_start = now_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    print(f"\n[LIVE] Setting up broadcast...")
+    print("\n[LIVE] Setting up broadcast...")
     print(f"  Title:   {title}")
     print(f"  Video:   {os.path.basename(video_path)}")
     print(f"  Quality: {args.quality}")
     print(f"  Privacy: {privacy}")
 
-    # 1. Create broadcast
-    broadcast_id, broadcast_title = _create_broadcast(
-        youtube, title, description, scheduled_start, privacy)
-    print(f"  Broadcast created: {broadcast_id}")
-
-    # 2. Create stream
-    stream_id, stream_key = _create_stream(youtube, f"lofi_stream_{broadcast_id[:8]}")
-    print(f"  Stream created:    {stream_id}")
-
-    # 3. Bind
-    _bind_broadcast(youtube, broadcast_id, stream_id)
-    print("  Bound broadcast ↔ stream")
+    # 1-3. Use the broadcast `publish.py schedule` prepared, if there is one
+    # (its viewers were promised this stream); otherwise create and bind one.
+    pending = load_live_state() or {}
+    if (pending.get("scheduled_at") and not pending.get("ffmpeg_pid")
+            and pending.get("broadcast_id") and pending.get("stream_key")):
+        broadcast_id = pending["broadcast_id"]
+        stream_id, stream_key = pending.get("stream_id"), pending["stream_key"]
+        title = pending.get("title") or title
+        print(f"  Using the scheduled broadcast: {broadcast_id}")
+    else:
+        broadcast_id, broadcast_title = _create_broadcast(
+            youtube, title, description, scheduled_start, privacy)
+        print(f"  Broadcast created: {broadcast_id}")
+        stream_id, stream_key = _create_stream(youtube, f"lofi_stream_{broadcast_id[:8]}")
+        print(f"  Stream created:    {stream_id}")
+        _bind_broadcast(youtube, broadcast_id, stream_id)
+        print("  Bound broadcast ↔ stream")
 
     # 4. Start ffmpeg
     ffmpeg_proc = _start_ffmpeg_stream(video_path, stream_key, preset)
@@ -1239,7 +1180,7 @@ def cmd_live(args):
     except Exception as e:
         print(f"  [ERROR] Transition failed: {e}")
         print("          Check YouTube Studio — broadcast may need manual start")
-        print(f"          Manage: https://studio.youtube.com/channel/broadcast")
+        print("          Manage: https://studio.youtube.com/channel/broadcast")
 
     watch_url = f"https://www.youtube.com/watch?v={broadcast_id}"
     manage_url = "https://studio.youtube.com/channel/broadcast"
@@ -1254,6 +1195,8 @@ def cmd_live(args):
         "ffmpeg_pid":   ffmpeg_proc.pid,
         "title":        title,
         "video_file":   os.path.basename(video_path),
+        "theme":        seo.get("theme"),        # the midnight refresh keeps
+        "genre_label":  seo.get("genre_label"),  # titles true to the stream
         "watch_url":    watch_url,
         "started_at":   datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
@@ -1267,7 +1210,7 @@ def cmd_live(args):
         name="midnight-refresh",
     )
     t_refresh.start()
-    print(f"  Midnight refresh scheduled (title + description updates at 00:00 daily)")
+    print("  Midnight refresh scheduled (title + description updates at 00:00 daily)")
 
     # Log
     append_upload_log({
@@ -1311,7 +1254,7 @@ def cmd_live(args):
         except Exception:
             pass
 
-    print(f"\n[LIVE] Duration limit reached — ending broadcast")
+    print("\n[LIVE] Duration limit reached — ending broadcast")
     _end_broadcast(youtube, broadcast_id, ffmpeg_proc)
 
 
@@ -1340,9 +1283,16 @@ def _end_broadcast(youtube, broadcast_id: str, ffmpeg_proc: subprocess.Popen | N
     clear_live_state()
 
 
-def cmd_end(args):
-    youtube = get_youtube()
+def _is_ffmpeg(pid: int) -> bool:
+    """Guard against PID reuse: only signal a PID that is still ffmpeg."""
+    try:
+        with open(f"/proc/{pid}/comm", encoding="utf-8") as f:
+            return f.read().strip() == "ffmpeg"
+    except OSError:
+        return False
 
+
+def cmd_end(args):
     broadcast_id = args.broadcast_id
 
     # If no ID given, load from state file
@@ -1356,21 +1306,23 @@ def cmd_end(args):
         ffmpeg_pid   = state.get("ffmpeg_pid")
         print(f"[END] Ending broadcast {broadcast_id}  (from state file)")
 
-        # Kill the ffmpeg process if still running
-        if ffmpeg_pid:
+        # Stop the local encoder first, so it stops even when YouTube is
+        # unreachable or the token has expired.
+        if ffmpeg_pid and _is_ffmpeg(ffmpeg_pid):
             try:
                 os.kill(ffmpeg_pid, signal.SIGTERM)
-                print(f"  Killed ffmpeg PID {ffmpeg_pid}")
+                print(f"  Stopped ffmpeg PID {ffmpeg_pid}")
             except ProcessLookupError:
                 pass   # already dead
     else:
         print(f"[END] Ending broadcast {broadcast_id}")
 
     try:
-        _transition_broadcast(youtube, broadcast_id, "complete")
+        _transition_broadcast(get_youtube(), broadcast_id, "complete")
         print("  Broadcast ended.")
-    except Exception as e:
-        print(f"  [WARN] {e}")
+    except (Exception, SystemExit) as e:
+        print(f"  [WARN] Couldn't mark the broadcast complete on YouTube ({e}); "
+              "YouTube ends it on its own once the stream stops.")
 
     clear_live_state()
     print("  Done.")
@@ -1462,11 +1414,13 @@ def cmd_rename(args):
             print(f"[ERROR] Broadcast {broadcast_id} not found.")
             sys.exit(1)
         scheduled_start = items[0]["snippet"].get("scheduledStartTime", "")
+        description = items[0]["snippet"].get("description", "")
     except Exception as e:
         print(f"[ERROR] Could not fetch broadcast: {e}")
         sys.exit(1)
 
-    # Update title
+    # Update title. update(part="snippet") replaces the whole snippet, so the
+    # description must be sent back or it is erased.
     try:
         youtube.liveBroadcasts().update(
             part="snippet",
@@ -1474,6 +1428,7 @@ def cmd_rename(args):
                 "id": broadcast_id,
                 "snippet": {
                     "title": new_title[:100],
+                    "description": description,
                     "scheduledStartTime": scheduled_start,
                 },
             }
@@ -1524,14 +1479,17 @@ def cmd_schedule(args):
 
     # Parse scheduled time
     if args.at:
-        # Expect ISO format like "2026-03-22T20:00:00" (local → UTC assumed)
-        scheduled_start = args.at + ".000Z"
+        # ISO time; "Z" or an offset is honoured, a bare time is UTC.
+        scheduled_start = _to_rfc3339_utc(args.at)
+        if not scheduled_start:
+            print(f"[ERROR] --at {args.at!r} is not an ISO time like 2026-03-22T20:00:00Z")
+            sys.exit(1)
     else:
         # Default: 1 hour from now
         future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
         scheduled_start = future.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    print(f"\n[SCHEDULE] Creating scheduled broadcast")
+    print("\n[SCHEDULE] Creating scheduled broadcast")
     print(f"  Title:  {title}")
     print(f"  Start:  {scheduled_start}")
     print(f"  Privacy: {privacy}")
@@ -1544,9 +1502,9 @@ def cmd_schedule(args):
     watch_url = f"https://www.youtube.com/watch?v={broadcast_id}"
     print(f"\n  Broadcast scheduled: {broadcast_id}")
     print(f"  Watch URL:           {watch_url}")
-    print(f"  Stream key saved to live_state.json")
-    print(f"\n  When ready to go live:")
-    print(f"    python publish.py live --video <video.mp4>  (will use saved stream key)")
+    print("  Stream key saved to live_state.json")
+    print("\n  When ready to go live:")
+    print("    python publish.py live --video <video.mp4>  (will use saved stream key)")
 
     save_live_state({
         "broadcast_id": broadcast_id,
@@ -1608,8 +1566,7 @@ def main():
                         help="Free-text mood/concept phrase override for the music generator")
     p_auto.add_argument("--music-v2",    dest="music_v2", action=argparse.BooleanOptionalAction,
                         default=None,
-                        help="Force v2 (beta) or v1 (--no-music-v2) music generator; "
-                             "omit to let the engagement-analytics bandit choose")
+                        help="Use the experimental v2 composer (default: v1)")
 
     # ── upload ───────────────────────────────────────────────────
     p_up = sub.add_parser("upload", help="Upload video as a regular YouTube video")
@@ -1629,7 +1586,7 @@ def main():
 
     # ── live ─────────────────────────────────────────────────────
     p_live = sub.add_parser("live", help="Stream ONE existing finished video for a fixed "
-                             "duration via the YouTube Broadcast API, dashboard-controlled "
+                             "duration via the YouTube Broadcast API, web-panel-controlled "
                              "(no auto-reconnect on dropout). For an indefinite, "
                              "auto-reconnecting 24/7 radio stream with continuous background "
                              "music generation, use 'python run.py --stream' or "
@@ -1683,30 +1640,6 @@ def main():
     p_anl.add_argument("--swap-thumbs", dest="swap_thumbs", action="store_true",
                        help="Swap thumbnails for videos with CTR below 70%% of channel average")
 
-    # ── dashboard ────────────────────────────────────────────────
-    sub.add_parser("dashboard", help="Open the TUI dashboard (use ./lofi for SSH resilience)")
-
-    # ── lofi-inator ──────────────────────────────────────────────
-    p_li = sub.add_parser(
-        "lofi-inator",
-        help="Cover trending mainstream songs as lofi + auto-add to 'lofi-inator' playlist",
-    )
-    p_li.add_argument("--limit", type=int, default=5,
-                      help="Number of songs to process (default: 5)")
-    p_li.add_argument("--theme", default=None,
-                      help="Override visual theme (default: auto-derived from song mood)")
-    p_li.add_argument("--duration", default="single",
-                      choices=["single", "30 min", "45 min", "1 hour", "90 min",
-                               "2 hours", "3 hours", "4 hours", "8 hours"],
-                      help='Video duration per cover — "single" = ~4.5min one-track cover (default: "single")')
-    p_li.add_argument("--save-only", action="store_true",
-                      help="Generate covers locally without uploading to YouTube")
-    p_li.add_argument("--loop", action="store_true",
-                      help="Keep discovering+covering trending songs forever, "
-                           "sleeping --interval between batches")
-    p_li.add_argument("--interval", default="12h",
-                      help="Sleep between loop batches, e.g. '90m', '6h', '2d' (default: 12h). "
-                           "Only used with --loop")
 
     # ── shorts ───────────────────────────────────────────────────
     p_shorts = sub.add_parser(
@@ -1765,17 +1698,6 @@ def main():
     p_asvc.add_argument("--no-follow", action="store_true",
                         help="For 'logs': print history and exit instead of following")
 
-    # ── cron ─────────────────────────────────────────────────────
-    p_cron = sub.add_parser("cron", help="[non-systemd fallback] Install/remove/show a daily "
-                             "auto-upload cron job. Prefer 'auto-service install' when systemd "
-                             "is available (the actually-deployed mechanism, see deploy/).")
-    cron_sub = p_cron.add_subparsers(dest="cron_cmd", metavar="ACTION")
-    p_ci = cron_sub.add_parser("install", help="Install daily auto-upload cron")
-    p_ci.add_argument("--hour", type=int, default=9,
-                      help="UTC hour to run (default: 9 = 9AM UTC)")
-    cron_sub.add_parser("remove", help="Remove auto-upload cron entry")
-    cron_sub.add_parser("status", help="Show whether cron is installed")
-
     args = parser.parse_args()
 
     if args.auth:
@@ -1800,9 +1722,6 @@ def main():
         "log":           cmd_log,
         "stats":         cmd_stats,
         "analytics":     cmd_analytics,
-        "cron":          cmd_cron,
-        "dashboard":     cmd_dashboard,
-        "lofi-inator":   cmd_lofi_inator,
         "playlist":      cmd_playlist,
         "shorts":        cmd_shorts,
     }

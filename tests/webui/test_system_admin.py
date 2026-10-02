@@ -13,7 +13,6 @@ real token.json/.env/upload_log.json.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -168,23 +167,25 @@ def test_disk_usage_breakdown_sums_bytes_per_directory(_isolated_content_dirs):
     (_isolated_content_dirs["OUTPUT_DIR"] / "a.mp4").write_bytes(b"x" * 1000)
     (_isolated_content_dirs["OUTPUT_DIR"] / "b.mp4").write_bytes(b"x" * 500)
     (_isolated_content_dirs["MUSIC_DIR"] / "t.wav").write_bytes(b"x" * 250)
+    stream = _isolated_content_dirs["MUSIC_DIR"] / "stream"
+    stream.mkdir()
+    (stream / "s.wav").write_bytes(b"x" * 70)
     sub = _isolated_content_dirs["OUTPUT_DIR"] / "tmp_x"
     sub.mkdir()
     (sub / "c.mp4").write_bytes(b"x" * 100)
 
     breakdown = system_admin.disk_usage_breakdown()
-    assert breakdown["output"] == 1600
-    assert breakdown["music"] == 250
-    assert breakdown["visuals"] == 0
-    assert breakdown["assets"] == 0
+    assert breakdown["Finished videos"] == 1600
+    assert breakdown["Render tracks"] == 250
+    assert breakdown["Live stream library"] == 70
+    assert breakdown["Visual loops"] == 0
+    assert breakdown["Thumbnails, logs, samples"] == 0
 
 
 def test_disk_usage_breakdown_handles_missing_directory(tmp_path, monkeypatch):
     for name in ("OUTPUT_DIR", "MUSIC_DIR", "VISUALS_DIR", "ASSETS_DIR"):
         monkeypatch.setattr(config, name, str(tmp_path / f"missing_{name}"))
-    assert system_admin.disk_usage_breakdown() == {
-        "output": 0, "music": 0, "visuals": 0, "assets": 0,
-    }
+    assert set(system_admin.disk_usage_breakdown().values()) == {0}
 
 
 # ── Tailscale / TLS cert status ───────────────────────────────────────────────

@@ -13,6 +13,7 @@ pattern). Nothing in this module touches ``nicegui.ui``.
 """
 from __future__ import annotations
 
+import fcntl
 import glob
 import json
 import os
@@ -161,17 +162,22 @@ def _dir_size_bytes(path: str) -> int:
 
 
 def disk_usage_breakdown() -> dict[str, int]:
-    """Byte totals for the factory's main content directories."""
-    dirs = {
-        "output": config.OUTPUT_DIR,
-        "music": config.MUSIC_DIR,
-        "visuals": config.VISUALS_DIR,
-        "assets": config.ASSETS_DIR,
+    """Byte totals for the factory's content directories. The stream
+    library is listed apart from the per-render tracks next to it: it is
+    kept on purpose, while render tracks are pruned after each upload."""
+    stream_dir = os.path.join(config.MUSIC_DIR, "stream")
+    music_total = _dir_size_bytes(config.MUSIC_DIR) if os.path.isdir(config.MUSIC_DIR) else 0
+    stream = _dir_size_bytes(stream_dir) if os.path.isdir(stream_dir) else 0
+    sizes = {
+        "Finished videos": config.OUTPUT_DIR,
+        "Visual loops": config.VISUALS_DIR,
+        "Thumbnails, logs, samples": config.ASSETS_DIR,
     }
-    return {
-        name: _dir_size_bytes(path) if os.path.isdir(path) else 0
-        for name, path in dirs.items()
-    }
+    out = {name: _dir_size_bytes(path) if os.path.isdir(path) else 0
+           for name, path in sizes.items()}
+    out["Render tracks"] = music_total - stream
+    out["Live stream library"] = stream
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -258,12 +264,18 @@ def create_backup() -> dict:
     download -- these are live secrets (OAuth token, .env, upload log)."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = os.path.join(BACKUP_DIR, ts)
-    os.makedirs(dest, exist_ok=True)
+    # Owner-only: these are live secrets (OAuth token, .env). copy2 keeps the
+    # source's mode, which for upload_log.json is world-readable.
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(BACKUP_DIR, 0o700)
+    os.makedirs(dest, mode=0o700, exist_ok=True)
     copied = []
     for name in BACKUP_FILES:
         src = os.path.join(config.ROOT, name)
         if os.path.exists(src):
-            shutil.copy2(src, os.path.join(dest, name))
+            target = os.path.join(dest, name)
+            shutil.copy2(src, target)
+            os.chmod(target, 0o600)
             copied.append(name)
     audit_log("config_backup", {"name": ts, "files": copied})
     return {"name": ts, "path": dest, "files": copied}
@@ -340,6 +352,23 @@ _SCRATCH_PATTERNS = {
 }
 
 
+PIPELINE_LOCK = os.path.join(config.ROOT, ".pipeline.lock")
+
+
+def pipeline_running() -> bool:
+    """True while any run.py holds the pipeline lock (web UI job, systemd
+    timer or a manual CLI run alike)."""
+    if not os.path.exists(PIPELINE_LOCK):
+        return False
+    with open(PIPELINE_LOCK, "a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
+
+
 def orphaned_scratch_files() -> list[dict]:
     """{"path", "size_bytes", "mtime"} for every scratch file currently in
     music/ or visuals/. Caller must confirm nothing is rendering first (see
@@ -365,6 +394,8 @@ def clean_orphaned_scratch() -> dict:
     and the lofi-auto systemd unit both need checking) -- this module doesn't
     import either to avoid a dependency cycle, so that safety check lives at
     the call site, same pattern as app.py's _confirm_delete_render guard."""
+    if pipeline_running():
+        raise RuntimeError("A render is running; scratch cleanup refused.")
     files = orphaned_scratch_files()
     freed = 0
     deleted = 0

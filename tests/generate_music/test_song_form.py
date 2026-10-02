@@ -4,7 +4,7 @@ generate_song_form(), an additional, more varied alternative to the 5
 hand-authored _SONG_FORMS entries.
 """
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     _FORM_GRAMMAR_MAX_TOTAL_LOOPS,
     _SONG_FORMS,
     generate_song_form,

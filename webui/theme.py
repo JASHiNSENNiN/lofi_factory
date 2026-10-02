@@ -283,9 +283,23 @@ body,.q-page,.nicegui-content{
 .data-row{ display:flex; align-items:center; gap:12px; flex-wrap:nowrap;
   padding:4px 4px; border-bottom:1px solid var(--border); }
 .data-row--header{ opacity:.6; padding:4px; }
-.col-xs{ min-width:60px; } .col-sm{ min-width:80px; } .col-md{ min-width:100px; }
-.col-lg{ min-width:140px; } .col-xl{ min-width:220px; }
-.col-grow{ flex:2; min-width:220px; }
+/* A truncating cell fills the space the fixed columns leave and adds
+   nothing to the row's own width (width:0): the column sizes rows to their
+   content, so a long failure reason used to widen the row past the card and
+   push its buttons off the edge. 120px keeps it readable on a phone, where
+   .table-scroll scrolls sideways. Trailing buttons never shrink. */
+.data-row > .truncate{ flex:1 1 0; width:0; min-width:120px; }
+.data-row > .q-btn{ flex:none; }
+/* Any truncating text: in a flex row it may shrink below its text, in a
+   flex column it never grows past its container (a long track name made the
+   whole page scroll sideways on a phone). */
+.truncate{ min-width:0; max-width:100%; }
+.dcol-xs{ min-width:60px; } .dcol-sm{ min-width:80px; } .dcol-md{ min-width:100px; }
+.dcol-lg{ min-width:140px; } .dcol-xl{ min-width:220px; }
+.dcol-grow{ flex:2; min-width:220px; }
+/* Takes the leftover width without its content widening the row (see the
+   .truncate rule above): for a cell holding a long title. */
+.dcol-fill{ flex:1 1 0; width:0; min-width:220px; }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .q-btn{ border-radius:3px; text-transform:none; font-weight:600; letter-spacing:.2px; padding:6px 14px; }
@@ -300,12 +314,26 @@ body,.q-page,.nicegui-content{
 /* progress bar / field radius */
 .q-linear-progress{ border-radius:0; }
 .q-field__control{ border-radius:3px !important; }
+
+/* file pickers: no empty file-list box under the header */
+.compact-upload{ background:transparent !important; }
+.compact-upload .q-uploader__list{ min-height:0; padding:0; }
+.compact-upload .q-uploader__subtitle{ display:none; }
 """
 
 _HEAD = """
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<meta name="robots" content="noindex, nofollow">
+<style>
+/* Served by the panel itself (app.py mounts assets/fonts at /static/fonts):
+   a private panel shouldn't report every page load to Google Fonts, and it
+   keeps its font offline. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/static/fonts/JetBrainsMono-wght.ttf') format('truetype');
+  font-weight: 100 800;
+  font-display: swap;
+}
+</style>
 """
 
 
@@ -352,7 +380,7 @@ def card(title: str | None = None, subtitle: str | None = None, classes: str = "
 
 
 # ── Data row (pseudo-table) ──────────────────────────────────────────────────
-_COL_WIDTHS = {"xs", "sm", "md", "lg", "xl", "grow"}
+_COL_WIDTHS = {"xs", "sm", "md", "lg", "xl", "grow", "fill"}
 
 
 def _data_row_cells(cells: list[dict], *, header: bool = False) -> list[dict]:
@@ -372,7 +400,7 @@ def _data_row_cells(cells: list[dict], *, header: bool = False) -> list[dict]:
         width = cell.get("width")
         if width is not None and width not in _COL_WIDTHS:
             raise ValueError(f"Unknown data_row width {width!r}, expected one of {_COL_WIDTHS}")
-        width_cls = f"col-{width}" if width else ""
+        width_cls = f"dcol-{width}" if width else ""
         is_icon = "icon" in cell
         default_cls = "" if is_icon else default_text_cls
         classes = " ".join(filter(None, [

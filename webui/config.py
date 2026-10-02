@@ -27,7 +27,6 @@ TOKEN_FILE = os.path.join(ROOT, "token.json")
 # ordinary uploads/analytics. See MONETARY_SCOPES below and youtube_oauth.py's
 # monetary_* functions.
 TOKEN_FILE_MONETARY = os.path.join(ROOT, "token_monetary.json")
-COOKIES_FILE = os.path.join(ROOT, "cookies.txt")
 UPLOAD_LOG = os.path.join(ROOT, "upload_log.json")
 OUTPUT_DIR = os.path.join(ROOT, "output")
 ASSETS_DIR = os.path.join(ROOT, "assets")
@@ -39,22 +38,8 @@ if not os.path.exists(PYTHON):  # fall back to whatever runs us
 
     PYTHON = sys.executable
 
-# Same scopes publish.py uses — token.json must satisfy both.
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-    "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-    "https://www.googleapis.com/auth/yt-analytics.readonly",
-]
-
-# Opt-in only (Settings -> "Connect monetary analytics"). Mirrors
-# scripts/upload_youtube.py's MONETARY_SCOPES -- see that module for why this
-# is a separate constant rather than folded into SCOPES. Used only by
-# youtube_oauth.py's monetary_* functions, which write to TOKEN_FILE_MONETARY,
-# never TOKEN_FILE.
-MONETARY_SCOPES = SCOPES + [
-    "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
-]
+# One definition of the OAuth scopes for the whole project (see there).
+from scripts.upload_youtube import MONETARY_SCOPES, SCOPES  # noqa: E402, F401  (re-exported)
 
 
 def _env(name: str, default: str = "") -> str:
@@ -109,7 +94,10 @@ THEMES = [
     "blue_hour", "forest_rain", "sakura_night", "vaporwave", "lofi_house",
     "lofi_classical", "bedroom_pop", "lofi_rnb",
 ]
-DURATIONS = ["1 hour", "2 hours", "3 hours", "all night"]
+# Longer options exist in assemble_video.DURATION_MAP, but a software x264
+# encode of 3+ hours outruns the render timeout on the target box, so the
+# panel only offers lengths that finish.
+DURATIONS = ["30 min", "1 hour", "2 hours"]
 PRIVACY = ["public", "unlisted", "private"]
 STREAM_QUALITY = ["720p15", "720p", "1080p", "1080p60"]
 
@@ -134,9 +122,16 @@ def is_configured() -> bool:
 
 
 # ── Render defaults (persisted to .env, read fresh each render dialog open) ───
-DEFAULT_THEME = _env("DEFAULT_THEME", "random")
-DEFAULT_DURATION = _env("DEFAULT_DURATION", "2 hours")
-DEFAULT_PRIVACY = _env("DEFAULT_PRIVACY", "public")
+def _choice(name: str, options: list[str], fallback: str) -> str:
+    """A .env default that isn't one of the dropdown's options would make
+    NiceGUI's ui.select raise when the dialog opens, so fall back instead."""
+    value = _env(name, fallback)
+    return value if value in options else fallback
+
+
+DEFAULT_THEME = _choice("DEFAULT_THEME", THEMES, "random")
+DEFAULT_DURATION = _choice("DEFAULT_DURATION", DURATIONS, "1 hour")
+DEFAULT_PRIVACY = _choice("DEFAULT_PRIVACY", PRIVACY, "public")
 
 
 # ── .env editing (Settings tab) ─────────────────────────────────────────────
@@ -144,41 +139,41 @@ DEFAULT_PRIVACY = _env("DEFAULT_PRIVACY", "public")
 # reads .env once at startup (see webui.py's load_dotenv() call). The UI makes
 # that explicit rather than pretending a live reload happens.
 def read_env_file() -> dict[str, str]:
-    """Parse .env into {KEY: value}, ignoring comments/blank lines."""
-    values: dict[str, str] = {}
+    """Parse .env exactly the way the pipeline does (python-dotenv), so quoted
+    values and inline comments are read the same here as at runtime."""
     if not os.path.exists(ENV_FILE):
-        return values
-    with open(ENV_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            values[k.strip()] = v.strip()
-    return values
+        return {}
+    from dotenv import dotenv_values
+    return {k: (v or "") for k, v in dotenv_values(ENV_FILE).items()}
+
+
+def _quote_env_value(value: str) -> str:
+    """Quote a value when python-dotenv would otherwise misread it: an
+    unquoted ' #' starts a comment, and surrounding quotes/spaces are stripped."""
+    if value == "" or not any(c in value for c in " \t#'\"\\=$"):
+        return value
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def write_env_value(key: str, value: str) -> None:
-    """Update (or append) KEY=value in .env, preserving other lines/comments."""
+    """Update (or append) KEY=value in .env, preserving other lines/comments.
+    The file is replaced atomically and is never readable by other users."""
     if "\n" in value or "\r" in value:
-        # A newline in the value would inject extra, uncontrolled lines into .env
-        # (e.g. a pasted multi-line value could silently add unrelated KEY=VALUE
-        # entries). .env doesn't support multi-line values without quoting we
-        # don't implement, so reject rather than corrupt.
+        # A newline in the value would inject extra, uncontrolled lines into .env.
         raise ValueError(f"{key}: value can't contain a newline")
     lines: list[str] = []
     if os.path.exists(ENV_FILE):
         with open(ENV_FILE) as f:
             lines = f.readlines()
-    found = False
+    entry = f"{key}={_quote_env_value(value)}\n"
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped == key or stripped.startswith(f"{key}="):
-            lines[i] = f"{key}={value}\n"
-            found = True
+        if stripped == key or stripped.startswith(f"{key}=") or stripped.startswith(f"export {key}="):
+            lines[i] = entry
             break
-    if not found:
-        lines.append(f"{key}={value}\n")
-    with open(ENV_FILE, "w") as f:
-        f.writelines(lines)
-    os.chmod(ENV_FILE, 0o600)
+    else:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.append(entry)
+    from scripts.fileutil import atomic_write_text
+    atomic_write_text(ENV_FILE, "".join(lines), mode=0o600)

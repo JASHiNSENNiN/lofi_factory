@@ -10,13 +10,11 @@ Runs the full pipeline:
   6. Upload to YouTube (optional)
 
 Usage:
-  python run.py                          # Full pipeline, random theme, 2hr video
+  python run.py                          # Full pipeline, random theme, 1hr video
   python run.py --theme winter_snow      # Specific theme
   python run.py --duration "1 hour"      # Specific duration
   python run.py --skip-visual            # Skip visual gen (use existing)
   python run.py --skip-upload            # Skip YouTube upload
-  python run.py --music-mode mock        # Mock music (test without GPU)
-  python run.py --music-mode colab       # Print Colab code for music gen
   python run.py --visual-seed 42         # Reproducible render
   python run.py --stream                 # Live stream to YouTube instead of upload
   python run.py --stream --stream-test   # Test stream locally (60s → output/stream_test.mp4)
@@ -33,7 +31,6 @@ import os
 import sys
 import argparse
 import fcntl
-import random
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -50,10 +47,18 @@ def _acquire_pipeline_lock():
     used when uploading. Returns the open lock file (keep it referenced for
     the lifetime of the run — closing it releases the lock).
     """
+    import time as _time
     lock_file = open(_LOCK_PATH, "w")
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    # The web panel checks whether a run is active by taking this lock for an
+    # instant, so a few quick retries tell that probe apart from a real run.
+    for attempt in range(10):
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if attempt < 9:
+                _time.sleep(0.2)
+    else:
         print("[run.py] Another pipeline run is already in progress "
               f"(lock held: {_LOCK_PATH}).")
         print("          If this is the 24/7 auto-upload loop, wait for it to finish or stop it:")
@@ -71,109 +76,34 @@ if os.path.exists(_env_path):
         pass
 
 
-def _cleanup_old_files(root: str, uploaded_video: str,
-                        keep_visuals: int = 2,
-                        keep_music: int = 10,
-                        keep_assets: int = 5) -> None:
-    """Delete uploaded video + prune old files to free disk space."""
-    import glob as _glob
-
-    freed = 0
-
-    def _prune(pattern: str, keep: int) -> int:
-        files = sorted(_glob.glob(pattern), key=os.path.getmtime, reverse=True)
-        removed = 0
-        for f in files[keep:]:
-            try:
-                sz = os.path.getsize(f)
-                os.remove(f)
-                removed += sz
-            except OSError:
-                pass
-        return removed
-
-    # Delete the uploaded video (already on YouTube, largest file)
-    if uploaded_video and os.path.exists(uploaded_video):
-        try:
-            freed += os.path.getsize(uploaded_video)
-            os.remove(uploaded_video)
-        except OSError:
-            pass
-
-    # Keep only N most-recent visuals (bg loops, reusable)
-    freed += _prune(os.path.join(root, "visuals", "bg_*.mp4"), keep_visuals)
-
-    # Keep only N most-recent music tracks
-    freed += _prune(os.path.join(root, "music", "*.wav"), keep_music)
-    freed += _prune(os.path.join(root, "music", "*.mp3"), keep_music)
-
-    # Keep only N most-recent assets (thumbnails + SEO JSON)
-    freed += _prune(os.path.join(root, "assets", "thumb_*.png"), keep_assets)
-    freed += _prune(os.path.join(root, "assets", "thumb_*.jpg"), keep_assets)
-    freed += _prune(os.path.join(root, "assets", "seo_*.json"), keep_assets)
-
-    if freed:
-        print(f"\n[cleanup] Freed {freed / 1_048_576:.1f} MB of disk space.")
-
-
 def main():
     parser = argparse.ArgumentParser(description="Lo-fi Factory — Full Pipeline")
     from scripts.visual_v2.themes import ALL_THEMES
 
     parser.add_argument("--theme", choices=ALL_THEMES,
-                        default=None, help="Visual theme (default: random)")
-    ALL_DURATIONS  = ["30 min", "45 min", "1 hour", "90 min", "2 hours", "3 hours", "4 hours", "8 hours", "10 hours"]
-    # Weighted for MAXIMUM WATCH TIME (= ad revenue + YPP progress):
-    # 8h/10h catch overnight sleepers/studiers — single view = 8-10h watch time
-    # 2-4h sweet spot for study sessions
-    # Short durations de-prioritised (low watch time per view)
-    DURATION_WEIGHTS = [1, 2, 8, 4, 18, 18, 16, 20, 13]
-    # Auto-scale track count so each duration has enough variety (~5 min/track)
-    DURATION_MUSIC_COUNT = {
-        "30 min": 2, "45 min": 3, "1 hour": 4, "90 min": 6,
-        "2 hours": 8, "3 hours": 12, "4 hours": 15, "5 hours": 18, "8 hours": 25, "10 hours": 30, "all night": 25,
-    }
+                        default=None, help="Visual theme (default: one that fits the genre and season)")
     parser.add_argument("--duration", default=None,
                         choices=["30 min", "45 min", "1 hour", "90 min",
                                  "2 hours", "3 hours", "4 hours", "5 hours",
                                  "8 hours", "10 hours", "all night"])
-    parser.add_argument("--music-mode", default="midi",
-                        choices=["mock", "midi", "colab"],
-                        help="midi=MIDI+FluidSynth, entirely procedural (default), mock=placeholder, colab=print Colab code")
-    # Three-state: None (default) = let the engagement-analytics engine
-    # bandit (scripts.analytics.engine_weights()) choose v1 vs v2, weighted
-    # by which has performed better (neutral 50/50 with no data yet).
-    # --music-v2/--no-music-v2 explicitly force v2/v1, which always wins
-    # over the bandit (explicit flag > auto-selection). BooleanOptionalAction
-    # (not plain store_true) is what makes the "not passed at all" state
-    # distinguishable from "explicitly forced off".
     parser.add_argument("--music-v2", action=argparse.BooleanOptionalAction, default=None,
-                        help="Use v2 beta music generator (improved voice leading, melody, bass, humanization). "
-                             "Omit to let the engagement-analytics bandit pick v1/v2 automatically; "
-                             "--no-music-v2 forces v1.")
+                        help="Use the experimental v2 composer instead of v1 (default: v1).")
     parser.add_argument("--music-count", type=int, default=None,
-                        help="Number of tracks to generate (default: auto-scaled to duration)")
+                        help="Number of tracks to generate (default: enough to fill the duration without repeats)")
     parser.add_argument("--skip-visual", action="store_true",
                         help="Skip visual generation (use existing visual)")
     parser.add_argument("--skip-music", action="store_true",
                         help="Skip music generation (use existing files in music/)")
     parser.add_argument("--skip-upload", action="store_true",
                         help="Skip YouTube upload step")
-    parser.add_argument("--use-ollama", action="store_true",
-                        help="Use local Ollama to enhance SEO description")
     parser.add_argument("--visual-seed", type=int, default=None,
                         help="Seed for visual scene layout (random if omitted — use to reproduce a specific render)")
-    parser.add_argument("--ai-bg", action="store_true",
-                        help="Use an AI-generated (Pollinations.ai) background scene instead of the "
-                             "procedural gradient background. Off by default.")
-    parser.add_argument("--regen-bg", action="store_true",
-                        help="Force regenerate the AI background even if a cached version exists")
     parser.add_argument("--stream", action="store_true",
                         help="Live stream to YouTube instead of assembling a file")
     parser.add_argument("--stream-test", action="store_true",
                         help="With --stream: encode 60s locally instead of pushing to YouTube")
     # Lazy import: genre_presets.load_all() only globs+parses config/genres/*.yaml
-    # (no soundfont-pool filesystem scan, unlike importing generate_music_gemini
+    # (no soundfont-pool filesystem scan, unlike importing composer
     # at module top level) — cheap enough to pay even when --sub-genre is never
     # used, and keeps run.py's own module-level footprint unchanged.
     from scripts.genre_presets import load_all as _load_all_subgenres
@@ -188,44 +118,14 @@ def main():
 
     _pipeline_lock = _acquire_pipeline_lock()  # noqa: F841 — held for the life of this run
 
-    # Genre → preferred visual theme mapping.
-    # Keeps visual world consistent with the music genre when theme not forced.
-    _GENRE_THEME = {
-        "lo-fi hip hop":   None,          # any theme
-        "lofi jazz":       "midnight_cafe",
-        "chillhop":        "cozy_rain",
-        "bossa nova lofi": "summer_lofi",
-        "neo-soul lofi":   "lofi_rnb",
-        "lofi ambient":    "blue_hour",
-        "city pop lofi":   "neon_tokyo",
-        "dark lofi":       "midnight_cafe",
-        # New research-driven subgenres' SEO labels (scripts/generate_seo.py
-        # _SUBGENRE_TO_GENRE_LABEL) -- "lofi ambient" (sleep_lofi's label)
-        # already maps to blue_hour above, so no entry needed for it here.
-        # lofi_drill/lofi_world have no SEO label at all (see the comment in
-        # generate_seo.py), so there was no existing pattern to check against
-        # for them -- these two are added because a genuinely good visual
-        # fit already exists in scripts/visual_v2/themes.py.
-        "lofi garage":     "lofi_house",   # nocturnal/moody neon-blue night fits UKG-adjacent mood
-        "synthwave lofi":  "vaporwave",    # 80s neon retro palette is the closest existing visual match
-    }
-
+    # Default matches what the unattended run can actually render in time
+    # (see publish._dynamic_max_safe_duration).
     duration_was_set = args.duration is not None
-    if duration_was_set:
-        duration = args.duration
-    else:
-        # Combine the hand-tuned strategic prior (DURATION_WEIGHTS) with a
-        # performance-informed multiplier from real watch-time data, same
-        # 0.5x-2.0x/needs-5-samples pattern generate_seo.py's pillar weighting
-        # already uses -- nudges toward durations that actually retain viewers
-        # rather than replacing the strategic prior outright.
-        from scripts.assemble_video import DURATION_MAP
-        from scripts.analytics import duration_weights as _duration_weights
-        _dw = _duration_weights(DURATION_MAP)
-        combined_weights = [w * _dw.get(d, 1.0) for d, w in zip(ALL_DURATIONS, DURATION_WEIGHTS)]
-        duration = random.choices(ALL_DURATIONS, weights=combined_weights, k=1)[0]
-    args.duration    = duration
-    music_count      = args.music_count if args.music_count is not None else DURATION_MUSIC_COUNT.get(duration, 6)
+    duration = args.duration or "1 hour"
+    args.duration = duration
+    from scripts.assemble_video import DURATION_MAP, tracks_for_duration
+    music_count = (args.music_count if args.music_count is not None
+                   else tracks_for_duration(DURATION_MAP[duration]))
 
     # ── TREND RESEARCH (feeds concept + title + tags) ──────────
     print("\n  Fetching trend data...")
@@ -249,93 +149,39 @@ def main():
     if args.mood:
         concept_hint = args.mood
 
-    # Theme: use --theme if set, otherwise derive from genre, else random
-    if args.theme:
-        theme = args.theme
-    else:
-        preferred = _GENRE_THEME.get(genre_hint)
-        theme = preferred if preferred else random.choice(ALL_THEMES)
+    # The theme is chosen after the music (below), from the genre that
+    # actually plays; --theme still wins.
+    theme = args.theme
 
     print("=" * 60)
     print("  LO-FI FACTORY")
-    print(f"  Theme:    {theme}")
-    print(f"  Duration: {duration}{'' if duration_was_set else ' (random)'}")
-    print(f"  Music:    {args.music_mode}")
+    print(f"  Theme:    {theme or '(matched to the music)'}")
+    print(f"  Duration: {duration}{'' if duration_was_set else ' (default)'}")
     print(f"  Genre:    {genre_hint or 'lo-fi hip hop'}")
     print(f"  Concept:  {concept_hint or '(random)'}")
     print("=" * 60)
 
-    # ── STEP 1: Visual ─────────────────────────────────────────
-    # Derive short now-playing title + genre from the concept for the UI panel
-    np_title = concept.get("mood_line") or concept.get("concept") or "lofi dreams"
-    np_genre = concept.get("genre_label", "lo-fi hip hop")
-
-    if not args.skip_visual:
-        vis_secs = 60
-        print("\n[1/5] Generating lo-fi visual (radio interface)...")
-        from scripts.visual_v2 import generate_visual
-        visual_path, theme = generate_visual(
-            theme_name=theme, duration_secs=vis_secs,
-            visual_seed=args.visual_seed,
-            track_title=np_title, genre=np_genre,
-            use_ai_bg=args.ai_bg,
-            regen_bg=args.regen_bg,
-        )
-    else:
-        print("\n[1/5] Skipping visual generation (using existing)")
-        import glob
-        visuals = glob.glob(os.path.join(ROOT, "visuals", "bg_*.mp4"))
-        visual_path = visuals[0] if visuals else None
-        if not visual_path:
-            print("  WARNING: No visual found. Assembler will generate a gradient fallback.")
-
-    # ── STEP 2: Music ──────────────────────────────────────────
+    # ── STEP 1: Music ──────────────────────────────────────────
     generated_tracks = []
     if not args.skip_music:
-        print(f"\n[2/5] Music mode: {args.music_mode}")
-
-        if args.music_mode == "midi":
-            if args.music_v2 is None:
-                # No explicit --music-v2/--no-music-v2 on the CLI — let the
-                # engagement-analytics engine bandit choose (neutral 50/50
-                # when there's no/insufficient data yet). try/except-guarded
-                # the same way every other optional analytics-feedback layer
-                # is (sub_genre_weights()/bpm_bucket_weights() above) — a
-                # missing/corrupt analytics log must never block a render.
-                try:
-                    from scripts.analytics import engine_weights
-                    _ew = engine_weights()
-                    use_v2 = random.choices(
-                        ["v1", "v2"], weights=[_ew.get("v1", 1.0), _ew.get("v2", 1.0)], k=1,
-                    )[0] == "v2"
-                except Exception as _eng_e:
-                    print(f"  [run] Engine bandit selection failed ({_eng_e}) — defaulting to v1")
-                    use_v2 = False
-            else:
-                use_v2 = args.music_v2  # explicit flag wins over the bandit
-            if use_v2:
-                from scripts.generate_music_v2 import generate_tracks
-                print("[run] Using music generator v2 (beta)")
-            else:
-                from scripts.generate_music_gemini import generate_tracks
-            generated_tracks = generate_tracks(count=music_count, concept_hint=concept_hint, genre_hint=genre_hint)
-        elif args.music_mode == "mock":
-            from scripts.generate_music import generate_mock
-            generated_tracks = generate_mock(count=music_count, duration_secs=300)
-        elif args.music_mode == "colab":
-            from scripts.generate_music import print_colab_code
-            print_colab_code(count=10)
-            print("\n[!] Colab mode: drop your .wav/.mp3 files into music/ then re-run with --skip-music")
-            sys.exit(0)
+        print("\n[1/5] Generating music...")
+        # v1 is the production composer; v2 only when asked for explicitly.
+        use_v2 = bool(args.music_v2)
+        if use_v2:
+            from scripts.generate_music_v2 import generate_tracks
+            print("[run] Using music generator v2 (beta)")
+        else:
+            from scripts.composer import generate_tracks
+        generated_tracks = generate_tracks(count=music_count, concept_hint=concept_hint, genre_hint=genre_hint)
     else:
-        print("\n[2/5] Skipping music generation (using existing files)")
+        print("\n[1/5] Skipping music generation (using existing files)")
 
     # Align concept genre_label + mood_line with what was actually generated.
     # pick_concept() guesses the genre up-front; the algorithm may pick a different
     # sub_genre. Read the first track's .meta.json sidecar to correct the concept.
     #
     # Also stash sub_genre/bpm/music_engine (the fields the composition
-    # bandits — sub_genre_weights()/bpm_bucket_weights()/engine_weights() —
+    # bandits — sub_genre_weights()/bpm_bucket_weights() —
     # need to learn from) onto local vars here, the same way genre_label
     # flows through `concept` above, so they can be copied onto `seo` right
     # after generate_seo() runs and from there into upload_log.json's
@@ -345,9 +191,13 @@ def main():
     music_sub_genre = ""
     music_bpm = None
     music_engine = "v1"
-    if generated_tracks:
+    import glob as _glob
+    _metas = ([generated_tracks[0] + ".meta.json"] if generated_tracks else
+              sorted(_glob.glob(os.path.join(ROOT, "music", "*.wav.meta.json")),
+                     key=os.path.getmtime)[-1:])   # --skip-music: the reused tracks
+    if _metas:
         import json as _json
-        meta_path = generated_tracks[0] + ".meta.json"
+        meta_path = _metas[0]
         if os.path.exists(meta_path):
             try:
                 with open(meta_path) as _mf:
@@ -361,16 +211,55 @@ def main():
                 music_sub_genre = _meta.get("genre", "") or ""
                 music_bpm = _meta.get("bpm")
                 music_engine = _meta.get("music_engine") or "v1"
-                print(f"  [SEO] Aligned to music: genre={concept['genre_label']!r} mood={concept['mood_line']!r}")
+                print(f"  [SEO] Aligned to music: genre={concept['genre_label']!r}")
             except Exception as _e:
                 print(f"  [SEO] Alignment skipped ({_e})")
 
-    # ── STEP 3: SEO ────────────────────────────────────────────
-    print("\n[3/5] Generating SEO metadata...")
+    if not theme:
+        from scripts.titles import theme_for_genre
+        from scripts.composer import _resolve_genre_hint
+        theme = theme_for_genre(music_sub_genre or _resolve_genre_hint(genre_hint or ""))
+
+    # ── STEP 2: SEO, then the visual ──────────────────────────
+    # A reused visual (--skip-visual) fixes the theme first; the SEO comes
+    # next, so the visual's "THIS SESSION" panel can carry the title's own
+    # scene (the same words as the thumbnail), and its genre badge names the
+    # genre that actually plays (every track in a video shares one sub-genre).
+    visual_path = None
+    if args.skip_visual:
+        import glob
+        import re as _re
+        # Prefer a loop of the chosen theme; otherwise reuse the latest one
+        # and take its theme, so the thumbnail matches what's on screen.
+        same = glob.glob(os.path.join(ROOT, "visuals", f"bg_{theme}_*.mp4"))
+        visuals = same or glob.glob(os.path.join(ROOT, "visuals", "bg_*.mp4"))
+        visual_path = max(visuals, key=os.path.getmtime) if visuals else None
+        if visual_path:
+            m = _re.match(r"bg_(.+)_\d{8}_\d{6}\.mp4$", os.path.basename(visual_path))
+            if m and m.group(1) != theme:
+                print(f"  Reusing a {m.group(1)} visual, so the theme is now {m.group(1)}.")
+                theme = m.group(1)
+
+    print("\n[2/5] Generating SEO metadata...")
     from scripts.generate_seo import generate_seo
-    seo, seo_path = generate_seo(theme_name=theme, duration=args.duration,
-                                  use_ollama=args.use_ollama, concept=concept,
+    seo, seo_path = generate_seo(theme_name=theme, duration=duration,
+                                  concept=concept,
                                   trends=trends)
+
+    np_title = seo.get("thumb_text") or concept.get("mood_line") or "lofi dreams"
+    np_genre = concept.get("genre_label", "lo-fi hip hop")
+    if not args.skip_visual:
+        print("\n[3/5] Generating lo-fi visual (radio interface)...")
+        from scripts.visual_v2 import generate_visual
+        visual_path, theme = generate_visual(
+            theme_name=theme, duration_secs=60,
+            visual_seed=args.visual_seed,
+            track_title=np_title, genre=np_genre,
+        )
+    else:
+        print("\n[3/5] Skipping visual generation (using existing)")
+        if not visual_path:
+            print("  WARNING: No visual found. Assembler will generate a gradient fallback.")
 
     # Stash composition-selection metadata (sub_genre/bpm/music_engine) onto
     # `seo` -- the same dict pillar/duration already ride on into
@@ -394,11 +283,13 @@ def main():
     print("\n[4/5] Generating thumbnail...")
     import time
     from scripts.generate_thumbnail_cozy import generate_thumbnail
-    thumb_variant = int(time.time()) % 100
+    thumb_variant = int(time.time()) % 1_000_000   # seeds the room: 100 values repeated pictures
     thumb_path, thumb_title = generate_thumbnail(
         theme_name=theme,
         duration=args.duration,
         title=seo.get("title"),
+        text=seo.get("thumb_text"),
+        genre=seo.get("genre_label", ""),
         variant=thumb_variant
     )
 
@@ -413,6 +304,8 @@ def main():
             theme_name=theme,
             duration=args.duration,
             title=seo.get("title"),
+            text=seo.get("thumb_text"),
+        genre=seo.get("genre_label", ""),
             variant=thumb_variant + 1,
         )
         alt_path = thumb_path.rsplit(".", 1)[0] + "_alt.jpg"
@@ -478,7 +371,18 @@ def main():
 
     print("\n[5/5] Assembling final video...")
     from scripts.assemble_video import assemble
-    video_path = assemble(theme_name=theme, duration_label=args.duration, visual_path=visual_path, music_files=generated_tracks)
+    video_path = assemble(theme_name=theme, duration_label=args.duration, visual_path=visual_path,
+                          music_files=generated_tracks or None)   # None: --skip-music uses music/ as is
+
+    # Real chapters: the assembler recorded where each track actually starts.
+    import json as _json
+    tracks_path = video_path + ".tracks.json"
+    if os.path.exists(tracks_path):
+        from scripts.generate_seo import with_tracklist
+        from scripts.fileutil import atomic_write_json
+        with open(tracks_path) as _tf:
+            seo["description"] = with_tracklist(seo["description"], _json.load(_tf))
+        atomic_write_json(seo_path, seo, ensure_ascii=False)
 
     # ── STEP 6: Upload ─────────────────────────────────────────
     upload_ok = False
@@ -492,13 +396,8 @@ def main():
             upload_ok = True
             # Write upload log so analytics.py can track this upload
             import datetime as _dt, json as _json
-            _log_path = os.path.join(ROOT, "upload_log.json")
-            _log = []
-            if os.path.exists(_log_path):
-                with open(_log_path) as _f:
-                    try: _log = _json.load(_f)
-                    except Exception: pass
-            _log.append({
+            from scripts.fileutil import append_json_list
+            append_json_list(os.path.join(ROOT, "upload_log.json"), {
                 "type":             "upload",
                 "video_id":         video_id,
                 "url":              url,
@@ -512,7 +411,7 @@ def main():
                 "seo_ref":          seo.get("ref_id", ""),
                 "video_file":       os.path.basename(video_path),
                 # Composition-selection feedback — see scripts/analytics.py's
-                # sub_genre_weights()/bpm_bucket_weights()/engine_weights().
+                # sub_genre_weights()/bpm_bucket_weights().
                 # Defaults mirror sync_analytics()'s container-construction
                 # defaults so an older-format seo dict (missing these keys)
                 # never crashes this log-append.
@@ -521,10 +420,8 @@ def main():
                 "music_engine":     seo.get("music_engine") or "v1",
                 "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
             })
-            with open(_log_path, "w") as _f:
-                _json.dump(_log, _f, indent=2)
         except SystemExit:
-            print("  Upload skipped (auth not set up yet)")
+            print("  Upload failed: YouTube isn't connected. Video is ready at:", video_path)
         except Exception as e:
             print(f"  Upload failed: {e}")
             print("  Video is ready at:", video_path)
@@ -533,7 +430,8 @@ def main():
 
     # ── STEP 7: Cleanup old files (prevent disk fill) ──────────
     if upload_ok:
-        _cleanup_old_files(ROOT, video_path)
+        from scripts.cleanup import cleanup_after_upload
+        cleanup_after_upload(ROOT, video_path)
 
     print("\n" + "=" * 60)
     print("  PIPELINE COMPLETE")
@@ -555,6 +453,8 @@ def main():
         "seo": seo_path,
     }
     print(f"[RESULT] {_json.dumps(_result)}")
+    if not args.skip_upload and not upload_ok:
+        sys.exit(1)   # the video exists, but what was asked for didn't happen
 
 
 if __name__ == "__main__":

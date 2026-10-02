@@ -8,7 +8,7 @@ Manages the full broadcast lifecycle so the stream actually shows up on the chan
   3. Create ingestion stream → get RTMP address + key
   4. Bind broadcast to stream
   5. After ffmpeg connects, poll stream health → transition broadcast to LIVE
-  6. Update broadcast title when track changes (rate-limited to ≤1 per 5 min)
+  6. Add the current track to the broadcast title (rate-limited, see _TITLE_COOLDOWN)
   7. End broadcast on Ctrl+C (transitions to 'complete')
 
 Falls back to env-var YT_STREAM_KEY if credentials not available.
@@ -18,23 +18,22 @@ Auth setup (one time):
 """
 
 import os
-import sys
 import time
 import datetime
 import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-    "https://www.googleapis.com/auth/youtube.upload",
-]
+from scripts.upload_youtube import SCOPES  # noqa: E402  (one definition project-wide)
 CLIENT_SECRET = os.path.join(ROOT, "client_secret.json")
 TOKEN_FILE    = os.path.join(ROOT, "token.json")
 
 _POLL_INTERVAL      = 5    # seconds between stream-health polls
 _TRANSITION_TIMEOUT = 120  # give up transitioning after 2 min
-_TITLE_COOLDOWN     = 120  # 2 min — max 720/day × 50 units = 36,000 but live streams rarely run 24h straight
+# Each title update costs ~51 quota units (a 1-unit read plus a 50-unit
+# update) out of a default 10,000/day that the daily upload, thumbnails and
+# analytics also need. Every 30 min is at most 48 updates = ~2,450 units/day.
+_TITLE_COOLDOWN     = 1800
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -176,7 +175,7 @@ def _create_broadcast_and_stream(youtube, title, theme_name=None):
             "cdn": {
                 "ingestionType": "rtmp",
                 "resolution": "720p",
-                "frameRate": "15fps",
+                "frameRate": "variable",   # documented values: 30fps, 60fps, variable
             },
         }
     ).execute()
@@ -191,7 +190,7 @@ def _create_broadcast_and_stream(youtube, title, theme_name=None):
         id=broadcast_id,
         streamId=stream_id,
     ).execute()
-    print(f"  [yt-api] Bound broadcast to ingestion stream")
+    print("  [yt-api] Bound broadcast to ingestion stream")
     print(f"  [yt-api] RTMP: {ingest_addr}/***")
 
     return broadcast_id, stream_id, ingest_addr, stream_name, scheduled_start
@@ -221,7 +220,7 @@ def setup_live_stream(theme_name=None, stream_key_override=None):
             print("  [yt-api] WARNING: No API credentials AND no YT_STREAM_KEY set!")
             print("           The stream cannot push to YouTube without one of these.")
         else:
-            print(f"  [yt-api] Using env-var stream key (no API credentials)")
+            print("  [yt-api] Using env-var stream key (no API credentials)")
         return {
             "rtmp_url": fallback_url, "broadcast_id": None,
             "stream_id": None, "scheduled_start": None, "youtube": None,
@@ -241,12 +240,12 @@ def setup_live_stream(theme_name=None, stream_key_override=None):
                 "rtmp_url": f"{ingest_addr}/{stream_name}",
                 "broadcast_id": bid, "stream_id": stream_id,
                 "scheduled_start": bsched, "youtube": youtube,
+                "title": radio_title(theme_name),
             }
         print("  [yt-api] Existing broadcast has no bound stream — creating new one")
 
     # Create a fresh broadcast
-    theme_label = theme_name.replace("_", " ").title() if theme_name else "Lo-Fi Chill"
-    title = f"Lo-Fi Hip Hop Radio — {theme_label} | beats to relax/study to"[:100]
+    title = radio_title(theme_name)
     try:
         broadcast_id, stream_id, ingest_addr, stream_name, scheduled_start = \
             _create_broadcast_and_stream(youtube, title, theme_name)
@@ -254,10 +253,11 @@ def setup_live_stream(theme_name=None, stream_key_override=None):
             "rtmp_url": f"{ingest_addr}/{stream_name}",
             "broadcast_id": broadcast_id, "stream_id": stream_id,
             "scheduled_start": scheduled_start, "youtube": youtube,
+            "title": title,
         }
     except Exception as e:
         print(f"  [yt-api] Broadcast creation failed: {e}")
-        print(f"  [yt-api] Falling back to env-var stream key")
+        print("  [yt-api] Falling back to env-var stream key")
         return {
             "rtmp_url": fallback_url, "broadcast_id": None,
             "stream_id": None, "scheduled_start": None, "youtube": None,
@@ -340,13 +340,34 @@ def end_broadcast(youtube, broadcast_id):
 
 # ── Live title updater ────────────────────────────────────────────────────────
 
+def radio_title(theme_name: str | None = None) -> str:
+    """The 24/7 stream's title: the searched phrase first, the way the big
+    radio streams are titled ("lofi hip hop radio 📚 beats to relax/study
+    to"). The library mixes genres, so the title names none but lofi hip hop.
+    (It used to read "Lo-Fi Hip Hop Radio — Lofi House | ..." from the theme
+    key, which named a genre the stream may not play.)"""
+    from scripts.titles import EMOJI
+    return f"lofi hip hop radio {EMOJI.get(theme_name or '', '🎧')} beats to relax/study to"
+
+
+def now_playing_title(base: str, track: str) -> str:
+    """The radio title with the current track after it; the searched words
+    stay first and the track name is cut, never the title."""
+    room = 100 - len(base) - len(" · ♪ ")
+    track = (track or "").strip()
+    if room < 8 or not track:
+        return base[:100]
+    return f"{base} · ♪ {track[:room].rstrip()}"
+
+
 class LiveTitleUpdater:
     """
     Background thread that updates the YouTube broadcast title as tracks change.
     Rate-limited to max 1 update per _TITLE_COOLDOWN seconds to conserve quota.
     """
 
-    def __init__(self, youtube, broadcast_id, scheduled_start):
+    def __init__(self, youtube, broadcast_id, scheduled_start, base_title: str | None = None):
+        self._base    = base_title or radio_title()
         self._yt      = youtube
         self._bid     = broadcast_id
         self._sched   = scheduled_start or \
@@ -360,7 +381,7 @@ class LiveTitleUpdater:
 
     def set_track(self, title, genre):
         """Call when track changes. Queues a broadcast title update."""
-        label = f"{title[:60]} | Lo-Fi Radio"
+        label = now_playing_title(self._base, title)
         with self._lock:
             self._pending = label
 
@@ -378,13 +399,22 @@ class LiveTitleUpdater:
 
             if pending:
                 try:
+                    # update(part="snippet") replaces the whole snippet: any
+                    # field left out (the description) is erased. Read the
+                    # current snippet and change only the title.
+                    resp = self._yt.liveBroadcasts().list(part="snippet", id=self._bid).execute()
+                    items = resp.get("items") or []
+                    if not items:
+                        raise RuntimeError("broadcast not found")
+                    current = items[0]["snippet"]
                     self._yt.liveBroadcasts().update(
                         part="snippet",
                         body={
                             "id": self._bid,
                             "snippet": {
                                 "title": pending[:100],
-                                "scheduledStartTime": self._sched,
+                                "description": current.get("description", ""),
+                                "scheduledStartTime": current.get("scheduledStartTime", self._sched),
                             },
                         }
                     ).execute()

@@ -60,7 +60,7 @@ _engagement_cache: dict = {}  # video_id -> {"at": float, "likes": int, "comment
 _ENGAGEMENT_TTL = 120
 
 
-def video_engagement(video_ids: list[str]) -> dict[str, dict]:
+def video_engagement(video_ids: list[str], force: bool = False) -> dict[str, dict]:
     """{video_id: {likes, comments, views}} via one batched videos.list call
     (up to 50 ids per request, chunked if more). Cached per-id for 2 min;
     safe/no-throw -- missing ids on error just aren't included in the
@@ -68,7 +68,7 @@ def video_engagement(video_ids: list[str]) -> dict[str, dict]:
     now = time.time()
     fresh = {vid: {"likes": v["likes"], "comments": v["comments"], "views": v.get("views", 0)}
              for vid, v in _engagement_cache.items()
-             if vid in video_ids and now - v["at"] < _ENGAGEMENT_TTL}
+             if not force and vid in video_ids and now - v["at"] < _ENGAGEMENT_TTL}
     stale = [v for v in video_ids if v not in fresh]
     if not stale:
         return fresh
@@ -175,6 +175,23 @@ def _nearest(dt, candidates: list[dict], window_secs: int = 120) -> dict | None:
     return best
 
 
+_SEO_RE = re.compile(r"^seo_(\d{8}_\d{6})\.json$")
+
+
+def _seo_title_before(dt, seos: list[tuple]) -> str | None:
+    """The title from the SEO file the same run wrote: the newest one written
+    before the thumbnail (run.py writes the SEO first, then renders the
+    visual, so it can be several minutes older), within a few hours."""
+    for when, path in seos:          # newest first
+        if when <= dt and (dt - when).total_seconds() <= 3 * 3600:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f).get("title")
+            except (OSError, ValueError):
+                return None
+    return None
+
+
 def library(limit: int = 24) -> list[dict]:
     """
     Newest-first render cards: {theme, dt, thumb, title, url, video_id, video_file, when}.
@@ -185,6 +202,12 @@ def library(limit: int = 24) -> list[dict]:
     thumbs.sort(key=lambda t: t["dt"], reverse=True)
     logs = _log_index()
     videos = _video_index()
+    seos = []
+    for p in glob.glob(os.path.join(config.ASSETS_DIR, "seo_*.json")):
+        m = _SEO_RE.match(os.path.basename(p))
+        if m:
+            seos.append((datetime.strptime(m.group(1), "%Y%m%d_%H%M%S"), p))
+    seos.sort(reverse=True)
 
     cards = []
     for t in thumbs[:limit]:
@@ -195,7 +218,9 @@ def library(limit: int = 24) -> list[dict]:
             "dt": t["dt"],
             "thumb": t["thumb"],
             "thumb_name": os.path.basename(t["thumb"]),
-            "title": (match or {}).get("title") or t["theme"].replace("_", " "),
+            # Published title, else the title this render was made with.
+            "title": ((match or {}).get("title") or _seo_title_before(t["dt"], seos)
+                      or t["theme"].replace("_", " ")),
             "url": (match or {}).get("url"),
             "video_id": (match or {}).get("video_id"),
             "video_file": (vid or {}).get("name"),
@@ -325,28 +350,6 @@ def list_comments(video_id: str, *, force: bool = False, client=None) -> list[di
     return out
 
 
-def list_replies(parent_id: str, *, client=None) -> list[dict] | None:
-    """Full reply list for one top-level comment via comments.list(parentId=...)
-    -- for when a thread's totalReplyCount exceeds the 5 inlined by
-    list_comments() above and the moderator expands "show more replies"."""
-    try:
-        yt = _yt_client(client)
-        out: list[dict] = []
-        page_token = None
-        while True:
-            r = yt.comments().list(
-                part="snippet", parentId=parent_id, maxResults=100,
-                textFormat="plainText", pageToken=page_token,
-            ).execute()
-            out.extend(_shape_comment(item["snippet"], item["id"]) for item in r.get("items", []))
-            page_token = r.get("nextPageToken")
-            if not page_token:
-                break
-        return out
-    except Exception:
-        return None
-
-
 _MODERATION_STATUSES = {"heldForReview", "published", "rejected"}
 
 
@@ -425,22 +428,32 @@ def get_video_details(video_id: str, *, client=None) -> dict | None:
         return None
 
 
+_SNIPPET_KEEP = ("defaultLanguage", "defaultAudioLanguage")
+_STATUS_KEEP = ("embeddable", "license", "publicStatsViewable", "publishAt",
+                "selfDeclaredMadeForKids", "containsSyntheticMedia")
+
+
 def update_video(video_id: str, *, title: str, description: str, tags: list[str],
                   privacy: str, category_id: str = "10", client=None) -> bool:
-    """videos.update — the API requires the full snippet/status resource for
-    any part being updated (not a partial patch), so callers must pass every
-    field, not just the one that changed. Returns True on success."""
+    """videos.update. The API replaces each part it's given, so a field left
+    out is deleted: sending only the edited fields erased the video's
+    made-for-kids declaration, license and embed settings, and its publishAt
+    (a scheduled video lost its schedule). The current resource is read
+    first and every writable field it has is sent back. True on success."""
     try:
         yt = _yt_client(client)
+        cur = (yt.videos().list(part="snippet,status", id=video_id).execute()
+               .get("items") or [{}])[0]
+        old_snip, old_status = cur.get("snippet") or {}, cur.get("status") or {}
+        snippet = {k: old_snip[k] for k in _SNIPPET_KEEP if k in old_snip}
+        snippet.update(title=title[:100], description=description[:4900], tags=tags,
+                       categoryId=category_id)
+        status = {k: old_status[k] for k in _STATUS_KEEP if k in old_status}
+        status["privacyStatus"] = privacy
+        if privacy != "private":
+            status.pop("publishAt", None)   # the API only allows publishAt on private videos
         yt.videos().update(part="snippet,status", body={
-            "id": video_id,
-            "snippet": {
-                "title": title[:100],
-                "description": description[:4900],
-                "tags": tags,
-                "categoryId": category_id,
-            },
-            "status": {"privacyStatus": privacy},
+            "id": video_id, "snippet": snippet, "status": status,
         }).execute()
         return True
     except Exception:
@@ -486,7 +499,10 @@ def regenerate_thumbnail(video_id: str, title: str) -> str | None:
         duration_label = min(DURATION_MAP, key=lambda k: abs(DURATION_MAP[k] - duration_secs))
 
     from scripts.generate_thumbnail_cozy import generate_thumbnail
-    out_path, _ = generate_thumbnail(theme_name=theme_name, duration=duration_label, title=title)
+    from scripts.generate_seo import _SUBGENRE_TO_GENRE_LABEL
+    genre = _SUBGENRE_TO_GENRE_LABEL.get(entry.get("sub_genre") or "", "")
+    out_path, _ = generate_thumbnail(theme_name=theme_name, duration=duration_label,
+                                     title=title, genre=genre)
     return out_path
 
 
@@ -639,3 +655,29 @@ def fmt_count(n: int | None) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"
     return str(n)
+
+
+# ── Background refresh ───────────────────────────────────────────────────────
+# Page builders read these cached calls synchronously. Refreshing them here,
+# off the event loop and more often than their 120 s TTL, means a page load
+# finds a warm cache instead of waiting on YouTube (which stalled every open
+# panel). Without a token every call returns at once, so this costs nothing
+# before YouTube is connected.
+WARM_EVERY_SECS = 90
+
+
+def warm_caches() -> None:
+    for fn in (lambda: channel_stats(force=True),
+               lambda: traffic_sources(force=True),
+               lambda: subscriber_growth(force=True),
+               lambda: revenue_stats(force=True) if revenue_available() else None):
+        try:
+            fn()
+        except Exception:
+            pass
+    try:
+        vids = [c["video_id"] for c in library(limit=200) if c.get("video_id")]
+        if vids:
+            video_engagement(vids, force=True)   # entries are replaced, never emptied
+    except Exception:
+        pass

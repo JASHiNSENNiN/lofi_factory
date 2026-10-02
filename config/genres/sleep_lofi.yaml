@@ -30,3 +30,4 @@ mix: {lpf_hz: 7000, bitcrush_bits: 10, reverb_room: 0.75, reverb_wet: 0.45, tape
 # No dedicated "flat, no section contrast" form exists (out of Task 3's
 # scope); 'ambient' is the closest existing structural fit.
 song_form: ambient
+pad_program: GM_NEW_AGE_PAD

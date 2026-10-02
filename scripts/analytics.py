@@ -26,10 +26,7 @@ from scripts.bandit import ThompsonSamplingBandit
 
 ROOT          = os.path.join(os.path.dirname(__file__), "..")
 
-_ANALYTICS_SCOPES = [
-    "https://www.googleapis.com/auth/yt-analytics.readonly",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-]
+from scripts.upload_youtube import SCOPES as _ANALYTICS_SCOPES  # noqa: E402
 _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 UPLOAD_LOG    = os.path.join(ROOT, "upload_log.json")
 ANALYTICS_LOG = os.path.join(ROOT, "assets", "analytics_log.json")
@@ -56,14 +53,17 @@ _METRIC_KEYS = (
 _PILLARS = ["temporal", "activity", "emotional", "aesthetic", "cross_genre"]
 
 
+class AnalyticsUnavailable(RuntimeError):
+    """Analytics can't be fetched: not connected, or no channel ID."""
+
+
 def _get_analytics_service():
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
     if not os.path.exists(TOKEN_FILE):
-        print("[analytics] ERROR: token.json not found. Run: python scripts/upload_youtube.py --auth")
-        sys.exit(1)
+        raise AnalyticsUnavailable("YouTube isn't connected (token.json not found).")
 
     creds = Credentials.from_authorized_user_file(TOKEN_FILE, _ANALYTICS_SCOPES)
     if creds.expired and creds.refresh_token:
@@ -91,8 +91,8 @@ def _get_channel_id() -> str:
             return items[0]["id"]
     except Exception as ex:
         print(f"[analytics] Could not fetch channel ID: {ex}")
-    print("[analytics] ERROR: Set YT_CHANNEL_ID in .env or ensure token has youtube.readonly scope.")
-    sys.exit(1)
+    raise AnalyticsUnavailable("Couldn't find the channel ID. Set YT_CHANNEL_ID in .env "
+                               "or reconnect YouTube.")
 
 
 def fetch_video_metrics(
@@ -190,6 +190,45 @@ def latest_metrics(entry: dict) -> dict:
         hist = entry.get("history") or []
         return hist[-1] if hist else {}
     return entry or {}
+
+
+SCORE_AT_AGE_DAYS = 7
+_RETENTION_WINDOW_SECS = 1800
+
+
+def metrics_at_age(entry: dict, days: int = SCORE_AT_AGE_DAYS) -> dict:
+    """The snapshot taken closest to `days` after upload, so videos of
+    different ages are compared on equal footing (a 60-day-old video has
+    piled up far more views than a 3-day-old one). Falls back to the latest
+    snapshot when upload date or snapshot dates are missing."""
+    if not _is_history_format(entry):
+        return entry or {}
+    hist = entry.get("history") or []
+    upload = entry.get("upload_date", "")
+    try:
+        target = (datetime.datetime.fromisoformat(upload[:10])
+                  + datetime.timedelta(days=days)).date()
+    except ValueError:
+        return hist[-1] if hist else {}
+    dated = []
+    for snap in hist:
+        try:
+            dated.append((abs((datetime.date.fromisoformat(snap.get("date", "")[:10]) - target).days), snap))
+        except ValueError:
+            continue
+    if not dated:
+        return hist[-1] if hist else {}
+    return min(dated, key=lambda d: d[0])[1]
+
+
+def ctr_fraction(value) -> float | None:
+    """Click-through rate as a fraction. Accepts either convention the API
+    might use (0.045 or 4.5 for 4.5%), so a unit mismatch can't silently pin
+    every CTR at 100%."""
+    if value is None:
+        return None
+    v = float(value)
+    return v / 100.0 if v > 1.0 else v
 
 
 def _load_raw_analytics() -> dict:
@@ -298,9 +337,9 @@ def sync_analytics() -> dict:
                     "title_chosen_idx":      entry.get("title_chosen_idx", 0),
                     "title_chosen_strategy": entry.get("title_chosen_strategy"),
                     "duration_secs":         entry.get("duration_secs"),
-                    # Composition-selection feedback (sub-genre/BPM/engine
-                    # bandits -- see sub_genre_weights()/bpm_bucket_weights()/
-                    # engine_weights() below): copied through the same way as
+                    # Composition-selection feedback (sub-genre/BPM bandits --
+                    # see sub_genre_weights()/bpm_bucket_weights() below):
+                    # copied through the same way as
                     # pillar/duration_secs above, defaulting sensibly for
                     # older upload_log entries logged before these fields
                     # existed so a pre-existing log never breaks a sync.
@@ -323,9 +362,9 @@ def sync_analytics() -> dict:
             updated += 1
             print(f"  {vid}  CTR={ctr:.2%}  views={views}  pillar={entry.get('pillar', '?')}")
 
-    os.makedirs(os.path.dirname(ANALYTICS_LOG), exist_ok=True)
-    with open(ANALYTICS_LOG, "w") as f:
-        json.dump(analytics, f, indent=2, ensure_ascii=False)
+    from scripts.fileutil import atomic_write_json, preserve_if_corrupt
+    preserve_if_corrupt(ANALYTICS_LOG)
+    atomic_write_json(ANALYTICS_LOG, analytics, ensure_ascii=False)
 
     print(f"[analytics] synced {updated} video(s). total tracked: {len(analytics)}")
     return analytics
@@ -444,7 +483,7 @@ def composite_engagement_score(entry: dict, duration_secs: float | None = None) 
     or callers that only have CTR (e.g. title_variant_weights()). Returns
     None if *no* component has usable data.
     """
-    m = latest_metrics(entry)
+    m = metrics_at_age(entry)
     duration_secs = duration_secs or entry.get("duration_secs")
     views = m.get("views")
 
@@ -453,14 +492,17 @@ def composite_engagement_score(entry: dict, duration_secs: float | None = None) 
     avd = m.get("averageViewDuration")
     if avd is not None and duration_secs:
         try:
-            watch_ratio = max(0.0, min(1.0, float(avd) / float(duration_secs)))
+            # Retention against the first 30 minutes, not the whole video:
+            # dividing by the full length scored every 8-hour video near zero
+            # however well it held viewers, biasing every bandit to short ones.
+            watch_ratio = max(0.0, min(1.0, float(avd) / min(float(duration_secs), _RETENTION_WINDOW_SECS)))
             components.append((0.40, watch_ratio))
         except (TypeError, ZeroDivisionError):
             pass
 
-    ctr = m.get("videoThumbnailImpressionsClickRate")
+    ctr = ctr_fraction(m.get("videoThumbnailImpressionsClickRate"))
     if ctr is not None:
-        components.append((0.35, max(0.0, min(1.0, float(ctr)))))
+        components.append((0.35, max(0.0, min(1.0, ctr))))
 
     likes = m.get("likes")
     if likes is not None and views:
@@ -482,29 +524,13 @@ def composite_engagement_score(entry: dict, duration_secs: float | None = None) 
     return sum(w * v for w, v in components) / total_w
 
 
-def binarize_above_median(values: list[float]) -> list[bool]:
-    """
-    Split a list of scores into successes (True, >= pooled median) and
-    failures (False, < median). Median-split rather than a fixed absolute
-    cutoff so binarization automatically adapts to each channel's own
-    baseline performance (a 3% CTR might be great for a small channel and
-    poor for a big one) -- the same philosophy the old code used when it
-    compared every metric against a *channel average* rather than a fixed
-    number. Ties go to the median value counting as a success (>=).
-    """
-    if not values:
-        return []
-    med = statistics.median(values)
-    return [v >= med for v in values]
-
-
 def _build_bucket_bandit(buckets: dict[str, list[float]]) -> ThompsonSamplingBandit:
     """
-    Build a Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py) with
+    Build a Beta-Bernoulli bandit (scripts/bandit.py) with
     one arm per bucket label, updated from `buckets` ({label: [scores]})
-    binarized against the *pooled* median across all buckets
-    (binarize_above_median's median-split — see that function's docstring
-    for why). Shared by _bandit_weights() (derives the weight multiplier)
+    binarized against the *pooled* median across all buckets (a
+    median split: one bucket's own median would call half of every bucket
+    a "win"). Shared by _bandit_weights() (derives the weight multiplier)
     and pillar_bandit_posteriors() (exposes the raw posterior for the
     dashboard). Every label in `buckets` becomes an arm even if its value
     list is empty (starts at the uninformative Beta(1,1) prior).
@@ -594,51 +620,10 @@ def pillar_bandit_posteriors(pillars: list[str] | None = None, analytics: dict |
     return _build_bucket_bandit(buckets).posterior_stats()
 
 
-def duration_weights(duration_map: dict[str, int], analytics: dict | None = None) -> dict[str, float]:
-    """
-    Per-duration-label weight multipliers derived from analytics_log.json,
-    same shape as generate_seo.py's _pillar_weights(): 0.5x-2.0x, uniform
-    1.0 for any bucket with fewer than 5 samples. Now backed by the shared
-    Beta-Bernoulli Thompson Sampling bandit (_bandit_weights()) instead of a
-    raw mean-ratio, using composite_engagement_score() (watch-ratio-weighted)
-    rather than raw averageViewDuration alone.
-
-    Each video's measured duration_secs is bucketed to its *nearest* label in
-    duration_map (upload_log only stores the real ffprobe length, not which
-    label was requested -- renders can run a bit long/short).
-    """
-    labels = list(duration_map.keys())
-    default = {label: 1.0 for label in labels}
-    if analytics is None:
-        analytics = load_analytics()
-    if not analytics:
-        return default
-
-    from collections import defaultdict as _dd
-    by_label: dict[str, list[float]] = _dd(list)
-    for entry in analytics.values():
-        secs = entry.get("duration_secs")
-        if not secs:
-            continue
-        score = composite_engagement_score(entry, duration_secs=secs)
-        if score is None:
-            continue
-        nearest = min(labels, key=lambda label: abs(duration_map[label] - secs))
-        by_label[nearest].append(score)
-
-    bandit_weights = _bandit_weights(by_label, min_samples=5)
-    if bandit_weights is None:
-        return default
-
-    weights = dict(default)
-    weights.update(bandit_weights)
-    return weights
-
-
 def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, float]]:
     """
     Per-pillar weights for title HOOK STRATEGIES (see generate_seo.py's
-    HOOK_STRATEGIES: "statement", "benefit_list", "spec_led"), same
+    HOOK_STRATEGIES: "scene", "moment", "radio"), same
     0.5x-2.0x/>=5-samples pattern, bandit-backed (see _bandit_weights())
     using composite_engagement_score() (falls back to CTR-only when that's
     all a logged entry has, which is the common case for older rows).
@@ -649,18 +634,15 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
     specific hook family, so a naive positional key was really only ever
     learning "which slot index tends to get clicked" -- keying by the
     strategy name itself makes the bandit learn something creatively
-    meaningful ("benefit_list outperforms statement for the 'emotional'
+    meaningful ("the moment form outperforms the scene form for the 'emotional'
     pillar"), which also survives generate_title_variants() reordering or
     resizing its variant slots in the future. Callers should fall back to
     1.0 for any strategy not present in the returned per-pillar dict (no
     performance data yet).
 
-    Backward compatibility: analytics rows logged before
-    title_chosen_strategy existed only carry the older title_chosen_idx.
-    Since generate_title_variants() assigns strategy =
-    HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)] to slot i, that same mapping
-    is used as a best-effort strategy label for those older rows instead of
-    silently discarding them.
+    Rows from retired title forms (strategy names no longer in
+    HOOK_STRATEGIES, or old rows with only title_chosen_idx) are skipped:
+    they measured titles the current forms don't produce.
     """
     if analytics is None:
         analytics = load_analytics()
@@ -676,18 +658,11 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
         if not pillar:
             continue
 
+        # Only the current title forms. Rows from retired forms (or old rows
+        # with just an index) describe titles these forms never produce.
         strategy = entry.get("title_chosen_strategy")
-        if strategy is None:
-            idx = entry.get("title_chosen_idx")
-            if idx is None:
-                continue
-            try:
-                idx = int(idx)
-            except (TypeError, ValueError):
-                continue
-            if not (0 <= idx < len(HOOK_STRATEGIES)):
-                continue
-            strategy = HOOK_STRATEGIES[idx]
+        if strategy not in HOOK_STRATEGIES:
+            continue
 
         score = composite_engagement_score(entry)
         if score is None:
@@ -708,6 +683,12 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
 _TITLE_BENEFIT_VOCAB = {"study", "focus", "relax", "sleep", "chill", "unwind"}
 
 
+_SEASON_TITLE_WORDS = ("winter", "snow", "frost", "cocoa", "spring", "blossom", "petals",
+                       "sakura", "summer", "autumn", "leaves", "maple", "october", "sweater")
+_TIME_TITLE_WORDS = ("midnight", "2am", "3am", "late at night", "morning", "afternoon",
+                     "golden hour", "sunset", "dusk", "dawn", "sunrise")
+
+
 def title_features(title: str) -> dict[str, str]:
     """Bucket a title string into a few coarse, cheap surface-text features
     -- feeds title_feature_weights()/title_feature_bandit_posteriors() below,
@@ -724,10 +705,17 @@ def title_features(title: str) -> dict[str, str]:
                       "target_45_70" if length <= 70 else "long_gt70")
     has_emoji = any(ord(c) > 0x2600 for c in title)
     benefit_hits = sum(1 for w in _TITLE_BENEFIT_VOCAB if w in title.lower())
+    low = title.lower()
     return {
         "length_bucket": length_bucket,
         "has_emoji": "emoji" if has_emoji else "no_emoji",
         "benefit_list": "benefit_list" if benefit_hits >= 2 else "no_benefit_list",
+        # The dimensions above describe the retired title templates (every
+        # current title has an emoji and none lists benefits); these vary
+        # between current titles. Old rows simply score into them too.
+        "length_band": ("under_40" if length < 40 else "40_62" if length <= 62 else "over_62"),
+        "seasonal": "seasonal" if any(w in low for w in _SEASON_TITLE_WORDS) else "evergreen",
+        "time_of_day": "time" if any(w in low for w in _TIME_TITLE_WORDS) else "no_time",
     }
 
 
@@ -840,7 +828,7 @@ def pillar_weights(pillars: list[str] | None = None, analytics: dict | None = No
 # ── Composition-selection feedback (sub-genre / BPM / engine bandits) ───────
 # Extends the same engagement-bandit machinery above (previously wired only
 # into SEO-pillar choice and video duration) to which sub-genre, BPM, and
-# generation engine (v1 vs v2) get used -- see generate_music_gemini.py's
+# generation engine (v1 vs v2) get used -- see composer.py's
 # _pick_subgenre_weighted()/pick_params() and run.py's engine selection for
 # the call sites. All three below are thin wrappers around
 # composite_engagement_score()/_bandit_weights() -- zero new statistical
@@ -856,7 +844,7 @@ def sub_genre_weights(sub_genres: list[str] | None = None, analytics: dict | Non
     entry['pillar'] (the SEO framing, e.g. "temporal").
 
     `sub_genres` defaults to every known sub-genre key from
-    scripts.generate_music_gemini._SUBGENRE_CONFIG -- lazy-imported HERE
+    scripts.composer._SUBGENRE_CONFIG -- lazy-imported HERE
     (inside the function body, not at module top) so analytics.py doesn't
     acquire a hard import-time dependency on the whole music-generation
     module (which does soundfont/filesystem setup at import time) just for
@@ -865,7 +853,7 @@ def sub_genre_weights(sub_genres: list[str] | None = None, analytics: dict | Non
     """
     if sub_genres is None:
         try:
-            from scripts.generate_music_gemini import _SUBGENRE_CONFIG
+            from scripts.composer import _SUBGENRE_CONFIG
             sub_genres = list(_SUBGENRE_CONFIG.keys())
         except Exception:
             sub_genres = []
@@ -935,45 +923,6 @@ def bpm_bucket_weights(bucket_width: int = 10, analytics: dict | None = None) ->
     return bandit_weights or {}
 
 
-def engine_weights(analytics: dict | None = None) -> dict[str, float]:
-    """
-    Weight multipliers for the {"v1", "v2"} music-generation-engine arms,
-    bandit-backed the same way as pillar_weights() -- 0.5x-2.0x, neutral 1.0
-    default for both arms when data is sparse (run.py's engine selection
-    treats this as a 50/50 coin flip at cold start).
-
-    Entries logged before music_engine tracking existed default to "v1" at
-    the sync_analytics() container-construction step (see there), so older
-    rows contribute to the "v1" arm's sample count rather than being
-    silently dropped.
-    """
-    arms = ["v1", "v2"]
-    default = {a: 1.0 for a in arms}
-    if analytics is None:
-        analytics = load_analytics()
-    if not analytics:
-        return default
-
-    from collections import defaultdict as _dd
-    by_engine: dict[str, list[float]] = _dd(list)
-    for entry in analytics.values():
-        e = entry.get("music_engine") or "v1"
-        if e not in arms:
-            continue
-        score = composite_engagement_score(entry)
-        if score is None:
-            continue
-        by_engine[e].append(score)
-
-    bandit_weights = _bandit_weights(by_engine, min_samples=5)
-    if bandit_weights is None:
-        return default
-
-    weights = dict(default)
-    weights.update(bandit_weights)
-    return weights
-
-
 def report(analytics: dict | None = None) -> None:
     """Print CTR and watch time grouped by pillar, sorted best-first."""
     if analytics is None:
@@ -1037,10 +986,13 @@ def two_proportion_ztest(
 
 def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 0.05) -> None:
     """
-    For videos 7-30 days old whose CTR is *significantly* below the rest of
-    the channel (two-proportion z-test, p < p_threshold — not just below an
-    arbitrary ratio like the old CTR < 70%-of-average heuristic), swap in an
-    alternate thumbnail if one exists (thumb_*_alt.jpg).
+    Underperformer swap -- NOT an A/B test of two thumbnails. For videos
+    7-30 days old whose CTR is significantly below the rest of the channel's
+    (two-proportion z-test), swap in the alternate thumbnail if one exists
+    (thumb_*_alt.jpg). The comparison is against *other videos*, so it
+    flags weak videos, not a weak thumbnail as such. One test runs per
+    eligible video, so the threshold is Bonferroni-corrected
+    (p_threshold / number of videos tested) to keep chance swaps rare.
 
     The test compares this video's estimated clicks/impressions against the
     pooled clicks/impressions of every *other* currently-eligible, not-yet-
@@ -1083,11 +1035,11 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
         if d.get("thumb_swapped"):
             continue
         m = latest_metrics(d)
-        ctr = m.get("videoThumbnailImpressionsClickRate")
+        ctr = ctr_fraction(m.get("videoThumbnailImpressionsClickRate"))
         impressions = m.get("videoThumbnailImpressions")
         if ctr is None or not impressions:
             continue
-        pool.append((vid, float(ctr), float(impressions)))
+        pool.append((vid, ctr, float(impressions)))
 
     if len(pool) < 2:
         print("[analytics] thumbnail swaps: 0 (not enough videos with CTR+impressions data)")
@@ -1098,6 +1050,8 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
     max_age = now - datetime.timedelta(days=30)
 
     swapped = 0
+    # Bonferroni: one test per video in the pool.
+    corrected_threshold = p_threshold / max(1, len(pool))
     for vid, ctr, impressions in pool:
         data = analytics[vid]
         upload_date = data.get("upload_date", "")
@@ -1120,7 +1074,7 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
         data["thumb_ab_z"] = z
         data["thumb_ab_p"] = p_value
 
-        if p_value >= p_threshold or ctr >= pooled_avg_ctr:
+        if p_value >= corrected_threshold or ctr >= pooled_avg_ctr:
             continue  # not significantly worse than the rest of the channel
 
         # Find alternate thumbnail — validate path stays within assets/.
@@ -1166,8 +1120,9 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
             print(f"  [thumb-swap] {vid}: failed — {ex}")
 
     if _own_load or swapped:
-        with open(ANALYTICS_LOG, "w") as f:
-            json.dump(analytics, f, indent=2, ensure_ascii=False)
+        from scripts.fileutil import atomic_write_json, preserve_if_corrupt
+        preserve_if_corrupt(ANALYTICS_LOG)
+        atomic_write_json(ANALYTICS_LOG, analytics, ensure_ascii=False)
     print(f"[analytics] thumbnail swaps: {swapped}")
 
 
@@ -1296,8 +1251,7 @@ def forecast_views(
 ) -> dict | None:
     """
     Project a video's cumulative view count `horizon_days` ahead using
-    simple exponential smoothing (statsmodels
-    `statsmodels.tsa.holtwinters.SimpleExpSmoothing`) over its view-velocity
+    simple exponential smoothing (_ses_level) over its view-velocity
     series (views gained per day between consecutive longitudinal
     snapshots — see _view_velocity()). SES has no trend component, so it
     forecasts a smoothed *constant* future daily velocity; that estimate is
@@ -1305,8 +1259,7 @@ def forecast_views(
     each requested horizon.
 
     Guards: needs at least `min_points` snapshots (fewer than that gives too
-    few velocity observations for SES to fit anything meaningful) and
-    statsmodels/scipy must be importable and the fit must succeed — returns
+    few velocity observations for SES to fit anything meaningful) — returns
     None rather than raising on any failure, since forecasting is a
     dashboard nice-to-have that must never break the analytics page or the
     sync pipeline.
@@ -1323,11 +1276,8 @@ def forecast_views(
         return None
 
     try:
-        from statsmodels.tsa.holtwinters import SimpleExpSmoothing
-
         series = [v["velocity"] for v in velocities]
-        model = SimpleExpSmoothing(series, initialization_method="estimated").fit()
-        next_velocity = max(0.0, float(model.forecast(1)[0]))
+        next_velocity = max(0.0, _ses_level(series))
         current_views = float(snaps[-1]["views"])
         return {
             "current_views": current_views,
@@ -1340,13 +1290,33 @@ def forecast_views(
         return None
 
 
+def _ses_level(series: list[float]) -> float:
+    """Simple exponential smoothing: the smoothed level after the last point,
+    which is SES's forecast for every future step. The smoothing factor is
+    the one (on a 0.05 grid) with the smallest one-step-ahead squared error,
+    as statsmodels' "estimated" fit does; it replaces that dependency."""
+    best_sse, best_level = None, float(series[-1])
+    for alpha in [a / 20 for a in range(1, 20)]:
+        level, sse = float(series[0]), 0.0
+        for x in series[1:]:
+            sse += (x - level) ** 2
+            level = alpha * x + (1 - alpha) * level
+        if best_sse is None or sse < best_sse:
+            best_sse, best_level = sse, level
+    return best_level
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync YouTube Analytics for lofi_factory uploads.")
     parser.add_argument("--report",      action="store_true", help="Print CTR table by pillar")
     parser.add_argument("--swap-thumbs", action="store_true", help="Swap thumbnails for low-CTR videos")
     args = parser.parse_args()
 
-    analytics = sync_analytics()
+    try:
+        analytics = sync_analytics()
+    except AnalyticsUnavailable as e:
+        print(f"[analytics] ERROR: {e}")
+        sys.exit(1)
     if args.report:
         report(analytics)
     if args.swap_thumbs:

@@ -1,11 +1,11 @@
 key: bossa_lofi
 family: jazz_soul
 composition:
-  piano_program: GM_VIBRAPHONE
+  piano_program: GM_GUITAR_NYLON
   melody_program: GM_FLUTE
-  countermelody_program: GM_GUITAR_NYLON
+  countermelody_program: GM_VIBRAPHONE
   scales: [pent, dorian, major]
-  drum_pattern_indices: [4, 12]
+  drum_pattern_indices: [18, 4]
   bpm_range: [74, 88]
   energy: null
   # 52: D major modal interchange -- research/subgenres/bossa_lofi.md: bossa
@@ -13,7 +13,7 @@ composition:
   # typical American jazz standards" -- direct match; D also matches this
   # key's KEY_ROOTS comment ("bossa, bright morning").
   progression_indices: [8, 9, 29, 33, 34, 44, 52]
-swing_range: [0.52, 0.6]
+swing_range: [0.5, 0.56]
 cozy_bias: false
 texture: {program: GM_GUITAR_NYLON, style: strum}
 drum_kit_programs: [40, 32]
@@ -24,3 +24,8 @@ mix: {lpf_hz: 12500, bitcrush_bits: 13, reverb_room: 0.35, reverb_wet: 0.18, tap
 # subgenres most rooted in jazz-standard form and was silently falling back
 # to 'standard' -- give it the canonical AABA shape instead.
 song_form: aaba
+bass_program: GM_ACOUSTIC_BASS
+# Genre rework: nylon guitar comps (the batida); drums are pattern S, steady
+# 8ths with the 3-2 bossa clave on side-stick and no backbeat; straight 8ths
+# (kickdrum.io/patterns/bossa-nova, tunableapp.com, research/subgenres/bossa_lofi.md).
+# Pattern 12 (Afrobeat 3+3+2) was replaced: it is not a bossa groove.

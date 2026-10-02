@@ -1,6 +1,6 @@
 import random
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     KEY_ROOTS,
     PROGRESSIONS,
     PROGRESSION_KEY,

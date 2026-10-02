@@ -14,8 +14,8 @@ import random as _random_mod
 from collections import Counter
 
 import scripts.analytics as analytics_mod
-from scripts.analytics import bpm_bucket_weights, engine_weights, sub_genre_weights
-from scripts.generate_music_gemini import _SUBGENRE_CONFIG, _pick_subgenre_weighted
+from scripts.analytics import bpm_bucket_weights, sub_genre_weights
+from scripts.composer import _SUBGENRE_CONFIG, _pick_subgenre_weighted
 
 SUBS = ["chillhop", "jazzhop", "ambient_lofi"]
 
@@ -56,7 +56,7 @@ def test_sub_genre_weights_clamped_to_range():
 
 
 def test_sub_genre_weights_lazy_default_uses_real_subgenre_config():
-    # No explicit `sub_genres` -> lazy-imports scripts.generate_music_gemini
+    # No explicit `sub_genres` -> lazy-imports scripts.composer
     # and defaults to every known key. Cold start (analytics={}) so this
     # only tests wiring, not the bandit math.
     result = sub_genre_weights(analytics={})
@@ -98,39 +98,6 @@ def test_bpm_bucket_weights_custom_bucket_width():
 
 
 # ── engine_weights() ─────────────────────────────────────────────────────
-
-def test_engine_weights_empty_analytics():
-    assert engine_weights({}) == {"v1": 1.0, "v2": 1.0}
-
-
-def test_engine_weights_uniform_below_sample_threshold():
-    fake = {f"v{i}": {"music_engine": "v2", "videoThumbnailImpressionsClickRate": 0.05}
-            for i in range(3)}
-    assert engine_weights(fake) == {"v1": 1.0, "v2": 1.0}
-
-
-def test_engine_weights_rewards_higher_engagement_engine():
-    fake = {}
-    for i in range(6):
-        fake[f"a{i}"] = {"music_engine": "v2", "videoThumbnailImpressionsClickRate": 0.09}
-    for i in range(6):
-        fake[f"b{i}"] = {"music_engine": "v1", "videoThumbnailImpressionsClickRate": 0.01}
-    result = engine_weights(fake)
-    assert result["v2"] > 1.0
-    assert result["v1"] < 1.0
-
-
-def test_engine_weights_defaults_missing_field_to_v1():
-    # Entries logged before music_engine tracking existed have no key at
-    # all -- must be treated as "v1", not silently dropped from the bandit.
-    fake = {}
-    for i in range(6):
-        fake[f"a{i}"] = {"videoThumbnailImpressionsClickRate": 0.09}  # no music_engine key
-    for i in range(6):
-        fake[f"b{i}"] = {"music_engine": "v2", "videoThumbnailImpressionsClickRate": 0.01}
-    result = engine_weights(fake)
-    assert result["v1"] > 1.0
-    assert result["v2"] < 1.0
 
 
 # ── _pick_subgenre_weighted() actually shifts with the bandit ───────────

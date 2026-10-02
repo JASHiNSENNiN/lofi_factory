@@ -13,7 +13,7 @@ micro_swing=False baseline and from each other.
 import random
 import statistics
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     CHH,
     KICK,
     PPQN,

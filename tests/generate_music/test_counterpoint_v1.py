@@ -1,6 +1,6 @@
 """
 Tests for the species-counterpoint voice-leading cost function ported into
-v1 (generate_music_gemini.py) from v2's Stage-3 work: per-voice-pair
+v1 (composer.py) from v2's Stage-3 work: per-voice-pair
 parallel-5th/octave detection (not just adjacent pairs), per-pair
 contrary-motion scoring, and dissonance/suspension-resolution treatment.
 Mirrors test_counterpoint.py (which tests the original v2 version) against
@@ -8,7 +8,7 @@ the new v1 location -- _voicing_transition_cost is byte-identical, only the
 import changes.
 """
 
-from scripts.generate_music_gemini import _voicing_transition_cost
+from scripts.composer import _voicing_transition_cost
 
 
 # ── parallel 5th/octave: every pair, not just adjacent ──────────────────────

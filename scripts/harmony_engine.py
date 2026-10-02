@@ -1,14 +1,15 @@
 """
 harmony_engine.py — functional-harmony (Roman-numeral) progression generator.
 
-Wraps `music21` (BSD-3-Clause) to do real Roman-numeral analysis/realization —
-tonicization and secondary-dominant resolution via music21's native
-`V/ii`-style applied-chord syntax — rather than hand-rolling roman-numeral
-theory from scratch, per project convention (music21 is the industry-standard
-library for exactly this).
+Generation is a table-driven tonic/subdominant/dominant walk with optional
+secondary dominants (generate_functional_progression); it does not need
+music21. music21 is only used by the two checking helpers below
+(validate_roman_numerals, realize_numeral_pitches), which the tests use to
+confirm the hand-written tables agree with real Roman-numeral theory. It is
+imported lazily there and is a dev-only dependency (requirements-dev.txt).
 
 This is layered ON TOP OF the existing curated 51-entry `PROGRESSIONS` table
-and its Markov-chain walk (`generate_progression` in generate_music_gemini.py)
+and its Markov-chain walk (`generate_progression` in composer.py)
 — NOT a replacement. It is one more alternate progression source, selected
 per-track with a small probability from `pick_params()`, exactly like the
 existing Euclidean-drum-pattern and Markov-progression toggles. When it is
@@ -20,7 +21,7 @@ Design: rather than let music21 invent arbitrary chord spellings (which the
 rest of the pipeline's fixed VOICING_OPTIONS/BASS_ROOTS tables would not
 have voicings for), each supported "tonal center" maps every diatonic and
 secondary-dominant Roman numeral to one of the EXACT chord-symbol strings
-already present in generate_music_gemini.py's VOICING_OPTIONS table. music21
+already present in composer.py's VOICING_OPTIONS table. music21
 is used to validate/realize the harmony (confirm each numeral is a legitimate
 resolution in that key, and to pin down real functional relationships like
 "the dominant of ii" or "the applied V of the relative major"), while the
@@ -32,13 +33,16 @@ hand-voiced vocabulary — so generated progressions always render with real
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-try:
-    from music21 import roman, key as m21key
-    _MUSIC21_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised only when music21 missing
-    _MUSIC21_AVAILABLE = False
+def _music21():
+    """Import music21 on first use (heavy: ~0.25 s and >100 MB, and only the
+    checking helpers need it)."""
+    try:
+        from music21 import roman, key as m21key
+    except ImportError as e:
+        raise HarmonyEngineUnavailable("music21 is not installed (pip install -r requirements-dev.txt)") from e
+    return roman, m21key
 
 
 class HarmonyEngineUnavailable(RuntimeError):
@@ -48,7 +52,7 @@ class HarmonyEngineUnavailable(RuntimeError):
 # ─── TONAL CENTERS ─────────────────────────────────────────────────────────
 # Each tonal center is a (major key name) covering both that major key and
 # its relative minor. Chord symbols are drawn only from
-# generate_music_gemini.VOICING_OPTIONS so every generated progression has a
+# composer.VOICING_OPTIONS so every generated progression has a
 # real existing voicing. Degrees with no matching table entry are simply
 # omitted (the grammar walk skips to another degree in the same function).
 
@@ -132,7 +136,7 @@ TONAL_CENTERS = tuple(_MAJOR_DEGREE_CHORDS.keys())
 # vocabulary fall back to the tonal center whose major-scale pitch-class is
 # closest on the circle of fifths (a reasonable "sounds nearby" default —
 # the pipeline already treats `key` loosely for progression purposes; see
-# generate_music_gemini.py's own note that voicings can be "modal" for a
+# composer.py's own note that voicings can be "modal" for a
 # major key paired with a minor-flavoured progression index).
 _CENTER_PITCH_CLASS = {'C': 0, 'F': 5, 'Bb': 10, 'Eb': 3}
 _KEY_TO_CENTER_MODE: dict[str, tuple[str, str]] = {
@@ -263,8 +267,7 @@ def validate_roman_numerals(tonal_center: str, mode: str, numerals: list[str]) -
     i.e. this really is a valid Roman-numeral sequence in that key, not just
     a list of plausible-looking strings.
     """
-    if not _MUSIC21_AVAILABLE:
-        raise HarmonyEngineUnavailable('music21 is not installed')
+    roman, m21key = _music21()
     tonic = tonal_center
     k = m21key.Key(tonic, 'minor' if mode == 'minor' else 'major')
     for numeral in numerals:
@@ -283,8 +286,7 @@ def realize_numeral_pitches(tonal_center: str, mode: str, numeral: str) -> list[
     theory, and available for callers that want ground-truth pitch content
     rather than the table-driven chord symbol.
     """
-    if not _MUSIC21_AVAILABLE:
-        raise HarmonyEngineUnavailable('music21 is not installed')
+    roman, m21key = _music21()
     k = m21key.Key(tonal_center, 'minor' if mode == 'minor' else 'major')
     rn = roman.RomanNumeral(numeral, k)
     return sorted({p.midi % 12 for p in rn.pitches})

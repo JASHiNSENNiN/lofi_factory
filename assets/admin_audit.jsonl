@@ -1,5 +1,0 @@
-{"ts": "2026-08-16T22:56:21+00:00", "action": "automation_start", "detail": {}}
-{"ts": "2026-08-17T04:12:31+00:00", "action": "clean_orphaned_scratch", "detail": {"deleted": 25, "freed_bytes": 757152270}}
-{"ts": "2026-08-18T06:52:14+00:00", "action": "clean_orphaned_scratch", "detail": {"deleted": 15, "freed_bytes": 407348231}}
-{"ts": "2026-08-18T08:17:39+00:00", "action": "clean_orphaned_scratch", "detail": {"deleted": 5, "freed_bytes": 198311428}}
-{"ts": "2026-08-18T09:54:18+00:00", "action": "clean_orphaned_scratch", "detail": {"deleted": 5, "freed_bytes": 235805257}}

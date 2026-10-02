@@ -1,26 +1,21 @@
 """
-trend_research.py — Real-time YouTube + AI trend snapshot for lo-fi content generation.
+trend_research.py — YouTube trend snapshot for lo-fi content generation.
 
 Pipeline:
   1. YouTube Data API  — search trending lofi videos (last 14 days, top view count)
                          fetch full details: titles, tags, view counts, durations
-  2. Gemini 2.0 Flash  — Google Search grounding for what's resonating right now
-                         (graceful fallback when quota exhausted)
-  3. Groq analysis     — extract patterns + emotional themes from trending data
-  4. Cache to assets/  — 6-hour TTL so we don't hammer APIs every run
-
-Result: TrendSnapshot injected into concept + title generators for truly live content.
+  2. Keyword rules     — derive a suggested theme and music hints from the titles
+  3. Cache to assets/  — 6-hour TTL so we don't hammer APIs every run
 """
 
 import os
 import json
 import datetime
-import random
 import re
 
 ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_FILE = os.path.join(ROOT, "assets", "trend_cache.json")
-CACHE_TTL  = 6 * 3600   # seconds
+CACHE_TTL  = 24 * 3600  # seconds; each refresh costs 400-800 API quota units
 MAX_HISTORY = 500       # cap on stored snapshots -- oldest trimmed first
 
 try:
@@ -30,9 +25,6 @@ except ImportError:
     pass
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-GEMINI_KEY      = os.getenv("GEMINI_API_KEY")
-GEMINI_BACKUP   = os.getenv("GEMINI_API_KEY_BACKUP")
-GROQ_KEY        = os.getenv("GROQ_API_KEY")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -72,70 +64,6 @@ def _save_history(history: list[dict]) -> None:
     os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
     with open(CACHE_FILE, "w") as f:
         json.dump(history[-MAX_HISTORY:], f, indent=2, ensure_ascii=False)
-
-
-def compute_trend_deltas(history: list[dict] | None = None) -> dict | None:
-    """
-    Compare the two most recent trend snapshots and return competitor
-    view-count deltas, so competitor performance can be tracked over time
-    instead of only ever seeing the latest overwritten snapshot.
-
-    Matches competitor videos between snapshots by exact title (their video
-    IDs aren't tracked, since fetch_yt_trending() only keeps title/channel/
-    views/tags/duration — title is the best available join key across
-    independent search-result snapshots). Videos that only appear in one of
-    the two snapshots are skipped from per-video deltas (nothing to diff)
-    but still count toward each snapshot's total.
-
-    Returns None if fewer than 2 snapshots exist yet. Otherwise:
-        {"date_prev", "date_latest",
-         "total_views_prev", "total_views_latest",
-         "delta_total", "delta_pct",
-         "per_video": [{"title", "prev_views", "latest_views", "delta"}, ...]}
-        (per_video sorted by largest positive delta first)
-    """
-    if history is None:
-        history = _load_history()
-    if len(history) < 2:
-        return None
-
-    prev, latest = history[-2], history[-1]
-
-    def _video_map(snap: dict) -> dict[str, int]:
-        return {
-            v.get("title", ""): int(v.get("views", 0) or 0)
-            for v in snap.get("yt_videos", [])
-            if v.get("title")
-        }
-
-    prev_map = _video_map(prev)
-    latest_map = _video_map(latest)
-
-    per_video = []
-    for title, latest_views in latest_map.items():
-        if title in prev_map:
-            per_video.append({
-                "title": title,
-                "prev_views": prev_map[title],
-                "latest_views": latest_views,
-                "delta": latest_views - prev_map[title],
-            })
-    per_video.sort(key=lambda r: -r["delta"])
-
-    total_prev = sum(prev_map.values())
-    total_latest = sum(latest_map.values())
-    delta_total = total_latest - total_prev
-    delta_pct = (delta_total / total_prev) if total_prev else None
-
-    return {
-        "date_prev":          prev.get("fetched_at", "")[:10],
-        "date_latest":        latest.get("fetched_at", "")[:10],
-        "total_views_prev":   total_prev,
-        "total_views_latest": total_latest,
-        "delta_total":        delta_total,
-        "delta_pct":          delta_pct,
-        "per_video":          per_video,
-    }
 
 
 def _seasonal_keywords() -> list[str]:
@@ -178,7 +106,7 @@ def fetch_yt_trending(max_results: int = 20) -> list[dict]:
         # NOTE: videoDuration='long' combined with publishedAfter returns 0 results
         # from the YouTube API — filter by duration in post-processing instead.
         queries = [
-            "lofi hip hop study music 2026",
+            f"lofi hip hop study music {datetime.datetime.now().year}",
             "lofi beats to relax study to",
             "chill lofi beats study focus",
             "lofi music sleep study",
@@ -255,127 +183,6 @@ def _parse_duration(iso_dur: str) -> str:
     return f"{mins} min"
 
 
-# ── Source 1b: yt-dlp scraping ───────────────────────────────────────────────
-
-def fetch_yt_dlp_trending(max_results: int = 15) -> list[dict]:
-    """
-    Scrape metadata from YouTube search using yt-dlp (no download).
-    Returns list of {title, channel, views, duration, thumbnail_url, description_snippet}.
-    Falls back to [] on any failure.
-    """
-    try:
-        import yt_dlp  # noqa: F401
-    except ImportError:
-        return []
-
-    try:
-        from scripts.ytdlp_util import flat_search_opts
-
-        # extract_flat=True: pulls search-result metadata without resolving each
-        # video's player API, which dodges YouTube's "confirm you're not a bot"
-        # gate on server IPs. We only need title/channel/views here anyway.
-        ydl_opts = flat_search_opts()
-        results = []
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(
-                f"ytsearch{max_results}:lofi hip hop study music",
-                download=False,
-            )
-            entries = (info or {}).get("entries") or []
-            for entry in entries:
-                if not entry:
-                    continue
-                results.append({
-                    "title":               entry.get("title", ""),
-                    "channel":             entry.get("channel") or entry.get("uploader", ""),
-                    "views":               entry.get("view_count") or 0,
-                    "duration":            entry.get("duration_string") or entry.get("duration") or "",
-                    "thumbnail_url":       entry.get("thumbnail", ""),
-                    "description_snippet": (entry.get("description") or "")[:200],
-                })
-        return results
-    except Exception as ex:
-        print(f"  [Trends/yt-dlp] fetch failed: {ex}")
-        return []
-
-
-# ── Source 2: Gemini with Google Search grounding ─────────────────────────────
-
-def fetch_gemini_trends() -> str | None:
-    """
-    Use Gemini 2.0 Flash with Google Search grounding to discover what's trending.
-    Returns a short insight string, or None on failure/quota exhaustion.
-    """
-    for key in [GEMINI_KEY, GEMINI_BACKUP]:
-        if not key:
-            continue
-        try:
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=key)
-            resp   = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=(
-                    f"Today is {datetime.datetime.now(datetime.timezone.utc).strftime('%B %d, %Y')}. "
-                    "Search YouTube and the web for what lofi/study music is trending RIGHT NOW. "
-                    "Focus on: (1) top-performing title patterns, (2) trending moods or aesthetics, "
-                    "(3) specific activities or scenarios viewers are searching for, "
-                    "(4) any cultural moments (season, events, memes) driving searches. "
-                    "Be specific and concise — 150 words max. No fluff."
-                ),
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                    temperature=0.3,
-                ),
-            )
-            return resp.text.strip()
-        except Exception as ex:
-            if "429" in str(ex) or "QUOTA" in str(ex).upper():
-                continue  # try backup key
-            print(f"  [Trends/Gemini] {ex}")
-            return None
-    return None   # both keys exhausted
-
-
-# ── Source 3: Groq pattern analysis ──────────────────────────────────────────
-
-def _groq_analyze_trends(trending_titles: list[str], season: str, seasonal_kw: list[str]) -> str | None:
-    """
-    Feed Groq the real trending titles and ask it to extract patterns + gaps.
-    Returns a concise insight string (injected into concept prompt).
-    """
-    if not GROQ_KEY or not trending_titles:
-        return None
-    try:
-        from groq import Groq
-        client = Groq(api_key=GROQ_KEY)
-        titles_block = "\n".join(f"  • {t}" for t in trending_titles[:12])
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            temperature=0.7,
-            messages=[{"role": "user", "content": f"""
-You are a YouTube lofi channel strategist. Here are the top-performing lofi videos uploaded in the last 14 days:
-
-{titles_block}
-
-It's currently {season} ({datetime.datetime.now(datetime.timezone.utc).strftime('%B %Y')}).
-Seasonal search spikes: {', '.join(seasonal_kw[:4])}.
-
-In 120 words max, answer:
-1. What emotional patterns are working? (e.g. "late night struggle", "cozy autumn nostalgia")
-2. What title structures are performing? (e.g. "scenario + duration", "japanese aesthetic + activity")
-3. What GAPS exist — what ISN'T being made that listeners are probably searching for?
-4. One specific concept that would be fresh and on-trend right now.
-
-Be specific and actionable. No generic advice.
-"""}],
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as ex:
-        print(f"  [Trends/Groq] {ex}")
-        return None
-
-
 # ── Thumbnail theme suggestion ────────────────────────────────────────────────
 
 _VALID_THEMES = [
@@ -406,14 +213,12 @@ _SEASON_THEME_BIAS: dict[str, list[str]] = {
 def suggest_thumbnail_theme(snapshot: dict) -> str:
     """
     Suggest a thumbnail theme name based on keyword signals in the trend snapshot.
-    Checks the first 5 trending_titles, groq_analysis, and gemini_insight.
+    Checks the first 5 trending_titles.
     Returns one of the valid theme names from _VALID_THEMES.
     """
     titles       = snapshot.get("trending_titles", [])[:5]
-    groq_text    = snapshot.get("groq_analysis") or ""
-    gemini_text  = snapshot.get("gemini_insight") or ""
     season       = snapshot.get("season", "")
-    combined     = " ".join(titles) + " " + groq_text + " " + gemini_text
+    combined     = " ".join(titles)
     combined_low = combined.lower()
 
     for keywords, theme in _THEME_KEYWORD_MAP:
@@ -429,24 +234,6 @@ def suggest_thumbnail_theme(snapshot: dict) -> str:
 
 
 _TITLE_BENEFIT_VOCAB = ["study", "focus", "relax", "sleep", "chill", "unwind"]
-
-
-def extract_title_benefit_signals(snapshot: dict, top_k: int = 3) -> list[str]:
-    """Rank the benefit-keyword vocabulary (study/focus/relax/sleep/chill/
-    unwind) by frequency in this week's real scraped competitor titles
-    (snapshot['trending_titles']), so generated titles can lean toward
-    whichever benefit words are actually resonating right now instead of a
-    static uniform sample. Falls back to the static vocabulary order if no
-    trend data exists yet or none of the vocabulary appears in it.
-    """
-    text = " ".join(snapshot.get("trending_titles", [])).lower()
-    if not text:
-        return _TITLE_BENEFIT_VOCAB[:top_k]
-    counts = {w: text.count(w) for w in _TITLE_BENEFIT_VOCAB}
-    if not any(counts.values()):
-        return _TITLE_BENEFIT_VOCAB[:top_k]
-    ranked = sorted(_TITLE_BENEFIT_VOCAB, key=lambda w: -counts[w])
-    return ranked[:top_k]
 
 
 # ── Music style hints ─────────────────────────────────────────────────────────
@@ -468,11 +255,9 @@ _MUSIC_HINT_RULES: list[tuple[list[str], dict]] = [
 
 def _extract_music_hints(snapshot: dict) -> dict:
     """
-    Derive {bpm_hint, mood, subgenre} from groq_analysis + trending_titles + season.
+    Derive {bpm_hint, mood, subgenre} from trending_titles + season.
     """
-    groq_text = snapshot.get("groq_analysis") or ""
-    titles    = " ".join(snapshot.get("trending_titles", []))
-    combined  = (groq_text + " " + titles).lower()
+    combined  = " ".join(snapshot.get("trending_titles", [])).lower()
     season    = snapshot.get("season", "")
 
     subgenre = "lofi hip hop"
@@ -493,7 +278,7 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
     """
     Returns a TrendSnapshot dict (the *latest* snapshot), backed by an
     append-only history of dated snapshots in assets/trend_cache.json
-    (see _load_history()/_save_history()/compute_trend_deltas()) so
+    (see _load_history()/_save_history()) so
     competitor video performance can be tracked over time instead of only
     ever seeing whatever the most recent run overwrote. Still cached for
     CACHE_TTL seconds -- a fresh-enough call just returns the latest
@@ -504,9 +289,7 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
       trending_tags     list[str]   — aggregated popular tags
       yt_videos         list[dict]  — full {title, channel, views, tags, duration}
                                       rows behind trending_titles (kept for
-                                      compute_trend_deltas() view-count tracking)
-      gemini_insight    str|None    — Gemini search grounding summary
-      groq_analysis     str|None    — Groq strategic analysis
+                                      view-count history)
       season            str         — current season
       seasonal_keywords list[str]   — month-specific search spikes
       fetched_at        str         — ISO timestamp
@@ -536,14 +319,6 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
     yt_videos = fetch_yt_trending(max_results=20)
     trending_titles = [v["title"] for v in yt_videos]
 
-    # yt-dlp supplemental scrape — deduplicate against API titles
-    yt_dlp_videos = fetch_yt_dlp_trending(max_results=15)
-    _existing_titles_lower = {t.lower() for t in trending_titles}
-    for v in yt_dlp_videos:
-        if v["title"].lower() not in _existing_titles_lower:
-            trending_titles.append(v["title"])
-            _existing_titles_lower.add(v["title"].lower())
-
     # Aggregate tags from trending videos — lofi-relevant terms only
     _LOFI_TAG_ALLOW = {
         "lofi", "lo-fi", "lo fi", "chill", "study", "focus", "ambient",
@@ -565,29 +340,11 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
         d = v.get("duration", "unknown")
         dur_dist[d] = dur_dist.get(d, 0) + 1
 
-    # Gemini/Groq trend commentary — opt-in failsafe only (LOFI_LLM_FAILSAFE=1).
-    # suggest_thumbnail_theme()/_extract_music_hints() below already derive real
-    # signal directly from the scraped trending_titles via keyword-rule matching,
-    # so these are pure enrichment, not required for the pipeline to function.
-    gemini_insight = None
-    groq_analysis = None
-    if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-        gemini_insight = fetch_gemini_trends()
-        if gemini_insight:
-            print(f"  [Trends] Gemini insight: {gemini_insight[:80]}...")
-
-        groq_analysis = _groq_analyze_trends(trending_titles, season, seasonal_kw)
-        if groq_analysis:
-            print(f"  [Trends] Groq analysis complete")
-
     snapshot = {
         "trending_titles":    trending_titles,
         "trending_tags":      trending_tags,
         "trending_duration":  dur_dist,
-        "yt_videos":          yt_videos,      # full rows incl. view counts -- see compute_trend_deltas()
-        "yt_dlp_videos":      yt_dlp_videos,
-        "gemini_insight":     gemini_insight,
-        "groq_analysis":      groq_analysis,
+        "yt_videos":          yt_videos,      # full rows incl. view counts
         "season":             season,
         "seasonal_keywords":  seasonal_kw,
         "fetched_at":         _now_iso(),
@@ -597,7 +354,7 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
     snapshot["music_hints"]     = _extract_music_hints(snapshot)
 
     # Append to history on disk (not overwrite) so competitor performance
-    # can be tracked snapshot-over-snapshot -- see compute_trend_deltas().
+    # can be tracked snapshot-over-snapshot.
     history.append(snapshot)
     _save_history(history)
     print(f"  [Trends] snapshot saved ({len(trending_titles)} videos, season={season}, "
@@ -614,7 +371,3 @@ if __name__ == "__main__":
     for t in snap["trending_titles"][:10]:
         print(f"  • {t[:80]}")
     print(f"\nTop tags: {snap['trending_tags'][:10]}")
-    if snap.get("groq_analysis"):
-        print(f"\n=== GROQ ANALYSIS ===\n{snap['groq_analysis']}")
-    if snap.get("gemini_insight"):
-        print(f"\n=== GEMINI INSIGHT ===\n{snap['gemini_insight']}")

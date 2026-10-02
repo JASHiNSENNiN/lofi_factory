@@ -1,7 +1,7 @@
 key: neo_soul
 family: jazz_soul
 composition:
-  piano_program: GM_EP2
+  piano_program: GM_RHODES
   melody_program: GM_MUTED_TRUMPET
   countermelody_program: GM_CELLO
   scales: [dorian, pent, blues, natural_minor]
@@ -21,3 +21,7 @@ drum_sampler_pattern: null
 mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.16,
   compress_ratio: 2.5, vinyl_crackle: 0.09, use_ir_reverb: true, sidechain_duck: false}
 song_form: null
+bass_program: GM_FINGER_BASS
+micro_swing: true
+# Genre rework: Rhodes is the defining neo-soul keyboard; finger bass, not slap;
+# per-voice behind-the-beat timing (Dilla) via micro_swing (emastered.com, drum.town).

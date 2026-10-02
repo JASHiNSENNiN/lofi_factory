@@ -1,0 +1,10 @@
+# Checks CI enforces on every push. Kept to errors that are real bugs or
+# dead code (undefined names, unused/duplicate imports, syntax errors), not style.
+extend-exclude = ["research"]
+
+[lint]
+select = ["F401", "F811", "F821", "F823", "E9"]
+
+[lint.per-file-ignores]
+# Package __init__ files re-export on purpose.
+"**/__init__.py" = ["F401"]

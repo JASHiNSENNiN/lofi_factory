@@ -6,7 +6,7 @@ ii-V-I turnarounds appropriate to lofi_jazz/jazz_cafe, so a phrygian-
 dominant/dorian melodic line can carry the expressive weight instead of
 chord movement.
 """
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     BASS_ROOTS,
     PROGRESSION_KEY,
     PROGRESSIONS,

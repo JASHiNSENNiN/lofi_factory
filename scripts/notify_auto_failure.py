@@ -44,7 +44,10 @@ def _last_result() -> str:
 
 def main() -> None:
     if not alerts.configured():
-        return  # nothing to send to; not an error
+        # No alert destination: at least make the failure loud in the journal.
+        print("lofi-auto.service FAILED and no alert URL is configured "
+              "(set LOFI_STREAM_ALERT_WEBHOOK). " + _last_result(), file=sys.stderr)
+        return
     title = "lofi-factory: unattended auto-render failed"
     body = (
         f"lofi-auto.service failed on {os.uname().nodename}.\n"

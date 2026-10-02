@@ -69,8 +69,7 @@ def build_contact_sheet(variants: int = 2, out_path: str = None) -> str:
                     y = _PAD + row * (_TILE_H + _LABEL_H + _PAD)
                     sheet.paste(tile, (x, y))
                     layout = gtc._select_layout(theme, variant)
-                    scene  = gtc._select_scene(theme, variant)
-                    label  = f"{theme} v{variant} [{layout}/{scene}]"
+                    label  = f"{theme} v{variant} [{layout}]"
                     draw.text((x, y + _TILE_H + 2), label, font=font, fill=(220, 220, 220))
         finally:
             gtc.ASSETS_DIR = orig_assets_dir

@@ -4,11 +4,9 @@ the existing 24: drill/trap-adjacent lofi and world/ethnic-fusion lofi.
 """
 import random
 
-from scripts.generate_music_gemini import (
-    CHH, KICK, OHH, RIM, SNARE,
+from scripts.composer import (
+    CHH, KICK, SNARE,
     DRUM_PATTERNS,
-    GM_KALIMBA,
-    GM_KOTO,
     GM_SITAR,
     PROGRESSIONS,
     _GLIDE_808_GENRES,
@@ -68,8 +66,8 @@ def test_drum_pattern_p_drill_bounce_has_expected_shape():
 def test_lofi_world_uses_ethnic_instrument_voices():
     cfg = _SUBGENRE_CONFIG['lofi_world']
     assert cfg['melody'] == GM_SITAR
-    assert cfg['cmelo'] == GM_KOTO
-    assert _SUBGENRE_TEXTURE['lofi_world'][0] == GM_KALIMBA
+    assert cfg['cmelo'] == 73   # flute (bansuri stand-in): one tradition, not koto + kalimba
+    assert 'lofi_world' not in _SUBGENRE_TEXTURE
 
 
 def test_lofi_world_scale_pool_includes_phrygian_dominant():
@@ -77,7 +75,7 @@ def test_lofi_world_scale_pool_includes_phrygian_dominant():
 
 
 def test_pick_params_works_for_both_new_subgenres_across_many_seeds():
-    import scripts.generate_music_gemini as gmg
+    import scripts.composer as gmg
     for name in ('lofi_drill', 'lofi_world'):
         for seed in range(10):
             random.seed(seed)

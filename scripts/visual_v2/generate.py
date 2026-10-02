@@ -15,8 +15,7 @@ import subprocess
 import numpy as np
 
 from .config import W, H, FPS, VISUALS_DIR
-from .themes import THEMES, ALL_THEMES
-from .noise import looping_noise
+from .themes import THEMES
 from .static_layers import (
     make_gradient_bg, make_star_field, make_scanlines,
     make_vignette, make_star_twinkle,
@@ -26,14 +25,13 @@ from .scene import (
     make_vinyl_body, make_vinyl_label_frames,
     draw_vinyl, draw_tone_arm,
     draw_now_playing, draw_header, draw_divider,
-    paste_img_rgba,
 )
 from .character import EQVisualizer, OscilloscopeBar
 from .particles import FloatingOrbs, MusicNotes
 from .cozy_fx import build_fx
 from .postfx import (
     apply_bloom, film_grain, warm_grade,
-    apply_vignette, apply_scanlines, draw_watermark,
+    apply_vignette, apply_scanlines,
     chromatic_aberration,
 )
 
@@ -44,8 +42,8 @@ def generate_visual(theme_name: str = "cozy_rain",
                     visual_seed: int = None,
                     track_title: str = "lofi dreams",
                     genre: str = "lo-fi hip hop",
-                    use_ai_bg: bool = False,
-                    regen_bg: bool = False) -> tuple:
+                    out_dir: str | None = None,
+                    ) -> tuple:
     """
     Render an abstract lo-fi radio interface loop video.
     Returns (output_path, theme_name).
@@ -57,22 +55,16 @@ def generate_visual(theme_name: str = "cozy_rain",
 
     n_frames = duration_secs * fps
     ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(VISUALS_DIR, f"bg_{theme_name}_{ts}.mp4")
+    out_dir  = out_dir or VISUALS_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"bg_{theme_name}_{ts}.mp4")
 
     print(f"[VISUAL v2] theme={theme_name} | seed={visual_seed} | "
           f"{n_frames} frames @ {fps}fps | {duration_secs}s")
     print("  Pre-rendering static layers...")
 
-    # ── Background: AI scene or programmatic gradient ───────────────────────
-    bg_grad = None
-    if use_ai_bg:
-        from .ai_background import generate_bg_scene
-        scene_variant = (visual_seed // 333) % 3  # 0=interior 1=exterior 2=closeup
-        bg_grad = generate_bg_scene(
-            theme_name, force_regen=regen_bg, variant=scene_variant
-        )
-    if bg_grad is None:
-        bg_grad = make_gradient_bg(theme_name, seed=visual_seed)
+    # ── Background: procedural gradient ─────────────────────────────────────
+    bg_grad = make_gradient_bg(theme_name, seed=visual_seed)
     star_field  = make_star_field(theme_name, seed=visual_seed)
     scanlines   = make_scanlines(strength=0.055)
     vignette    = make_vignette(strength=0.38)
@@ -149,14 +141,13 @@ def generate_visual(theme_name: str = "cozy_rain",
                 0, 255
             ).astype(np.uint8)
 
-            # ── 3. Perspective grid overlay (subtle — skip on AI bg) ────────
-            if not use_ai_bg:
-                grid_alpha = grid_ov[:, :, 3:4].astype(np.float32) / 255.0
-                frame = np.clip(
-                    frame.astype(np.float32) * (1 - grid_alpha)
-                    + grid_ov[:, :, :3].astype(np.float32) * grid_alpha,
-                    0, 255
-                ).astype(np.uint8)
+            # ── 3. Perspective grid overlay (subtle) ────────────────────────
+            grid_alpha = grid_ov[:, :, 3:4].astype(np.float32) / 255.0
+            frame = np.clip(
+                frame.astype(np.float32) * (1 - grid_alpha)
+                + grid_ov[:, :, :3].astype(np.float32) * grid_alpha,
+                0, 255
+            ).astype(np.uint8)
 
             # ── 3b. Cozy atmosphere FX ──────────────────────────────────────
             for fx in cozy_effects:
@@ -198,8 +189,7 @@ def generate_visual(theme_name: str = "cozy_rain",
             # Subtle chromatic aberration (retro screen edge distortion)
             frame = chromatic_aberration(frame, shift=3)
 
-            # ── 13. Watermark ────────────────────────────────────────────────
-            draw_watermark(frame)
+            # No corner watermark: the header bar already names the channel.
 
             proc.stdin.write(frame.tobytes())
 

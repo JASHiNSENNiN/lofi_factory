@@ -36,7 +36,7 @@ def test_bjorklund_zero_onsets_is_all_rests():
 
 def test_bjorklund_first_step_is_always_an_onset_when_k_positive():
     # The module rotates the raw pattern so the first onset lands on step 0 --
-    # matching generate_music_gemini.py's Euclidean generator convention.
+    # matching composer.py's Euclidean generator convention.
     for k, n in [(3, 8), (2, 3), (5, 16)]:
         pattern = _bjorklund(k, n)
         assert pattern[0] == 1

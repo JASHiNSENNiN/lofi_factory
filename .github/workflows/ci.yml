@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: System packages
+        run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg fluidsynth libsndfile1
+      - name: Python packages
+        run: |
+          pip install -r requirements.lock
+          pip install -r requirements-dev.txt ruff
+      # ruff misses some syntax errors (e.g. a name used before its `global`).
+      - name: Compile every file
+        run: python -m compileall -q -x '(^|/)(research|venv|\.git)/' .
+      - name: Lint (undefined names, dead imports)
+        run: ruff check .
+      - name: Tests (includes the no-AI guard, tests/test_no_ai.py)
+        run: python -m pytest -q

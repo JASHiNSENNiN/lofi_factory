@@ -10,8 +10,7 @@ for how "success"/"failure" is derived from the composite engagement KPI).
 Algorithm
 ---------
 Each arm keeps a Beta(alpha, beta) posterior over its true (binarized)
-success probability, starting from the uninformative Jeffreys-ish prior
-Beta(1, 1) (uniform on [0, 1]):
+success probability, starting from the uniform (Laplace) prior Beta(1, 1):
 
     alpha_i = 1 + successes_i
     beta_i  = 1 + failures_i
@@ -29,8 +28,8 @@ run.py) can keep their existing call sites; `posterior_mean()` /
 `posterior_stats()` expose the deterministic posterior (no sampling) for
 dashboards and tests that need a reproducible number instead of a fresh draw.
 
-Reference (studied for algorithm structure/API shape only -- nothing copied,
-see repo license-discipline notes in the task writeup): st-tech/zr-obp
+Reference (studied for algorithm structure/API shape only, nothing copied):
+st-tech/zr-obp
 (Apache-2.0) and alison-carrera/mabalgs (Apache-2.0) both implement
 Beta-Bernoulli Thompson Sampling bandits. This is a from-scratch
 implementation using only `random.betavariate` from the Python standard
@@ -102,13 +101,6 @@ class ThompsonSamplingBandit:
         """{arm: one posterior draw} for every known arm."""
         return {a: self.sample(a) for a in self.arms}
 
-    def select_arm(self):
-        """Thompson Sampling arm selection: sample every arm once, return the
-        argmax. Raises ValueError if the bandit has no arms."""
-        if not self.arms:
-            raise ValueError("bandit has no arms to select from")
-        samples = self.sample_all()
-        return max(samples, key=samples.get)
 
     def posterior_mean(self, arm) -> float:
         """Deterministic posterior mean E[theta_i] = alpha / (alpha + beta)

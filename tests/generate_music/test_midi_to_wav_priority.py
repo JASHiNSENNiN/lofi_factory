@@ -1,11 +1,11 @@
 from unittest.mock import patch
 
-from scripts.generate_music_gemini import _BG_GEN_NICE_LEVEL, midi_to_wav
+from scripts.composer import _BG_GEN_NICE_LEVEL, midi_to_wav
 
 
 def _run(low_priority, os_name):
     with patch('subprocess.run') as mock_run, \
-         patch('scripts.generate_music_gemini._pick_soundfont', return_value='sf.sf2'), \
+         patch('scripts.composer._pick_soundfont', return_value='sf.sf2'), \
          patch('os.name', os_name):
         midi_to_wav('in.mid', 'out.wav', soundfont='sf.sf2', low_priority=low_priority)
         return mock_run.call_args[0][0]
@@ -32,7 +32,7 @@ def test_default_low_priority_is_false():
     # Calling without low_priority at all -- must match the plain (non-nice)
     # path, i.e. the default preserves pre-existing callers' behavior.
     with patch('subprocess.run') as mock_run, \
-         patch('scripts.generate_music_gemini._pick_soundfont', return_value='sf.sf2'), \
+         patch('scripts.composer._pick_soundfont', return_value='sf.sf2'), \
          patch('os.name', 'posix'):
         midi_to_wav('in.mid', 'out.wav', soundfont='sf.sf2')
         cmd = mock_run.call_args[0][0]

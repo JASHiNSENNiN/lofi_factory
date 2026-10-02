@@ -40,6 +40,8 @@ class _FakeFlow:
         self.redirect_uri = None
         self.fetched_code = None
         self.credentials = _FakeCredentials(scopes)
+        self.code_verifier = None   # a fresh flow, as in google-auth-oauthlib
+        self.consent_kwargs = None
         _FakeFlow.last_instance = self
 
     @classmethod
@@ -47,10 +49,13 @@ class _FakeFlow:
         return cls(scopes)
 
     def authorization_url(self, **kwargs):
+        self.consent_kwargs = kwargs
+        self.code_verifier = "verifier-from-this-flow"   # generated at consent time
         return "https://accounts.google.com/fake-consent", "fake-state-xyz"
 
     def fetch_token(self, code=None):
         self.fetched_code = code
+        self.verifier_at_exchange = self.code_verifier
 
 
 @pytest.fixture(autouse=True)
@@ -84,10 +89,24 @@ def test_monetary_authorization_url_requests_monetary_scopes():
     assert youtube_oauth._pending_state_monetary == "fake-state-xyz"
 
 
-def test_monetary_authorization_url_does_not_request_base_scopes_only():
+def test_monetary_token_cannot_inherit_upload_rights():
     youtube_oauth.monetary_authorization_url()
-    # Must be the superset (base + monetary), never just config.SCOPES.
     assert _FakeFlow.last_instance.scopes != config.SCOPES
+    assert "include_granted_scopes" not in _FakeFlow.last_instance.consent_kwargs
+
+
+def test_monetary_callback_reuses_the_pkce_verifier():
+    youtube_oauth.monetary_authorization_url()
+    youtube_oauth.monetary_handle_callback("auth-code-123", "fake-state-xyz")
+    # A fresh Flow has no verifier of its own; Google rejects the exchange
+    # unless the one from the consent step is passed through.
+    assert _FakeFlow.last_instance.verifier_at_exchange == "verifier-from-this-flow"
+
+
+def test_monetary_callback_without_state_is_rejected():
+    youtube_oauth.monetary_authorization_url()
+    with pytest.raises(ValueError):
+        youtube_oauth.monetary_handle_callback("auth-code-123", None)
 
 
 def test_monetary_handle_callback_writes_separate_token_file():

@@ -38,9 +38,9 @@ Process supervision:
   outside; this file assumes that layer exists, it doesn't provide it.
 
 Alerting:
-  Set LOFI_STREAM_ALERT_WEBHOOK to a Slack/Discord-compatible incoming
-  webhook URL to get pinged after repeated reconnect failures (opt-in,
-  unset by default — see _send_alert()).
+  Repeated reconnect failures are sent through webui/alerts.py, to the
+  same LOFI_STREAM_ALERT_WEBHOOK destination(s) as every other alert
+  (opt-in, unset by default -- see _send_alert()).
 """
 
 import os
@@ -68,30 +68,35 @@ if os.path.exists(_env):
         load_dotenv(_env, override=False)
     except ImportError:
         pass
-MUSIC_DIR   = os.path.join(ROOT, "music")
+# The stream keeps its own library, separate from the tracks each video
+# render generates in music/ (which the render pipeline prunes).
+MUSIC_DIR   = os.path.join(ROOT, "music", "stream")
 VISUALS_DIR = os.path.join(ROOT, "visuals")
+# The radio's own loops. A video's loop has that video's session name and
+# genre baked into its panel ("THIS SESSION: city lights below / lofi drill"),
+# which is false on a stream that plays the whole mixed library.
+STREAM_VISUALS_DIR = os.path.join(VISUALS_DIR, "stream")
+RADIO_SESSION, RADIO_BADGE = "lofi hip hop radio", "24/7 · mixed genres"
 OUTPUT_DIR  = os.path.join(ROOT, "output")
 
 # YouTube RTMP ingest
 YT_RTMP_BASE = "rtmp://a.rtmp.youtube.com/live2"
 
-# Optional disconnect alerting — opt-in only (same pattern as LOFI_LLM_FAILSAFE):
+# Optional disconnect alerting — opt-in only:
 # unset by default, so a fresh checkout never makes an outbound network call it
 # wasn't explicitly configured for. Any webhook that accepts a JSON POST with a
 # "text" field works (Slack/Discord-compatible incoming webhook URL).
-_ALERT_WEBHOOK       = os.environ.get("LOFI_STREAM_ALERT_WEBHOOK", "")
 _ALERT_AFTER_ATTEMPTS = 5    # first alert once reconnects have failed this many times in a row
 _ALERT_REPEAT_EVERY   = 10   # then re-alert every N more attempts if still down
 
 
 def _send_alert(message: str) -> None:
-    """Best-effort webhook ping — must never let an alerting failure affect
-    the stream itself, so every failure mode here is swallowed silently."""
-    if not _ALERT_WEBHOOK:
-        return
+    """Best-effort alert through the panel's alert module (the same
+    destinations, apprise URL support and alert history as every other
+    alert). A failure here must never affect the stream."""
     try:
-        import requests
-        requests.post(_ALERT_WEBHOOK, json={"text": f"[lofi-factory] {message}"}, timeout=5)
+        from webui import alerts
+        alerts.send_sync("lofi-factory: live stream", message)
     except Exception:
         pass
 
@@ -152,17 +157,36 @@ _DEFAULT_AMBIENT = ("brown", 0.003, 800)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def find_visual(theme_name=None, prefer_path=None, random_pick=False):
+def find_visual(theme_name=None, prefer_path=None, random_pick=False, folder=None):
     if prefer_path and os.path.exists(prefer_path):
         return prefer_path
     pattern = f"bg_{theme_name}*.mp4" if theme_name else "bg_*.mp4"
-    files = [f for f in glob.glob(os.path.join(VISUALS_DIR, pattern))
+    files = [f for f in glob.glob(os.path.join(folder or VISUALS_DIR, pattern))
              if "_graded720" not in f]
     if not files:
         return None
     if random_pick and len(files) > 1:
         return random.choice(files)
     return max(files, key=os.path.getmtime)
+
+
+def ensure_radio_visual(theme_name):
+    """A loop for this theme with the radio's labels, rendered once (about a
+    minute of video) and reused. None if rendering fails."""
+    have = find_visual(theme_name, folder=STREAM_VISUALS_DIR)
+    if have:
+        return have
+    print(f"  [stream] Rendering a radio background for {theme_name} (first time only)...")
+    try:
+        sys.path.insert(0, ROOT)
+        from scripts.visual_v2 import generate_visual
+        path, _ = generate_visual(theme_name=theme_name, duration_secs=60,
+                                  track_title=RADIO_SESSION, genre=RADIO_BADGE,
+                                  out_dir=STREAM_VISUALS_DIR)
+        return path
+    except Exception as e:
+        print(f"  [stream] Radio background failed ({e}); using a video's loop instead")
+        return None
 
 
 def build_visual_list(tmp_dir, theme_name):
@@ -175,7 +199,8 @@ def build_visual_list(tmp_dir, theme_name):
     pre-graded in a background thread and added to the playlist when ready.
     """
     pattern = f"bg_{theme_name}*.mp4" if theme_name else "bg_*.mp4"
-    raw_files = [f for f in glob.glob(os.path.join(VISUALS_DIR, pattern))
+    folder = STREAM_VISUALS_DIR if glob.glob(os.path.join(STREAM_VISUALS_DIR, pattern)) else VISUALS_DIR
+    raw_files = [f for f in glob.glob(os.path.join(folder, pattern))
                  if "_graded720" not in f]
     if not raw_files:
         return None
@@ -233,27 +258,32 @@ def build_visual_list(tmp_dir, theme_name):
     return list_path
 
 
-def build_music_list(tmp_dir):
-    """Write an ffmpeg concat list from all music files in music/, shuffled.
-    Returns (list_path, ordered_tracks) — tracks list is used by monitor thread."""
-    exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
+def _library_tracks():
+    """Every audio file in the stream's own library folder."""
     files = []
-    for ext in exts:
-        # Exclude sidecar files
-        files.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                     if not f.endswith(".meta.json"))
+    for ext in ("*.mp3", "*.wav", "*.flac", "*.ogg"):
+        files.extend(glob.glob(os.path.join(MUSIC_DIR, ext)))
+    return files
+
+
+def build_music_list(tmp_dir):
+    """Write an ffmpeg concat list from the stream library, shuffled.
+    Returns (list_path, ordered_tracks); the order is what ffmpeg will play,
+    looping, and what the now-playing monitor follows."""
+    files = _library_tracks()
     if not files:
         raise FileNotFoundError(
             f"No music files found in {MUSIC_DIR}\n"
-            "Generate tracks first: python run.py --skip-upload --skip-visual\n"
-            "Or drop .mp3/.wav files into the music/ folder."
+            "Start a real stream once (not --test) to generate a library first, "
+            f"or copy rendered tracks (music/*.wav with their .meta.json) into {MUSIC_DIR}."
         )
     random.shuffle(files)
     list_path = os.path.join(tmp_dir, "stream_playlist.txt")
     with open(list_path, "w") as f:
         for p in files:
-            f.write(f"file '{os.path.abspath(p)}'\n")
-    print(f"  Playlist: {len(files)} track(s) (looping forever)")
+            escaped = os.path.abspath(p).replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
+    print(f"  Playlist: {len(files)} track(s) (looping until the next reconnect)")
     return list_path, files
 
 
@@ -284,17 +314,17 @@ def _get_track_duration(path):
 
 
 def _start_track_monitor(tracks, stop_event, on_track_change=None):
-    """Background thread: cycles through tracks indefinitely, updating now-playing files.
-    Reloads the track list from MUSIC_DIR after each full pass so newly generated
-    tracks appear in the title rotation without restarting the stream.
-    on_track_change(title, genre) is called each time a new track starts."""
+    """Background thread: follows the same track order ffmpeg plays (the
+    concat list, looped), updating now-playing as each track starts.
+    Restarted by stream_once() whenever ffmpeg restarts, so the two stay
+    aligned. on_track_change(title, genre) is called on each track change."""
     def _run():
-        current = list(tracks)
+        order = list(tracks)
+        if not order:
+            return
+        durations = {p: _get_track_duration(p) for p in order}
         while not stop_event.is_set():
-            if not current:
-                time.sleep(5)
-                continue
-            for track_path in current:
+            for track_path in order:
                 if stop_event.is_set():
                     return
                 meta = parse_track_meta(track_path)
@@ -302,149 +332,90 @@ def _start_track_monitor(tracks, stop_event, on_track_change=None):
                 if on_track_change:
                     try:
                         on_track_change(meta["title"], meta["genre"])
-                    except Exception:
-                        pass
-                dur = _get_track_duration(track_path)
-                elapsed = 0.0
-                while elapsed < dur and not stop_event.is_set():
-                    time.sleep(0.5)
-                    elapsed += 0.5
-            # Reload from disk after each full pass — picks up new bg-gen tracks
-            exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-            fresh = []
-            for ext in exts:
-                fresh.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                             if not f.endswith(".meta.json"))
-            if fresh:
-                random.shuffle(fresh)
-                current = fresh
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return t
-
-
-def _start_playlist_refresher(playlist_path, stop_event):
-    """Background thread: rewrites the concat playlist every 60s to include newly generated tracks.
-    ffmpeg's -reload 1 on the concat demuxer picks up the updated file at the next EOF."""
-    def _run():
-        while not stop_event.is_set():
-            for _ in range(60):
-                if stop_event.is_set():
+                    except Exception as e:
+                        print(f"  [now playing] title update failed: {e}")
+                if stop_event.wait(durations[track_path]):
                     return
-                time.sleep(1)
-            exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-            files = []
-            for ext in exts:
-                files.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                             if not f.endswith(".meta.json"))
-            if files:
-                random.shuffle(files)
-                try:
-                    with open(playlist_path, "w") as fh:
-                        for p in files:
-                            fh.write(f"file '{os.path.abspath(p)}'\n")
-                    print(f"\n  [playlist] Refreshed: {len(files)} track(s)")
-                except Exception as e:
-                    print(f"\n  [playlist] Refresh error: {e}")
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return t
 
 
-_BG_GEN_MAX_TRACKS  = 150  # prune oldest beyond this many to prevent disk fill
+_BG_GEN_MAX_TRACKS  = 60   # ~3.5 h of unique music; ~2.4 GB of WAVs
 _RADIO_MIN_TRACKS   = 10   # minimum tracks before stream starts — ensures variety on day 1
 
 
 def _prune_old_tracks():
-    """Delete oldest tracks beyond _BG_GEN_MAX_TRACKS — called after each generation."""
-    exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-    files = []
-    for ext in exts:
-        files.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                     if not f.endswith(".meta.json"))
+    """Delete the oldest library tracks beyond _BG_GEN_MAX_TRACKS. Only called
+    before ffmpeg starts: deleting while streaming would remove files the
+    running concat list still points at."""
+    files = _library_tracks()
     if len(files) <= _BG_GEN_MAX_TRACKS:
         return
     files.sort(key=os.path.getmtime)  # oldest first
     to_delete = files[:len(files) - _BG_GEN_MAX_TRACKS]
     for path in to_delete:
-        try:
-            os.remove(path)
-            meta = path + ".meta.json"
-            if os.path.exists(meta):
-                os.remove(meta)
-        except Exception:
-            pass
-    print(f"\n  [bg-gen] Pruned {len(to_delete)} old track(s) (keeping newest {_BG_GEN_MAX_TRACKS})")
+        for victim in (path, path + ".meta.json"):
+            try:
+                os.remove(victim)
+            except FileNotFoundError:
+                pass
+    print(f"\n  [library] Pruned {len(to_delete)} old track(s) (keeping newest {_BG_GEN_MAX_TRACKS})")
 
 
 def _warmup_music_library(concept_hint=None):
     """
-    Block until music/ has at least _RADIO_MIN_TRACKS files.
-    Generates tracks inline (not in a thread) so the stream only starts
-    once there's real variety — like a radio station spinning up its library.
+    Block until the library has at least _RADIO_MIN_TRACKS tracks, generating
+    them inline so the stream starts with real variety. Gives up after a
+    bounded number of failures instead of looping forever.
     """
-    exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-
-    def _count():
-        n = 0
-        for ext in exts:
-            n += len([f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                      if not f.endswith(".meta.json")])
-        return n
-
-    current = _count()
+    os.makedirs(MUSIC_DIR, exist_ok=True)
+    current = len(_library_tracks())
     if current >= _RADIO_MIN_TRACKS:
         return
 
     print(f"\n  [radio] Library has {current} track(s) — warming up to {_RADIO_MIN_TRACKS} before stream starts...")
-    try:
-        sys.path.insert(0, ROOT)
-        from scripts.generate_music_gemini import generate_track
-    except ImportError:
-        print("  [radio] Cannot import generate_music_gemini — skipping warm-up")
-        return
+    sys.path.insert(0, ROOT)
+    from scripts.composer import generate_track
 
+    failures, max_failures = 0, _RADIO_MIN_TRACKS
     idx = 0
-    while _count() < _RADIO_MIN_TRACKS:
+    while len(_library_tracks()) < _RADIO_MIN_TRACKS:
         try:
             print(f"  [radio] Generating warm-up track {idx + 1}/{_RADIO_MIN_TRACKS}...")
-            generate_track(idx, concept_hint=concept_hint)
+            generate_track(idx, concept_hint=concept_hint, out_dir=MUSIC_DIR)
         except Exception as e:
-            print(f"  [radio] Warm-up track {idx} failed: {e}")
+            failures += 1
+            print(f"  [radio] Warm-up track {idx} failed ({failures}/{max_failures}): {e}")
+            if failures >= max_failures:
+                raise RuntimeError("Music generation keeps failing; not starting the stream.") from e
         idx += 1
 
-    print(f"  [radio] Library ready: {_count()} track(s) — starting stream\n")
+    print(f"  [radio] Library ready: {len(_library_tracks())} track(s) — starting stream\n")
 
 
 def _start_bg_music_gen(stop_event, concept_hint=None):
-    """Background thread: continuously generates new tracks while stream runs.
-    Prunes oldest tracks beyond _BG_GEN_MAX_TRACKS to prevent disk fill on long runs."""
+    """Background thread: tops the library up to _BG_GEN_MAX_TRACKS while the
+    stream runs, at low CPU priority so the real-time encode isn't starved.
+    New tracks join the playlist at the next reconnect. Never deletes."""
     def _run():
-        try:
-            sys.path.insert(0, ROOT)
-            from scripts.generate_music_gemini import generate_track
-        except ImportError:
-            print("  [bg-gen] Could not import generate_music_gemini — skipping background generation")
-            return
+        sys.path.insert(0, ROOT)
+        from scripts.composer import generate_track
 
-        idx = 10  # start at index 10 to avoid overwriting pre-generated 00-04
+        idx = 0
         while not stop_event.is_set():
+            if len(_library_tracks()) >= _BG_GEN_MAX_TRACKS:
+                if stop_event.wait(600):
+                    return
+                continue
             try:
                 print(f"\n  [bg-gen] Generating track {idx:02d}...")
-                # low_priority: this runs concurrently with the real-time
-                # ffmpeg encode driving the actual stream -- yield CPU/IO
-                # priority to it rather than compete (see midi_to_wav).
-                generate_track(idx, concept_hint=concept_hint, low_priority=True)
+                generate_track(idx, concept_hint=concept_hint, low_priority=True, out_dir=MUSIC_DIR)
                 idx += 1
-                _prune_old_tracks()
-                # Generation itself takes 1-3 min — no artificial pause needed
             except Exception as e:
                 print(f"  [bg-gen] Error generating track {idx}: {e}")
-                # Wait before retry
-                for _ in range(60):
-                    if stop_event.is_set():
-                        return
-                    time.sleep(1)
+                if stop_event.wait(60):
+                    return
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return t
@@ -502,7 +473,7 @@ def build_eq_filtergraph(theme_name):
         # Split music audio: one copy for EQ visualiser, one for ambient mix
         "[1:a]asplit=2[a_eq][a_mix]",
         # EQ bars generated from audio at 720p-proportional size (1240×273)
-        (f"[a_eq]showfreqs=s={_EQ_W}x{_EQ_H}:mode=bar:fscale=log:ascale=sqrt"
+        (f"[a_eq]showfreqs=s={_EQ_W}x{_EQ_H}:mode=bar:fscale=log:ascale=log"
          f":win_func=hann:averaging=1:colors=ffffff[eq_raw]"),
         # Colour gradient for EQ bars
         f"color=c=black:s={_EQ_W}x{_EQ_H}:r=24[blank]",
@@ -527,6 +498,14 @@ def build_eq_filtergraph(theme_name):
 _STALL_TIMEOUT = 30   # seconds without any ffmpeg output before killing
 
 
+_RTMP_KEY_RE = re.compile(r"(rtmps?://[^\s/]+/[^\s/]+/)[^\s:'\"]+")
+
+
+def redact_stream_key(line: str) -> str:
+    """ffmpeg names the full output URL, stream key included, in its errors."""
+    return _RTMP_KEY_RE.sub(r"\1****", line)
+
+
 def _monitor_stderr(proc, stop_event, last_output_time):
     """
     Background thread — reads ffmpeg stderr byte-chunks.
@@ -546,7 +525,7 @@ def _monitor_stderr(proc, stop_event, last_output_time):
         parts = re.split(b"[\r\n]", buf)
         buf = parts[-1]   # keep incomplete line
         for raw in parts[:-1]:
-            line = raw.strip().decode("utf-8", errors="replace")
+            line = redact_stream_key(raw.strip().decode("utf-8", errors="replace"))
             if not line:
                 continue
             if "fps=" in line or "speed=" in line or "bitrate=" in line:
@@ -571,6 +550,7 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
     tracks: ordered list of music file paths for the monitor thread.
     visual_playlist_path: if set, cycles through multiple pre-graded visuals.
     """
+    global _user_interrupted
     # Pre-grade single visual if no playlist (cached — runs once per file)
     if not visual_playlist_path:
         visual_path = pregrade_visual(visual_path)
@@ -582,12 +562,14 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
     on_track_change = title_updater.set_track if title_updater else None
     if tracks:
         _start_track_monitor(tracks, monitor_stop, on_track_change=on_track_change)
-    _start_playlist_refresher(playlist_path, monitor_stop)
 
     cmd = [
         "ffmpeg",
         # ── Global options — MUST come before all inputs ───────────────────────
         "-hide_banner",
+        # Never read the terminal: a stray key ('q') would end a live stream,
+        # and an overwrite prompt would quietly abort the test (exit code 0).
+        "-nostdin",
         "-loglevel",      "warning",   # suppress info spam
         "-stats",                       # show progress (fps/speed) even at warning level
         "-filter_threads", "4",         # filtergraph thread pool — more cores for EQ+drawtext
@@ -625,7 +607,7 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
         "-sc_threshold", "0",           # no scene-cut keyframes — consistent GOP
         # nal-hrd=cbr: pads NAL stream to enforce CBR
         # force-cfr=1: constant frame rate
-        # threads=2: libx264 ignores ffmpeg's -threads; 2 threads on i3-7100U
+        # threads=4: libx264 ignores ffmpeg's -threads, so set it here
         "-x264-params", "nal-hrd=cbr:force-cfr=1:threads=4",
         # ── Audio encode ──────────────────────────────────────────────────────
         "-c:a",  "aac",
@@ -637,11 +619,12 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
     if test_secs:
         cmd += ["-t", str(test_secs)]
         output = os.path.join(OUTPUT_DIR, "stream_test.mp4")
-        cmd += ["-f", "mp4", output]
+        cmd += ["-f", "mp4", "-y", output]
+        test_started = time.time()
         print(f"\n[STREAM TEST] Writing {test_secs}s to {output}")
     else:
         cmd += ["-f", "flv", rtmp_url]
-        print(f"\n[STREAM] Pushing to YouTube... (Ctrl+C to stop)")
+        print("\n[STREAM] Pushing to YouTube... (Ctrl+C to stop)")
 
     last_output_time = [time.time()]
     stop_event = threading.Event()
@@ -658,6 +641,15 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
             ret = proc.poll()
             if ret is not None:
                 break
+            if _user_interrupted:
+                # SIGTERM only sets the flag; without this check the encoder
+                # ran on until systemd killed everything, and the broadcast
+                # was never ended.
+                print("\n[STREAM] Stop requested.")
+                stop_event.set()
+                proc.terminate()
+                proc.wait(timeout=10)
+                return 0
             # Watchdog: kill if stalled (no stderr output for _STALL_TIMEOUT seconds)
             if not test_secs:
                 stalled = time.time() - last_output_time[0]
@@ -669,7 +661,6 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
             time.sleep(2)
     except KeyboardInterrupt:
         print("\n[STREAM] Interrupted.")
-        global _user_interrupted
         _user_interrupted = True
         stop_event.set()
         proc.terminate()
@@ -689,8 +680,15 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
 
     print()  # newline after in-place progress line
 
-    if test_secs and proc.returncode == 0:
-        print(f"[STREAM TEST] Done: {output}")
+    if test_secs:
+        # ffmpeg exits 0 even when it never opened the file, so check the file.
+        written = (os.path.exists(output) and os.path.getmtime(output) >= test_started
+                   and os.path.getsize(output) > 0)
+        if proc.returncode == 0 and written:
+            print(f"[STREAM TEST] Done: {output}")
+        else:
+            print(f"[STREAM TEST] FAILED: {output} was not written (ffmpeg exit {proc.returncode})")
+            return proc.returncode or 1
 
     return proc.returncode
 
@@ -698,6 +696,34 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
 # ── Stream with auto-reconnect ────────────────────────────────────────────────
 
 _user_interrupted = False
+
+# The web panel's Live page reads this to show (and stop) a 24/7 stream, the
+# same way it reads publish.py's live_state.json for a single-video stream.
+STREAM_STATE_FILE = os.path.join(ROOT, "stream_state.json")
+
+
+def _write_stream_state(broadcast_id, test_secs) -> None:
+    if test_secs:
+        return
+    try:
+        from scripts.fileutil import atomic_write_json
+        atomic_write_json(STREAM_STATE_FILE, {
+            "mode": "24/7",
+            "pid": os.getpid(),
+            "broadcast_id": broadcast_id,
+            "watch_url": f"https://www.youtube.com/watch?v={broadcast_id}" if broadcast_id else None,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        })
+    except OSError as e:
+        print(f"  [stream] Couldn't write {STREAM_STATE_FILE}: {e}")
+
+
+def _clear_stream_state() -> None:
+    try:
+        os.remove(STREAM_STATE_FILE)
+    except OSError:
+        pass
+
 
 def _set_interrupted(sig, frame):
     global _user_interrupted
@@ -756,7 +782,8 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
             stream_id  = yt_info.get("stream_id")
             sched      = yt_info.get("scheduled_start")
             if active_yt and active_bid:
-                title_updater = _yt_mgr.LiveTitleUpdater(active_yt, active_bid, sched)
+                title_updater = _yt_mgr.LiveTitleUpdater(active_yt, active_bid, sched,
+                                                         base_title=yt_info.get("title"))
                 # Transition to live once ffmpeg connects (background thread)
                 _yt_mgr.transition_to_live_async(active_yt, active_bid, stream_id)
         except Exception as e:
@@ -768,6 +795,8 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
         print("  Or set:      export YT_STREAM_KEY='xxxx-xxxx-xxxx-xxxx'")
         return
 
+    _write_stream_state(active_bid, test_secs)
+
     attempt          = 0
     current_visual   = visual_path
     current_playlist = playlist_path
@@ -778,8 +807,10 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
     vis_tmp = tempfile.mkdtemp(prefix="lofi_vis_")
     visual_playlist = build_visual_list(vis_tmp, theme_name)
 
+    exit_code = 0
     try:
         while not _user_interrupted:
+            run_started = time.monotonic()
             exit_code = stream_once(
                 current_visual, current_playlist, current_rtmp,
                 theme_name, test_secs, tracks=current_tracks,
@@ -823,6 +854,7 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
             if session_tmp:
                 shutil.rmtree(session_tmp, ignore_errors=True)
             session_tmp = tempfile.mkdtemp(prefix="lofi_stream_")
+            _prune_old_tracks()          # safe here: ffmpeg isn't running
             current_playlist, current_tracks = build_music_list(session_tmp)
             if not visual_playlist:
                 # Single-visual fallback: rotate to a different file on reconnect
@@ -830,7 +862,10 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
                 if new_visual:
                     current_visual = new_visual
                     print(f"  [stream] New visual: {os.path.basename(current_visual)}")
-            attempt = 0
+            # Only a run that stayed up for a while counts as a recovery; an
+            # immediate failure keeps the backoff growing and the alert armed.
+            if time.monotonic() - run_started >= 120:
+                attempt = 0
     finally:
         bg_gen_stop.set()
         shutil.rmtree(vis_tmp, ignore_errors=True)
@@ -841,33 +876,39 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
         # End broadcast only on deliberate stop — not on reconnect
         if _yt_mgr and active_yt and active_bid:
             _yt_mgr.end_broadcast(active_yt, active_bid)
+        _clear_stream_state()
 
     if _user_interrupted:
         print("[STREAM] Stopped by user.")
+    return exit_code
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
-    ALL_THEMES = [
-        "cozy_rain", "midnight_cafe", "purple_dusk", "amber_night",
-        "winter_snow", "autumn_study", "spring_dawn", "neon_tokyo",
-        "summer_lofi", "blue_hour", "forest_rain", "sakura_night",
-    ]
+    # The shared list: a copy here had fallen five themes behind.
+    sys.path.insert(0, ROOT)
+    from scripts.visual_v2.themes import ALL_THEMES
 
     parser = argparse.ArgumentParser(description="Lo-fi Factory — Live Stream to YouTube")
     parser.add_argument("--key", default=None,
                         help="YouTube stream key (default: $YT_STREAM_KEY env var)")
     parser.add_argument("--theme", choices=ALL_THEMES, default=None,
-                        help="Visual theme (default: auto-detect from most recent visual)")
+                        help="Visual theme (default: one that suits the season)")
     parser.add_argument("--visual", default=None,
                         help="Path to a specific visual .mp4 (default: most recent in visuals/)")
     parser.add_argument("--test", action="store_true",
                         help="Test mode: encode 60s to output/stream_test.mp4 instead of streaming")
     args = parser.parse_args()
 
-    # Resolve visual + theme before anything else
-    visual_path = find_visual(args.theme, prefer_path=args.visual)
+    # Resolve visual + theme before anything else: the radio's own loop for
+    # the theme (given, or one that suits the season), rendered if missing.
+    visual_path = None
+    if not args.visual:
+        from scripts.titles import theme_for_genre
+        radio_theme = args.theme or theme_for_genre(None)
+        visual_path = ensure_radio_visual(radio_theme)
+    visual_path = visual_path or find_visual(args.theme, prefer_path=args.visual)
     if not visual_path:
         print("ERROR: No visual found.\n"
               "  Generate one first: python run.py --skip-music --skip-upload\n"
@@ -923,10 +964,11 @@ def main():
     if not args.test:
         _warmup_music_library()
 
+    _prune_old_tracks()
     tmp_dir = tempfile.mkdtemp(prefix="lofi_stream_")
     try:
         playlist_path, tracks = build_music_list(tmp_dir)
-        stream(
+        rc = stream(
             visual_path=visual_path,
             playlist_path=playlist_path,
             rtmp_url=fallback_rtmp,
@@ -937,6 +979,8 @@ def main():
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+    if args.test and rc:
+        sys.exit(rc)      # a failed test must not look like a pass
 
 
 if __name__ == "__main__":

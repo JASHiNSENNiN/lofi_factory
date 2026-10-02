@@ -1,6 +1,6 @@
 """
 Tests for the L-system melodic phrase generator ported into v1
-(generate_music_gemini.py) from v2's Stage-3 work: _lsystem_expand,
+(composer.py) from v2's Stage-3 work: _lsystem_expand,
 _lsystem_to_pitches, generate_lsystem_motif. Mirrors test_lsystem.py's
 coverage (which tests the original v2 versions) against the new v1
 locations -- v1's generate_lsystem_motif returns a plain pitch list
@@ -10,7 +10,7 @@ _lsystem_to_pitches are pure and byte-identical to v2's, so those tests are
 copied as-is with a new import.
 """
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     _lsystem_expand,
     _lsystem_to_pitches,
     _LSYSTEM_PRESETS,

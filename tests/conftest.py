@@ -23,3 +23,17 @@ def _isolate_alert_log(tmp_path, monkeypatch):
     except ImportError:
         return
     monkeypatch.setattr(alerts, "_ALERT_LOG", str(tmp_path / "alerts_log.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_composer_history(tmp_path, monkeypatch):
+    """The composer steers away from recently used progressions and melodies
+    using music/.params_history.json and .melody_history.json. Tests that
+    render tracks used to rewrite the real files, so a test run changed
+    what the next real video would pick."""
+    try:
+        from scripts import composer
+    except Exception:
+        return
+    monkeypatch.setattr(composer, "_PARAMS_HISTORY_FILE", str(tmp_path / "params_history.json"))
+    monkeypatch.setattr(composer, "_MELODY_HISTORY_FILE", str(tmp_path / "melody_history.json"))

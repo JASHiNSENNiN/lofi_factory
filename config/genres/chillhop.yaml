@@ -5,7 +5,7 @@ composition:
   melody_program: GM_GUITAR_NYLON
   countermelody_program: GM_WARM_PAD
   scales: [pent, dorian, natural_minor]
-  drum_pattern_indices: [0, 1, 2, 13]
+  drum_pattern_indices: [0, 1, 2]
   bpm_range: [76, 88]
   energy: null
   # 57: C major modal interchange (I-bIII-iv-I-bVII) -- research/subgenres/
@@ -21,3 +21,5 @@ mix: {lpf_hz: 9500, bitcrush_bits: 11, reverb_room: 0.35, reverb_wet: 0.2, tape_
   compress_ratio: 3.0, vinyl_crackle: 0.12, use_ir_reverb: true, sidechain_duck: true,
   duck_profile: hiphop, presence_db: -1.0, warmth_db: 1.0}
 song_form: null
+bass_program: GM_FINGER_BASS
+# Separation pass: jazzy boom-bap swing (classic, Nujabes, Dilla patterns).

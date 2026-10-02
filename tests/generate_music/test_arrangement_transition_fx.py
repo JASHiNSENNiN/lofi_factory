@@ -3,11 +3,11 @@ Tests for research/theory/arrangement-structure.md's remaining "Concrete
 additions" table entries -- everything EXCEPT the aaba/build song forms and
 _FORM_BY_SUBGENRE mappings (already implemented, confirmed present:
 _SONG_FORMS['aaba']/['build'], bossa_lofi/lofi_drill/lofi_phonk already
-mapped, jazz_cafe fixed this session) and the per-section texture-density
+mapped, jazz_cafe fixed) and the per-section texture-density
 variation (already effectively implemented via build_texture()'s tension-
 weighted `0.35 + 0.40 * sec_tension` probability -- a continuous,
 tension-driven density that supersedes the research doc's flat-50%-per-
-track framing, which was already stale by the time this session read it).
+track framing, which was already out of date).
 
 Covers what was genuinely still missing: _SECTION_TRANSITION_FX and the 3
 audio-domain transition effects (vinyl stop / reverse riser / filter
@@ -19,8 +19,8 @@ import mido
 import numpy as np
 import pytest
 
-import scripts.generate_music_gemini as gmg
-from scripts.generate_music_gemini import (
+import scripts.composer as gmg
+from scripts.composer import (
     _compute_section_transitions,
     _SECTION_TRANSITION_FX,
     _SONG_FORMS,

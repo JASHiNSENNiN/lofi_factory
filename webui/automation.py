@@ -6,7 +6,7 @@ auto-upload run fires on a systemd timer (default: daily at midnight) so it
 keeps generating/uploading on schedule across webui restarts and deploys.
 This module just reflects/controls that independent timer via the shared
 auto_service helper (also used by publish.py's `auto-service` CLI subcommand
-and dashboard.py's TUI panel).
+and the web panel).
 """
 from __future__ import annotations
 
@@ -163,7 +163,7 @@ def render_progress() -> dict | None:
 # Calling that directly from a button handler used to freeze the *entire*
 # webui for every client for the full run duration (TLS handshakes included --
 # the event loop never got back to accept()). Push each call to a worker
-# thread so the event loop stays free; publish.py's CLI and dashboard.py's
+# thread so the event loop stays free; publish.py's CLI and the panel's
 # TUI still call auto_service's sync functions directly, which is fine there
 # since neither has other concurrent clients to starve.
 #
@@ -204,6 +204,9 @@ async def set_schedule(hour: int, every_hours: int) -> None:
 resource_status = _svc.resource_status
 
 
+_PUMPS: set[asyncio.Task] = set()   # running log pumps (see tail_logs)
+
+
 async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:
     """Stream `journalctl --user -u lofi-auto -f` lines to on_line(str).
 
@@ -220,5 +223,7 @@ async def tail_logs(on_line, n: int = 200) -> asyncio.subprocess.Process:
         async for raw in proc.stdout:
             on_line(raw.decode(errors="replace").rstrip("\n"))
 
-    asyncio.create_task(_pump())
+    task = asyncio.create_task(_pump())
+    _PUMPS.add(task)                       # the loop only keeps weak references
+    task.add_done_callback(_PUMPS.discard)
     return proc

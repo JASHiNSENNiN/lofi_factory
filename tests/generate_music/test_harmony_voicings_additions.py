@@ -11,7 +11,7 @@ Covers what was genuinely still missing: G13, G7alt, Am11, Dm11, Am6,
 Cmaj6, and quartal voicings appended as alternates to Dm7/Am7.
 """
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     BASS_ROOTS,
     VOICING_OPTIONS,
     _GUIDE_TONES,

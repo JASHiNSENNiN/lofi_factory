@@ -4,9 +4,9 @@ postfx.py — Per-frame post-processing: bloom, film grain, watermark.
 
 import os
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageFilter, ImageFont
 
-from .config import W, H, CHANNEL_NAME
+from .config import W, H
 from .themes import THEMES
 
 
@@ -119,7 +119,6 @@ _WATERMARK_OV = None
 
 
 def _get_font(size: int = 22):
-    from PIL import ImageFont
     candidates = [
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -135,24 +134,3 @@ def _get_font(size: int = 22):
     return ImageFont.load_default()
 
 
-def draw_watermark(frame: np.ndarray,
-                   channel_name: str = CHANNEL_NAME) -> None:
-    """Cached semi-transparent channel name bottom-right."""
-    global _WATERMARK_OV
-    if _WATERMARK_OV is None:
-        ov   = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        d    = ImageDraw.Draw(ov)
-        font = _get_font(22)
-        text = channel_name
-        x, y = W - 235, H - 48
-        d.text((x + 1, y + 1), text, fill=(0, 0, 0, 90), font=font)
-        d.text((x, y),         text, fill=(210, 210, 210, 110), font=font)
-        _WATERMARK_OV = np.array(ov)
-
-    ov_arr = _WATERMARK_OV
-    alpha  = ov_arr[:, :, 3:4].astype(np.float32) / 255.0
-    dst    = frame.astype(np.float32)
-    frame[:] = np.clip(
-        dst * (1 - alpha) + ov_arr[:, :, :3].astype(np.float32) * alpha,
-        0, 255
-    ).astype(np.uint8)

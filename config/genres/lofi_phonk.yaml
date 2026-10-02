@@ -2,14 +2,14 @@ key: lofi_phonk
 family: dark_moody
 composition:
   piano_program: GM_RHODES
-  melody_program: GM_ORGAN_ROCK
+  melody_program: GM_AGOGO
   countermelody_program: GM_CELLO
   scales: [phryg, pent, natural_minor]
   # 16: new pattern Q "Phonk hat-roll cell" (research/theory/rhythm-groove.md
   # Task 5) -- straight-8th hat base + roll burst on the back-quarter of the
   # bar + cowbell-style RIM accents, the genre-defining texture this
   # subgenre's pool was previously missing entirely.
-  drum_pattern_indices: [0, 2, 5, 9, 11, 14, 16]
+  drum_pattern_indices: [16, 11]
   # research/subgenres/lofi_phonk.md: real lofi-phonk sits at its own 75-90
   # BPM tempo tier (distinct from drift-phonk's 140-160 and OG/Memphis
   # phonk's 130-145) -- old (65,78) undershot even that. Raised to the
@@ -22,7 +22,7 @@ swing_range: [0.62, 0.73]
 cozy_bias: false
 # research/theory/rhythm-groove.md: phonk's loose feel comes from swing +
 # off-grid hat placement + roll density as three separate levers -- this is
-# the third one (see _scale_roll_intensity() in generate_music_gemini.py,
+# the third one (see _scale_roll_intensity() in composer.py,
 # applied to pattern Q's back-quarter hat-roll steps 12-15).
 roll_density: 0.85
 drum_kit_programs: [24, 25]
@@ -33,3 +33,8 @@ mix: {lpf_hz: 7000, bitcrush_bits: 8, reverb_room: 0.4, reverb_wet: 0.22, tape_w
 # research/theory/arrangement-structure.md #6: lofi_phonk is buildup/release-
 # driven, not wallpaper music, and was silently falling back to 'standard'.
 song_form: build
+bass_program: GM_SYNTH_BASS_2
+bass_style: glide_808
+# Genre rework: the cowbell is phonk's signature (melodics.com phonk guide);
+# pattern Q now plays a real GM cowbell and the lead is a pitched bell (Agogo),
+# over a sliding 808-style sub. Generic lofi patterns were removed from its pool.

@@ -1,8 +1,8 @@
 key: piano_lofi
 family: acoustic_classical
 composition:
-  piano_program: GM_EP2
-  melody_program: GM_VIBRAPHONE
+  piano_program: GM_ACOUSTIC_GRAND
+  melody_program: GM_ACOUSTIC_GRAND
   countermelody_program: GM_CELLO
   scales: [major_pent, pent, dorian, major]
   drum_pattern_indices: [7, 9, 13]
@@ -16,3 +16,5 @@ drum_sampler_pattern: jazz
 mix: {lpf_hz: 14000, bitcrush_bits: 14, reverb_room: 0.45, reverb_wet: 0.25, tape_wobble_depth: 0.08,
   compress_ratio: 1.8, vinyl_crackle: 0.04, use_ir_reverb: true, sidechain_duck: false}
 song_form: ambient
+bass_program: GM_ACOUSTIC_BASS
+# Genre rework: piano lofi had no acoustic piano at all (electric piano 2 + vibraphone).

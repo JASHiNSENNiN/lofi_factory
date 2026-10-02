@@ -18,15 +18,60 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import shutil
+import signal
+import subprocess
 import time
+import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
 from . import alerts, config
+from scripts.fileutil import CorruptStateFile, atomic_write_json, load_json_or_quarantine
 
 # How many log lines to retain per job (ring buffer for late-joining pages).
 _MAX_LINES = 4000
+
+
+# Jobs inherit the panel's cgroup, and lofi-webui.service caps that at 768M,
+# far below what a render needs (the scheduled unit allows 4G). Under
+# systemd each job therefore gets its own scope with its own limit, so a
+# render isn't throttled or OOM-killed by the panel's cap, and an OOM kill
+# takes out the job, not the panel.
+JOB_MEMORY_MAX = os.environ.get("WEBUI_JOB_MEMORY_MAX", "4G")
+_scope_ok: bool | None = None
+
+
+def _scope_prefix() -> list[str]:
+    global _scope_ok
+    if _scope_ok is None:
+        _scope_ok = False
+        if os.environ.get("INVOCATION_ID") and shutil.which("systemd-run"):
+            try:
+                _scope_ok = subprocess.run(
+                    ["systemd-run", "--user", "--scope", "--quiet", "true"],
+                    capture_output=True, timeout=10).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                _scope_ok = False
+    if not _scope_ok:
+        return []
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+            "-p", f"MemoryMax={JOB_MEMORY_MAX}", "--"]
+
+
+_RTMP_KEY_RE = re.compile(r"(rtmps?://[^\s/]+/[^\s/]+/)[^\s:'\"]+")
+
+
+def _failure_summary(lines) -> str:
+    """The most useful line of a failed job's output: its last error line
+    (or traceback message) if it has one, else the last non-empty line."""
+    lines = [ln.strip() for ln in lines if ln.strip()]
+    for ln in reversed(lines):
+        if "[ERROR]" in ln or "Error:" in ln or ln.startswith("Error"):
+            return ln[:300]
+    return (lines[-1] if lines else "")[:300]
 
 
 @dataclass
@@ -58,6 +103,7 @@ class Job:
     # nearest-timestamp join in that case, not assume this is always populated.
     artifacts: dict = field(default_factory=dict)
     _proc: asyncio.subprocess.Process | None = None
+    _cancel_requested: bool = False
     # UI callbacks: (line) -> None and () -> None for status changes.
     _line_subs: set[Callable[[str], None]] = field(default_factory=set)
     _status_subs: set[Callable[[], None]] = field(default_factory=set)
@@ -70,19 +116,11 @@ class Job:
     def duration(self) -> float:
         return (self.finished_at or time.time()) - self.started_at
 
-    def subscribe(self, on_line: Callable[[str], None],
-                  on_status: Callable[[], None]) -> Callable[[], None]:
-        """Attach UI callbacks; returns an unsubscribe function."""
-        self._line_subs.add(on_line)
-        self._status_subs.add(on_status)
-
-        def _off() -> None:
-            self._line_subs.discard(on_line)
-            self._status_subs.discard(on_status)
-
-        return _off
 
     def _emit_line(self, line: str) -> None:
+        # Job output is kept, shown in the panel and written to job_logs/;
+        # none of that may carry a stream key.
+        line = _RTMP_KEY_RE.sub(r"\1****", line)
         self.lines.append(line)
         for cb in list(self._line_subs):
             try:
@@ -235,6 +273,11 @@ class JobManager:
         # The live-stream job is tracked separately so a generation run and an
         # active broadcast can coexist.
         self.stream: Job | None = None
+        # Short broadcast control commands (end, status). They get their own
+        # slot: in the stream slot, "end" was refused while the very stream
+        # it should stop was running.
+        self.control: Job | None = None
+        self._tasks: set[asyncio.Task] = set()
 
     # ── queries ──────────────────────────────────────────────────────────────
     def is_busy(self) -> bool:
@@ -253,29 +296,44 @@ class JobManager:
         if slot == "stream":
             if self.stream_running():
                 raise RuntimeError("A live stream is already running.")
+        elif slot == "control":
+            if self.control is not None and self.control.running:
+                raise RuntimeError("A stream command is already running.")
         else:
             if self.is_busy():
                 raise RuntimeError("Another job is already running.")
 
         cmd = [config.PYTHON, *args]
-        job = Job(id=f"{name}-{int(time.time())}", name=name, cmd=cmd, slot=slot)
+        job = Job(id=f"{name}-{int(time.time())}-{uuid.uuid4().hex[:6]}",
+                  name=name, cmd=cmd, slot=slot)
         if slot == "stream":
             self.stream = job
+        elif slot == "control":
+            self.control = job
         else:
             self.current = job
         self.history.insert(0, job)
         self.history = self.history[:20]
 
-        asyncio.create_task(self._pump(job))
+        # Keep a reference: the event loop only holds tasks weakly, so an
+        # unreferenced task can be garbage-collected mid-run.
+        task = asyncio.create_task(self._pump(job))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
         return job
 
     async def _pump(self, job: Job) -> None:
         try:
+            # Own process group, so cancel() can stop ffmpeg/FluidSynth
+            # children too, not just the Python process.
+            prefix = await asyncio.to_thread(_scope_prefix)
             proc = await asyncio.create_subprocess_exec(
-                *job.cmd,
+                *prefix, *job.cmd,
                 cwd=config.ROOT,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,
             )
             job._proc = proc
             assert proc.stdout is not None
@@ -289,17 +347,22 @@ class JobManager:
                 job._emit_line(line)
             await proc.wait()
             job.returncode = proc.returncode
-            job.status = "success" if proc.returncode == 0 else "failed"
+            if job._cancel_requested:
+                job.status = "cancelled"
+            else:
+                job.status = "success" if proc.returncode == 0 else "failed"
         except Exception as ex:  # noqa: BLE001 — surface any launch failure to UI
             job._emit_line(f"[webui] job crashed: {ex!r}")
             job.status = "failed"
         finally:
             job.finished_at = time.time()
             if job.status == "failed":
-                job.error = next((l for l in reversed(job.lines) if l.strip()), "")[:300]
+                job.error = _failure_summary(job.lines)
             _append_history_file(job, self._history_path)
             _write_job_log(job, history_path=self._history_path, job_logs_dir=self._job_logs_dir)
-            if job.status == "failed":
+            if job.status == "failed" and job.slot != "control":
+                # A failed "status"/"end" click is shown on screen right away;
+                # alerting is for renders and streams nobody is watching.
                 try:
                     await alerts.send_job_failure(job)
                 except Exception:
@@ -316,19 +379,30 @@ class JobManager:
         # job.cmd is [config.PYTHON, *args] (see run()) -- strip the
         # interpreter back off since run() re-adds it.
         args = job.cmd[1:]
-        return await self.run(job.name, args, slot=job.slot)
+        # History written before the control slot existed has end/status
+        # in the stream slot, where they'd collide with the stream itself.
+        slot = "control" if job.name in ("end", "status") else job.slot
+        return await self.run(job.name, args, slot=slot)
 
     async def cancel(self, slot: str = "main") -> None:
-        job = self.stream if slot == "stream" else self.current
-        if job and job.running and job._proc:
-            job._proc.terminate()
+        """Stop the job and every process it started. _pump() records the
+        job as cancelled (not failed), so no failure alert is sent."""
+        job = {"stream": self.stream, "control": self.control}.get(slot, self.current)
+        if not (job and job.running and job._proc):
+            return
+        job._cancel_requested = True
+        pgid = job._proc.pid      # start_new_session=True: pid == process group id
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            await asyncio.wait_for(job._proc.wait(), timeout=10)
+        except asyncio.TimeoutError:
             try:
-                await asyncio.wait_for(job._proc.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                job._proc.kill()
-            job.status = "cancelled"
-            job.finished_at = time.time()
-            job._emit_status()
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -382,17 +456,20 @@ class JobQueue:
         self._pending: list[QueueItem] = []
         self._history: list[QueueItem] = []  # most-recent-first
         self._seq = 0
+        self._tasks: set[asyncio.Task] = set()   # running items (see run_forever)
         os.makedirs(os.path.dirname(self._path), exist_ok=True)
         self._load()
 
     # ── persistence ─────────────────────────────────────────────────────────
     def _load(self) -> None:
-        if not os.path.exists(self._path):
-            return
         try:
-            with open(self._path) as f:
-                raw = json.load(f)
-        except Exception:
+            raw = load_json_or_quarantine(self._path, None)
+        except CorruptStateFile as e:
+            # The unreadable file is kept as a .corrupt-N copy, so starting
+            # empty here can't destroy the only copy of the queue.
+            print(f"[queue] {e}")
+            return
+        if not raw:
             return
         self._pending = [QueueItem.from_dict(d) for d in raw.get("pending", [])]
         self._history = [QueueItem.from_dict(d) for d in raw.get("history", [])]
@@ -404,10 +481,7 @@ class JobQueue:
             "history": [i.to_dict() for i in self._history[:_MAX_QUEUE_HISTORY]],
             "seq": self._seq,
         }
-        tmp = f"{self._path}.tmp"
-        with open(tmp, "w") as f:
-            json.dump(payload, f, indent=2)
-        os.replace(tmp, self._path)
+        atomic_write_json(self._path, payload)
 
     # ── queries ──────────────────────────────────────────────────────────────
     def list_pending(self, slot: str | None = None) -> list[QueueItem]:
@@ -532,7 +606,11 @@ class JobQueue:
                     continue
                 item = self.pop_next(slot)
                 if item:
-                    asyncio.create_task(self._run_item(manager, item))
+                    # Keep a reference: the event loop holds tasks weakly, and
+                    # a collected task would drop the job mid-run.
+                    task = asyncio.create_task(self._run_item(manager, item))
+                    self._tasks.add(task)
+                    task.add_done_callback(self._tasks.discard)
             await asyncio.sleep(poll_secs)
 
 

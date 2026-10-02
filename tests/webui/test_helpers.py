@@ -403,3 +403,17 @@ def test_retry_refuses_a_successful_job(tmp_path):
             await mgr.retry(job.id)
 
     asyncio.run(run())
+
+
+def test_stats_warmer_refreshes_caches_without_raising(monkeypatch):
+    from webui import stats
+    calls = []
+    monkeypatch.setattr(stats, "channel_stats", lambda force=False: calls.append("ch"))
+    monkeypatch.setattr(stats, "traffic_sources", lambda force=False: calls.append("tr"))
+    monkeypatch.setattr(stats, "subscriber_growth", lambda force=False: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(stats, "revenue_available", lambda: False)
+    monkeypatch.setattr(stats, "library", lambda limit=200: [{"video_id": "abc"}, {"video_id": None}])
+    monkeypatch.setattr(stats, "video_engagement", lambda vids, force=False: calls.append(("eng", vids, force)))
+    stats.warm_caches()
+    assert calls == ["ch", "tr", ("eng", ["abc"], True)]
+    assert stats.WARM_EVERY_SECS < stats._TTL       # caches never expire while the panel runs

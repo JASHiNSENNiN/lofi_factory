@@ -2,17 +2,20 @@ key: summer_vibes
 family: cozy_bright
 composition:
   piano_program: GM_VIBRAPHONE
-  melody_program: GM_VIBRAPHONE
+  melody_program: GM_STEEL_DRUMS
   countermelody_program: GM_MARIMBA
   scales: [major_pent, pent, major]
-  drum_pattern_indices: [4, 8, 12]
-  bpm_range: [80, 94]
+  drum_pattern_indices: [21, 12]
+  bpm_range: [86, 100]
   energy: null
   progression_indices: [22, 21, 23, 16, 18, 44, 45, 46, 48]
-swing_range: [0.59, 0.66]
+swing_range: [0.52, 0.58]
 cozy_bias: true
 texture: {program: GM_MARIMBA, style: pop}
 drum_sampler_pattern: null
 mix: {lpf_hz: 13000, bitcrush_bits: 13, reverb_room: 0.3, reverb_wet: 0.16, tape_wobble_depth: 0.11,
   compress_ratio: 2.0, vinyl_crackle: 0.05, use_ir_reverb: false, sidechain_duck: false}
 song_form: null
+bass_program: GM_FINGER_BASS
+# Separation pass: tropical: steel-drum lead over marimba, pattern V (son clave,
+# conga tumbao, shaker) and the 3+3+2 pattern, near-straight 8ths.

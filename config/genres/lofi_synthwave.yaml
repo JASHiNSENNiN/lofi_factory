@@ -1,21 +1,18 @@
 key: lofi_synthwave
 family: synth_retro
 composition:
-  # research/subgenres/lofi_synthwave.md: chords should stay simple (synth
-  # pad) and cede the melodic foreground to a continuous arpeggiator (see
-  # melody_style below, build_arpeggio()). GM_VIBRAPHONE's discrete, plucky,
-  # non-legato note attacks (as opposed to a breathy/legato lead) suit the
-  # arp's repeated-note-attack character well.
-  piano_program: GM_WARM_PAD
-  melody_program: GM_VIBRAPHONE
+  # research/subgenres/lofi_synthwave.md: chords stay simple (polysynth pad)
+  # and a continuous arpeggiator carries the melody (melody_style below).
+  # Synthwave arps and leads are saw synths (orphiq.com, synthcentric.com),
+  # not vibraphone.
+  piano_program: GM_POLYSYNTH_PAD
+  melody_program: GM_SAW_LEAD
   countermelody_program: GM_STRINGS
   scales: [dorian, natural_minor, major, lydian]
-  # G (Hip Hop Tight, hard kicks 1+3, minimal swing) is explicitly the
-  # straightest/most quantized curated pattern -- matches "tight, quantized
-  # precision, not human-feel shuffle." A/I round out a driving, propulsive
-  # straight-pulse pool.
-  drum_pattern_indices: [6, 0, 8]
-  bpm_range: [78, 100]
+  # T: four-on-the-floor kick, big snare on 2 and 4, straight 8ths
+  # ("steady four-on-the-floor drum patterns", orphiq.com).
+  drum_pattern_indices: [19]
+  bpm_range: [82, 104]
   energy: medium
   # Simple 2-4 chord loops, several with the Lydian #11 color (Fmaj7s) that
   # matches this subgenre's lydian scale choice -- research: "verses/choruses
@@ -23,16 +20,17 @@ composition:
   # arpeggios and leads to dominate."
   progression_indices: [19, 35, 37, 17, 44]
 # "Swing should stay light-to-minimal (straighter than even lofi_house)".
-swing_range: [0.5, 0.58]
+swing_range: [0.5, 0.52]
 cozy_bias: false
 # research/subgenres/lofi_synthwave.md: "the arpeggio is explicitly the
 # melodic engine of synthwave...typically an LFO-synced 16th-note...pattern"
 # -- continuous chord-tone arpeggiator (build_arpeggio()) replaces the
 # phrase-based build_melody() lead for this subgenre.
 melody_style: continuous_arp
-texture: {program: GM_MARIMBA, style: pop}
 drum_sampler_pattern: standard
 mix: {lpf_hz: 13500, bitcrush_bits: 13, reverb_room: 0.5, reverb_wet: 0.28, tape_wobble_depth: 0.08,
   compress_ratio: 3.5, vinyl_crackle: 0.05, use_ir_reverb: true, sidechain_duck: true,
   duck_profile: hiphop}
 song_form: funk
+bass_program: GM_SYNTH_BASS_1
+pad_program: GM_WARM_PAD

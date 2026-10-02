@@ -264,3 +264,15 @@ def test_run_pipeline_attempts_crosspost_when_platforms_given(monkeypatch, tmp_p
 
     assert crosspost_calls == [["tiktok"]]
     assert result["crosspost"] == {"attempted": False}
+
+
+def test_short_never_claims_the_long_videos_length_or_carries_its_ref():
+    seo = {"title": "rain on the window 🌧️ [lofi hip hop · 1 hour]", "duration": "1 hour",
+           "genre_label": "lofi hip hop", "thumb_text": "rain on the window",
+           "description": "Long text\n\nTRACKLIST\n0:00 A\n12:00 B\n\nlofi:20261002_101010_ab12"}
+    meta = gs.build_shorts_metadata(seo)
+    assert meta["title"] == "rain on the window 🌧️ [lofi hip hop] #Shorts"
+    assert "lofi:" not in meta["description"] and "TRACKLIST" not in meta["description"]
+    assert "a 1 hour lofi hip hop mix" in meta["description"]
+    radio = gs.build_shorts_metadata({"title": "jazz hop 🌙 calm beats to study & relax to · 2 hours"})
+    assert "hours" not in radio["title"]

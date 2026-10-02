@@ -27,6 +27,7 @@ from scipy.signal import butter, sosfilt, lfilter
 from scripts import genre_presets
 
 SR = 44_100
+_PEAK_CEILING = 10 ** (-1.5 / 20)   # -1.5 dBFS
 _ASSET_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "drums")
 
 # ─── Sample bank ─────────────────────────────────────────────────────────────
@@ -47,8 +48,10 @@ def _load(filename: str) -> np.ndarray | None:
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
         if orig_sr != SR:
-            import librosa
-            audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=SR)
+            from math import gcd
+            from scipy.signal import resample_poly
+            g = gcd(int(orig_sr), SR)
+            audio = resample_poly(audio, SR // g, orig_sr // g)
         _CACHE[filename] = audio.astype(np.float32)
     except Exception:
         _CACHE[filename] = None
@@ -66,8 +69,10 @@ def _pick_sample(filenames: list[str]) -> np.ndarray | None:
 # CC0 sample filenames (Boochi44/free-drum-samples, 03-soulful-vintage kit)
 _KICK_FILES  = ["vintage-kick-01.wav", "vintage-kick-02.wav", "vintage-kick-03.wav"]
 _SNARE_FILES = ["vintage-snare-01.wav", "vintage-snare-02.wav", "vintage-snare-03.wav"]
-_CHAT_FILES  = ["ch-lofi.wav", "hi-hat-closed-01.wav"]
-_OHAT_FILES  = ["oh00-lofi.wav", "open-hat-01.wav"]
+# One closed and one open hat: the two extra hat files that used to be
+# listed here were byte-identical copies of these.
+_CHAT_FILES  = ["ch-lofi.wav"]
+_OHAT_FILES  = ["oh00-lofi.wav"]
 
 
 # ─── Synthesis fallbacks ──────────────────────────────────────────────────────
@@ -131,7 +136,7 @@ def _kick(bpm: int, style: str = "standard") -> np.ndarray:
         gain  = random.uniform(0.75, 1.00)
         n     = len(sample)
         # For '808' style, extend the low-end tail perception by boosting low end
-        # (we can't repitch without librosa overhead, so just leave as-is)
+        # (repitching isn't worth it here, so leave as-is)
         return (sample * gain)
     return _synth_kick(bpm, style)
 
@@ -198,7 +203,7 @@ def generate_euclidean_pat_dict(energy: float) -> dict:
     hat_pat = _bjorklund(k_hat, n)
 
     # Snare: rotation-search for max overlap with the backbeat (steps 4, 12) —
-    # same technique used by the MIDI-layer generator in generate_music_gemini.py,
+    # same technique used by the MIDI-layer generator in composer.py,
     # so the synthesized layer and the MIDI layer share the same rhythmic logic.
     snare_base = _bjorklund(2, n)
     backbeat = {4, 12}
@@ -237,8 +242,30 @@ def _mix_at(buf: np.ndarray, src: np.ndarray, pos: int) -> None:
         buf[pos:end] += src[:src_end]
 
 
+_GM_KICK, _GM_SNARE, _GM_CLAP, _GM_CHH = 36, 38, 39, 42
+
+
+def pattern_from_midi(midi_pattern: dict, chh_triplet: bool = False) -> dict:
+    """{'k','s','h'} amplitudes from a composer MIDI drum pattern (GM note ->
+    velocities, 16 steps per bar), so the sample layer doubles the MIDI
+    drummer instead of playing a second, unrelated groove. Only voices with
+    a matching sample are taken: kick, snare/clap, closed hat. Rim, ride,
+    cowbell and shakers stay MIDI-only; triplet hats (drill) can't be
+    doubled on this 16-step grid, so they're left out too."""
+    length = max(len(v) for v in midi_pattern.values())
+
+    def voice(*notes):
+        out = [0.0] * length
+        for n in notes:
+            for i, vel in enumerate(midi_pattern.get(n, [])):
+                out[i] = max(out[i], vel / 127.0)
+        return out
+    return {"k": voice(_GM_KICK), "s": voice(_GM_SNARE, _GM_CLAP),
+            "h": [0.0] * length if chh_triplet else voice(_GM_CHH)}
+
+
 def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
-                swing: float = 0.5) -> np.ndarray:
+                swing: float = 0.5, pattern: dict | None = None) -> np.ndarray:
     """
     Build one drum loop (n_bars long) with swing-aware timing.
 
@@ -271,16 +298,19 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
     # ~35% chance to use a freshly-generated Euclidean pattern instead of the
     # fixed 5-pattern table, for extra rhythmic variety on this synthesis layer
     # (Phase-A adoption bump; started at 20%). This module is intentionally
-    # dependency-free of generate_music_gemini.py, so a failure here can't
+    # dependency-free of composer.py, so a failure here can't
     # cascade into the MIDI-layer generation — still wrapped defensively since
     # this runs unattended daily.
-    try:
-        if random.random() < 0.35:
-            pat = generate_euclidean_pat_dict(energy=random.uniform(0.35, 0.85))
-        else:
+    if pattern is not None:
+        pat = pattern
+    else:
+        try:
+            if random.random() < 0.35:
+                pat = generate_euclidean_pat_dict(energy=random.uniform(0.35, 0.85))
+            else:
+                pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
+        except Exception:
             pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
-    except Exception:
-        pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
 
     for step in range(16 * n_bars):
         step_in_bar = step % 16
@@ -288,9 +318,9 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
         jitter      = random.gauss(0, 0.007)
         pos         = max(0, int((step * step_sec + swing_off + jitter) * SR))
 
-        k_v = pat["k"][step_in_bar] * random.uniform(0.88, 1.00)
-        s_v = pat["s"][step_in_bar] * random.uniform(0.84, 1.00)
-        h_v = pat["h"][step_in_bar] * random.uniform(0.78, 1.00)
+        k_v = pat["k"][step % len(pat["k"])] * random.uniform(0.88, 1.00)
+        s_v = pat["s"][step % len(pat["s"])] * random.uniform(0.84, 1.00)
+        h_v = pat["h"][step % len(pat["h"])] * random.uniform(0.78, 1.00)
 
         if k_v > 0.01:
             _mix_at(loop, kick * k_v, pos)
@@ -314,6 +344,9 @@ def layer_drum_break(
     sub_genre: str = "chillhop",
     volume: float = 0.22,
     swing: float = 0.62,
+    spans: list[tuple[int, int]] | None = None,
+    patterns: tuple[dict, dict] | None = None,
+    span_labels: list[str] | None = None,
 ) -> None:
     """
     Generate a drum break and mix it into base_wav.
@@ -323,6 +356,9 @@ def layer_drum_break(
     Real CC0 samples used when present in assets/drums/; synthesis otherwise.
 
     swing: pass params['swing'] so drums land in the same pocket as the MIDI render.
+    spans: (start_sample, end_sample) ranges where the break should play
+    (the arrangement's full-beat sections). Outside them it is silent, with
+    short fades at the edges. None plays it across the whole file.
     Reads base_wav fully before writing → in-place (src == dst) is safe.
     """
     using_real = any(_load(f) is not None
@@ -332,21 +368,48 @@ def layer_drum_break(
     audio, _ = sf.read(base_wav, dtype="float32", always_2d=True)
     n_samples = audio.shape[0]
 
-    loop_a = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
-    loop_b = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
-    macro  = np.concatenate([loop_a, loop_b])
+    if patterns is not None and spans:
+        # Double the MIDI drummer: each section's own pattern, started at the
+        # section's first bar so the layers line up.
+        loops = {"A": _build_loop(bpm, sub_genre, 4, swing, pattern=patterns[0]),
+                 "B": _build_loop(bpm, sub_genre, 4, swing, pattern=patterns[1])}
+        drums = np.zeros(n_samples, dtype=np.float32)
+        for i, (start, end) in enumerate(spans):
+            start, end = max(0, int(start)), min(n_samples, int(end))
+            label = (span_labels[i] if span_labels and i < len(span_labels) else "A")
+            loop = loops["B" if label == "B" else "A"]
+            if end > start and len(loop):
+                reps = int(np.ceil((end - start) / len(loop)))
+                drums[start:end] = np.tile(loop, reps)[:end - start]
+    else:
+        loop_a = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
+        loop_b = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
+        macro  = np.concatenate([loop_a, loop_b])
 
-    if len(macro) == 0:
-        return
+        if len(macro) == 0:
+            return
 
-    n_reps = int(np.ceil(n_samples / len(macro)))
-    drums  = np.tile(macro, n_reps)[:n_samples]
+        n_reps = int(np.ceil(n_samples / len(macro)))
+        drums  = np.tile(macro, n_reps)[:n_samples]
+
+    if spans is not None:
+        mask = np.zeros(n_samples, dtype=np.float32)
+        fade = int(0.03 * SR)
+        for start, end in spans:
+            start, end = max(0, int(start)), min(n_samples, int(end))
+            if end - start <= 2 * fade:
+                continue
+            mask[start:end] = 1.0
+            mask[start:start + fade] = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            mask[end - fade:end] = np.linspace(1.0, 0.0, fade, dtype=np.float32)
 
     base_rms = float(np.sqrt(np.mean(audio ** 2)))
     drum_rms = float(np.sqrt(np.mean(drums ** 2))) + 1e-9
     # If base is silent use a fixed target RMS of 0.1; otherwise match base level.
     target_rms = base_rms if base_rms > 1e-4 else 0.10
     drums = drums * (target_rms / drum_rms) * volume
+    if spans is not None:
+        drums = drums * mask
 
     if audio.shape[1] == 2:
         spread   = random.uniform(-0.08, 0.08)
@@ -356,8 +419,10 @@ def layer_drum_break(
     else:
         mixed = audio + drums.reshape(-1, 1)
 
+    # -1.5 dBFS sample-peak ceiling: leaves room for inter-sample peaks so the
+    # AAC-encoded upload stays under YouTube's -1 dBTP.
     peak = float(np.max(np.abs(mixed))) + 1e-9
-    if peak > 0.95:
-        mixed = mixed * (0.95 / peak)
+    if peak > _PEAK_CEILING:
+        mixed = mixed * (_PEAK_CEILING / peak)
 
     sf.write(output_wav, mixed, SR, subtype="PCM_16")

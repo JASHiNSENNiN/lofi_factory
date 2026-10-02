@@ -7,12 +7,12 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=/home/jashin/lofi_factory
+WorkingDirectory=@ROOT@
 # Unbuffered stdout: prints (incl. YouTube OAuth failure diagnostics) go
 # straight to the journal instead of sitting in a pipe buffer until it
 # fills or the process exits.
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/jashin/lofi_factory/venv/bin/python webui.py
+ExecStart=@ROOT@/venv/bin/python webui.py
 # webui.py loads .env itself (WEBUI_PASSWORD, PUBLIC_BASE_URL, etc.)
 # `render` grants VAAPI (/dev/dri/renderD128) access for hardware video
 # encoding without needing a full login-session refresh for the group
@@ -29,6 +29,8 @@ RestartSec=5
 # into the kernel's memory-reclaim path hard enough to make it fully
 # unresponsive (confirmed via /proc/<pid>/task/*/wchan showing
 # mem_cgroup_handle_over_high on the main thread, process state D).
+# Renders started from the panel don't count against this: webui/jobs.py
+# runs each one in its own systemd scope (WEBUI_JOB_MEMORY_MAX, default 4G).
 MemoryHigh=512M
 MemoryMax=768M
 

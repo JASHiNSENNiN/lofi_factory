@@ -5,8 +5,8 @@ composition:
   melody_program: GM_MUTED_TRUMPET
   countermelody_program: GM_ORGAN_ROCK
   scales: [pent, dorian, mixo, blues]
-  drum_pattern_indices: [0, 2, 6, 11, 14]
-  bpm_range: [78, 92]
+  drum_pattern_indices: [6, 2, 0]
+  bpm_range: [84, 94]
   energy: null
   # 53: Em minor ii-V-i -- research/subgenres/hip_hop_lofi.md: "the ii-V-i
   # cadence (e.g. Dm7b5-G7-Cm7 in a minor context) is a foundation" -- direct
@@ -20,3 +20,5 @@ mix: {lpf_hz: 9000, bitcrush_bits: 10, reverb_room: 0.35, reverb_wet: 0.18, tape
   compress_ratio: 3.5, vinyl_crackle: 0.15, use_ir_reverb: true, sidechain_duck: true,
   duck_profile: hiphop, presence_db: -1.5, warmth_db: 1.5}
 song_form: funk
+bass_program: GM_SYNTH_BASS_1
+# Separation pass: the harder boom-bap end: tight kick/snare, a little faster.

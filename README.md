@@ -1,30 +1,35 @@
 # lofi_factory
 
-An automated lofi-music YouTube pipeline: generates original lofi tracks
-(procedural MIDI composition, no sampling of existing recordings), renders
-atmospheric background video, assembles a full video, and uploads it to
-YouTube on a daily schedule — or streams live 24/7. No AI/LLM calls by
-default; the generative core (Euclidean/cellular-automata rhythms, Markov
-and L-system melodic generation, functional-harmony progressions via
-`music21`, genetic-algorithm/simulated-annealing voice-leading with
-species-counterpoint rules, Perlin/Gray-Scott visuals) is entirely
-procedural — no neural nets, nothing trained on a corpus. LLM calls
-(Groq/Gemini) exist only as an explicit opt-in failsafe — see
-[Environment variables](#environment-variables).
+An automated lofi-music YouTube pipeline: composes original lofi tracks
+(procedural MIDI rendered through a General MIDI soundfont, with drums
+layered from free CC0 one-shot samples; no existing songs are sampled),
+renders a looping background video, assembles a full video, and uploads it
+to YouTube on a schedule, or streams live. There are no AI or LLM calls
+anywhere in the code. The default composer (`scripts/composer.py`) uses
+curated and Markov-walk chord progressions, motif-based melodies, Euclidean
+and pattern-table drums and a key/clash filter; the experimental v2 composer
+(`--music-v2`, off by default) adds genetic-algorithm/simulated-annealing
+voice-leading and L-system melodies. Nothing is trained on a corpus; the only
+"learning" is a small Markov table built from the pipeline's own past
+melodies. `tests/test_no_ai.py` fails the build if AI code creeps back in.
 
 AI is trash. Algorithm is art.
 
 The channel-growth side is similarly procedural/statistical rather than
-black-box: a Thompson Sampling bandit picks concept pillars, durations,
-title variants, and thumbnails; a two-proportion z-test gates thumbnail
-swaps; CUSUM flags viral moments; `statsmodels` forecasts 7/30-day views.
+black-box: Beta-posterior weights (from a composite engagement score at a
+fixed video age) bias concept pillars, title variants and sub-genres; a
+Bonferroni-corrected two-proportion z-test flags videos whose CTR is
+well below the channel's and swaps in their alternate thumbnail; CUSUM
+flags viral moments; simple exponential smoothing forecasts 7/30-day views. With roughly
+one upload a day these signals take months to mean anything, so treat
+them as weak nudges, not findings.
 See `scripts/analytics.py`, `scripts/bandit.py`.
 
 ## Quick start
 
 ```bash
 python -m venv venv
-venv/bin/pip install -r requirements.txt   # + requirements-dev.txt for tests
+venv/bin/pip install -r requirements.lock   # exact tested versions (requirements.txt = ranges)
 cp .env.example .env                        # fill in the keys you need — see below
 python run.py --skip-upload --duration "1 hour"
 ```
@@ -40,7 +45,7 @@ sudo apt install python3-venv python3-dev build-essential ffmpeg fluidsynth libs
 ## Running it
 
 ```bash
-python run.py                          # full pipeline, random theme, 2hr video
+python run.py                          # full pipeline, random theme, 1-hour video
 python run.py --theme winter_snow      # specific theme
 python run.py --duration "1 hour"      # specific duration
 python run.py --skip-upload            # generate only, don't upload
@@ -62,17 +67,13 @@ the existing analytics/automation views.
 ## Environment variables
 
 All read from `.env` in the repo root. Nothing here is required to generate
-tracks locally (`--skip-upload`) — the LLM keys and YouTube credentials
+tracks locally (`--skip-upload`) — the YouTube credentials
 only matter once you're actually uploading or streaming.
 
 | Variable | Required for | Notes |
 |---|---|---|
 | `YT_STREAM_KEY` | live streaming | YouTube RTMP stream key (fallback path — see `scripts/youtube_live_manager.py` for the API-managed alternative) |
 | `YT_CHANNEL_ID` | upload/analytics | |
-| `LOFI_LLM_FAILSAFE` | — | Set to `1` to allow Groq/Gemini calls as a fallback when the procedural generators fail. **Unset by default** — the pipeline is fully procedural without it. |
-| `GROQ_API_KEY`, `GEMINI_API_KEY`, `GEMINI_API_KEY_BACKUP` | LLM failsafe only | Ignored unless `LOFI_LLM_FAILSAFE=1` |
-| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | `lofi_inator` cover-song metadata lookup | Optional |
-| `YTDLP_COOKIES` | trending-topic scraping | Optional, path to a cookies file |
 | `LOFI_STREAM_ALERT_WEBHOOK` | live streaming | Optional Slack/Discord-compatible webhook, pinged after repeated stream reconnect failures |
 | `WEBUI_PASSWORD` | web control panel | **Mandatory** if you run `webui.py` — it's exposed publicly via the Cloudflare tunnel in `deploy/setup.sh` |
 | `WEBUI_SECRET` | web control panel | Session-cookie signing key; auto-generated per boot (logs everyone out on restart) if unset |
@@ -85,15 +86,18 @@ only matter once you're actually uploading or streaming.
 ## Testing
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-python -m pytest              # fast suite (default), 450+ tests
+python -m venv .venv && .venv/bin/pip install -r requirements.lock -r requirements-dev.txt ruff
+python -m pytest              # fast suite (default), ~1,100 tests
 python -m pytest -m slow      # + full-resolution Gray-Scott / production-scale tests
+ruff check .                  # undefined names / dead imports (same gate as CI)
 ```
 
-See [tests/](tests/) — covers the algorithmic core (Euclidean rhythms,
-Markov generation, GA voice-leading, noise fields, quality gate) directly;
-audio rendering and video encoding aren't covered here since they need
-FluidSynth/ffmpeg on the actual deploy target, not this dev environment.
+CI (`.github/workflows/ci.yml`) runs the lint gate and the full suite on
+every push, including `tests/test_no_ai.py`, which fails if any AI/LLM
+library or service shows up anywhere in the code, and
+`tests/generate_music/test_musical_correctness.py`, which checks chord
+voicings, melody/chord key agreement, clashes, melody density and track
+length on generated output.
 
 ## Deploying
 
@@ -104,17 +108,16 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the VPS setup runbook
 
 - `run.py` — the core pipeline (visual → music → SEO → thumbnail → assemble → upload)
 - `publish.py` — CLI wrapper: one-off runs, the daily `auto-service`, upload/Shorts/playlist management
-- `scripts/generate_music_gemini.py` / `generate_music_v2.py` — procedural MIDI composers (v2 adds GA/simulated-annealing voice-leading with species-counterpoint rules, better humanization)
-- `scripts/harmony_engine.py` — `music21`-based functional-harmony/Roman-numeral progression generation
+- `scripts/composer.py` / `generate_music_v2.py` — procedural MIDI composers (v2 adds GA/simulated-annealing voice-leading with species-counterpoint rules, better humanization)
+- `scripts/harmony_engine.py` — table-driven functional-harmony (tonic/subdominant/dominant) progression grammar
 - `scripts/visual_v2/` — procedural background video generation (noise fields, particles, post-FX)
 - `scripts/lofi_fx.py` — Pedalboard-based audio FX chain (vinyl crackle, tape wobble, stereo widening, sub-bass saturation, per-track LUFS mastering, optional kick→bass sidechain ducking)
 - `scripts/track_quality.py` — MIDI-structural gates + audio-domain gates (clipping/silence/LUFS/spectral balance) on the rendered WAV
 - `scripts/stream_live.py` — 24/7 live-stream mode
 - `scripts/generate_shorts.py` — auto-clips a 9:16 highlight from the assembled video and uploads it as a Short
-- `scripts/analytics.py` / `scripts/bandit.py` — longitudinal analytics, A/B significance testing, Thompson Sampling bandit, CUSUM change-point detection, forecasting
+- `scripts/analytics.py` / `scripts/bandit.py` — longitudinal analytics, underperformer thumbnail swaps, Beta-posterior weighting, CUSUM change-point detection, forecasting
 - `scripts/posting_time.py` — recommends posting hour/day from historical upload+view data
 - `scripts/playlist_curation.py` — pillar-based playlist auto-assignment
-- `scripts/lofi_inator/` — optional cover-song-inspired track generation (procedural DNA extraction, no audio scraping)
 - `webui/` — NiceGUI-based web control panel (analytics dashboard, content calendar, automation controls)
 - `deploy/` — systemd units + setup script
 - `tests/` — pytest suite for the algorithmic core

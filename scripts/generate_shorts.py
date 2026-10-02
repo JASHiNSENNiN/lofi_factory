@@ -36,8 +36,7 @@ CLI
   python scripts/generate_shorts.py --video output/lofi_XYZ.mp4 --save-only
   python scripts/generate_shorts.py --video output/lofi_XYZ.mp4 --window-secs 45
 Also reachable via `python publish.py shorts ...` (see publish.py's `shorts`
-subcommand, which delegates to run_pipeline() below the same way
-`publish.py lofi-inator` delegates to scripts/lofi_inator/pipeline.py).
+subcommand, which delegates to run_pipeline() below).
 """
 from __future__ import annotations
 
@@ -45,8 +44,8 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
-import sys
 import tempfile
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -171,21 +170,21 @@ def get_video_duration(path: str) -> float:
 
 def build_vertical_clip(video_path: str, out_path: str, start_sec: float, end_sec: float) -> None:
     """
-    Trim [start_sec, end_sec) from `video_path` and crop/scale to a 9:16
-    vertical frame (1080x1920), YouTube Shorts' expected aspect ratio.
-    `force_original_aspect_ratio=increase` scales so BOTH dimensions cover
-    the target size regardless of the source's own aspect ratio, then the
-    crop trims the overflow off the centered frame -- works for a typical
-    16:9 lofi background without hardcoding an assumption about its exact
-    source resolution.
+    Trim [start_sec, end_sec) from `video_path` into a 1080x1920 vertical clip:
+    the whole 16:9 frame scaled to the full width, centred over a blurred,
+    zoomed copy of itself filling the rest. (A centre crop kept only the
+    middle ~30% of the frame and cut the on-screen title panel in half.)
     """
     duration = max(0.1, end_sec - start_sec)
-    vf = (f"scale=w={SHORTS_WIDTH}:h={SHORTS_HEIGHT}:force_original_aspect_ratio=increase,"
-          f"crop={SHORTS_WIDTH}:{SHORTS_HEIGHT}")
+    vf = (f"split=2[bgsrc][fgsrc];"
+          f"[bgsrc]scale=w={SHORTS_WIDTH}:h={SHORTS_HEIGHT}:force_original_aspect_ratio=increase,"
+          f"crop={SHORTS_WIDTH}:{SHORTS_HEIGHT},boxblur=20:2,eq=brightness=-0.08[bg];"
+          f"[fgsrc]scale={SHORTS_WIDTH}:-2[fg];"
+          f"[bg][fg]overlay=(W-w)/2:(H-h)/2")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     subprocess.run(
         ["ffmpeg", "-y", "-ss", f"{start_sec:.2f}", "-i", video_path, "-t", f"{duration:.2f}",
-         "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+         "-filter_complex", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
          "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out_path],
         check=True, capture_output=True,
     )
@@ -194,24 +193,47 @@ def build_vertical_clip(video_path: str, out_path: str, start_sec: float, end_se
 # ─────────────────────────────────────────────────────────────────────────────
 # Metadata
 # ─────────────────────────────────────────────────────────────────────────────
+_LENGTH_TAG = re.compile(r"\s*·\s*(?:\d+\s*(?:hours?|min(?:utes)?)|24/7 live|all night)\b",
+                         re.IGNORECASE)
+
+
+def _short_title_base(title: str) -> str:
+    """The long title without its length ("rain on the window 🌧️ [lofi hip
+    hop · 1 hour]" -> "... [lofi hip hop]"): a one-minute Short is not an
+    hour long."""
+    return _LENGTH_TAG.sub("", title).replace("[]", "").strip()
+
+
 def build_shorts_metadata(seo: dict, title_override: str | None = None) -> dict:
     """
-    Derive Shorts-compliant title/description/tags from the long-form
-    video's SEO dict (assets/seo_*.json). Pure/testable: no I/O.
+    Shorts title/description/tags from the long-form video's SEO dict
+    (assets/seo_*.json). Pure/testable: no I/O.
 
-    - Title: the long-form title, trimmed to leave room for a trailing
-      " #Shorts" tag within YouTube's 100-char title limit.
-    - Description/tags: carried over, with #Shorts guaranteed present per
-      YouTube's own Shorts-discoverability convention.
+    - Title: the long-form title without its length, plus " #Shorts",
+      within YouTube's 100-char limit.
+    - Description: written for the clip. The long video's description is
+      not copied: its tracklist timestamps and length don't fit a one-minute
+      clip, and its `lofi:` ref line is what publish.py's duplicate guard
+      searches for, so a Short carrying it made the guard skip the real
+      upload as "already on YouTube".
     """
-    base_title = title_override or seo.get("title") or "lo-fi beats"
+    base_title = title_override or _short_title_base(seo.get("title") or "") or "lo-fi beats"
     suffix = " #Shorts"
     title = f"{base_title[:100 - len(suffix)].rstrip()}{suffix}"[:100]
 
-    description = (seo.get("description") or "Cozy lo-fi music. No copyright. Free to use.").strip()
-    if "#shorts" not in description.lower():
-        description = f"{description}\n\n#Shorts #lofi #shorts"
-    description = description[:4900]
+    genre = (seo.get("genre_label") or "lofi").strip()
+    duration = (seo.get("duration") or "").strip()
+    scene = (seo.get("thumb_text") or "").strip()
+    first = f"{scene[0].upper()}{scene[1:]}. " if scene else ""
+    mix = f"a {duration} {genre} mix" if duration else f"a longer {genre} mix"
+    tag = re.sub(r"[^a-z0-9]", "", genre.lower()) or "lofi"
+    hashtags = " ".join(dict.fromkeys(["#Shorts", "#lofi", f"#{tag}"]))
+    description = (
+        f"{first}A minute from {mix}; the full video is on the channel.\n\n"
+        "Original music, written and mixed by this channel's own composing software. "
+        "Drums use free CC0 one-shot samples; no AI models are involved.\n\n"
+        f"{hashtags}"
+    )
 
     tags = [t for t in seo.get("tags", []) if isinstance(t, str)]
     if not any(t.lower() == "shorts" for t in tags):
@@ -272,6 +294,15 @@ def _find_latest(directory: str, pattern: str) -> str | None:
     return files[0] if files else None
 
 
+def _paired_seo(video_path: str) -> str | None:
+    """The SEO file written in the same run as video_path (the newest one
+    from before the video was finished), not whichever is newest now."""
+    vt = os.path.getmtime(video_path)
+    seos = [p for p in glob.glob(os.path.join(ASSETS_DIR, "seo_*.json"))
+            if os.path.getmtime(p) <= vt + 60]
+    return max(seos, key=os.path.getmtime) if seos else None
+
+
 def _load_seo(seo_path: str | None) -> dict:
     path = seo_path or _find_latest(ASSETS_DIR, "seo_*.json")
     if not path or not os.path.exists(path):
@@ -294,7 +325,7 @@ def run_pipeline(video_path: str | None = None, seo_path: str | None = None,
     if not video_path or not os.path.exists(video_path):
         raise FileNotFoundError("No source video found -- pass --video or run.py first")
 
-    seo = _load_seo(seo_path)
+    seo = _load_seo(seo_path or _paired_seo(video_path))
     total_secs = get_video_duration(video_path)
 
     with tempfile.TemporaryDirectory() as tmpdir:

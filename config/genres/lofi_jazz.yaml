@@ -22,3 +22,7 @@ drum_sampler_pattern: jazz
 mix: {lpf_hz: 10000, bitcrush_bits: 11, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.18,
   compress_ratio: 2.8, vinyl_crackle: 0.1, use_ir_reverb: true, sidechain_duck: false}
 song_form: extended
+bass_program: GM_ACOUSTIC_BASS
+walking_bass: true
+# Genre rework: upright walking bass in quarter notes under a ride-led swing
+# (jazznightschool.org, drumhelper.com).

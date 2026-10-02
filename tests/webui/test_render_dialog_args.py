@@ -60,26 +60,18 @@ def test_empty_mood_omits_flag():
     assert "--mood" not in args
 
 
-# ── engine (3-state, matches run.py's BooleanOptionalAction) ────────────────
-def test_engine_auto_omits_both_music_v2_flags():
+# ── composer ──────────────────────────────────────────────────────────────
+def test_composer_v1_is_the_default_and_adds_no_flag():
     args = _build_render_args(upload=False, theme="random", duration="1 hour",
-                               privacy="public", engine="auto")
+                               privacy="public", engine="v1")
     assert "--music-v2" not in args
     assert "--no-music-v2" not in args
 
 
-def test_engine_v2_appends_music_v2_flag():
+def test_composer_v2_appends_music_v2_flag():
     args = _build_render_args(upload=False, theme="random", duration="1 hour",
                                privacy="public", engine="v2")
     assert "--music-v2" in args
-    assert "--no-music-v2" not in args
-
-
-def test_engine_v1_appends_no_music_v2_flag():
-    args = _build_render_args(upload=False, theme="random", duration="1 hour",
-                               privacy="public", engine="v1")
-    assert "--no-music-v2" in args
-    assert "--music-v2" not in args
 
 
 # ── theme still behaves as before (random omitted, explicit passed) ─────────
@@ -109,7 +101,7 @@ def test_all_new_controls_combined_render_and_upload():
     assert args == [
         "publish.py", "auto", "--privacy", "unlisted", "--duration", "3 hours",
         "--theme", "vaporwave", "--sub-genre", "dark_lofi",
-        "--mood", "late night city drive", "--no-music-v2",
+        "--mood", "late night city drive",
     ]
 
 
@@ -124,9 +116,14 @@ def test_subgenre_select_options_default_to_auto_and_include_all_keys():
         assert opts[k] == k.replace("_", " ").title()
 
 
-def test_engine_select_options_are_exactly_the_3_states():
-    assert set(_ENGINE_SELECT_OPTIONS) == {"auto", "v1", "v2"}
-    assert _ENGINE_SELECT_OPTIONS["auto"] == "Auto (bandit-selected)"
+def test_engine_select_options_only_offer_real_composers():
+    assert set(_ENGINE_SELECT_OPTIONS) == {"v1", "v2"}
+
+
+def test_dialog_durations_are_all_known_to_the_assembler():
+    from scripts.assemble_video import DURATION_MAP
+    assert set(config.DURATIONS) <= set(DURATION_MAP)
+    assert config.DEFAULT_DURATION in config.DURATIONS
 
 
 # ── config.subgenre_choices() itself ─────────────────────────────────────────

@@ -5,16 +5,15 @@ Replaces the old room-scene approach with an abstract radio station UI.
 
 import math
 import os
-import datetime
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from .config import (
     W, H, HEADER_H, HEADER_MID,
     VINYL_CX, VINYL_CY, VINYL_R, VINYL_LABEL_R, VINYL_HOLE_R,
     DIVIDER_X, NP_X0, NP_Y0, NP_X1, NP_Y1,
     PROG_Y, PROG_X0, PROG_X1, PROG_H,
-    CLOCK_X, CLOCK_Y, CHANNEL_NAME,
+    CHANNEL_NAME,
 )
 from .themes import THEMES
 
@@ -282,11 +281,12 @@ def draw_now_playing(frame: np.ndarray, title: str, genre: str,
                  NP_X1 + pad, NP_Y0 - pad + 3],
                 fill=(*acc, 210))
 
-    # "NOW PLAYING" label
+    # "THIS SESSION" label (one baked-in title covers the whole video, so it
+    # names the session, not a single track)
     fnt_s = _font_reg(22)
-    d.text((NP_X0, NP_Y0 + 12), "NOW  PLAYING",
+    d.text((NP_X0, NP_Y0 + 12), "THIS SESSION",
            fill=(*acc, 200), font=fnt_s)
-    sep_x = NP_X0 + _text_w(d, "NOW  PLAYING", fnt_s) + 18
+    sep_x = NP_X0 + _text_w(d, "THIS SESSION", fnt_s) + 18
     d.line([sep_x, NP_Y0 + 22, NP_X1, NP_Y0 + 22],
            fill=(*acc, 55), width=1)
 
@@ -296,8 +296,9 @@ def draw_now_playing(frame: np.ndarray, title: str, genre: str,
     words      = title.split()
     line1, line2 = [], []
     for word in words:
-        test = " ".join(line1 + [word])
-        if _text_w(d, test, fnt_title) <= max_w:
+        # Once a word spills to line 2, everything after it goes there too;
+        # filling line 1 with later short words reordered the title.
+        if not line2 and _text_w(d, " ".join(line1 + [word]), fnt_title) <= max_w:
             line1.append(word)
         else:
             line2.append(word)
@@ -366,31 +367,25 @@ def draw_header(frame: np.ndarray, t: float, theme: str,
     d.rectangle([0, 0, W, HEADER_H], fill=(*pc[:3], 215))
     d.line([0, HEADER_H - 1, W, HEADER_H - 1], fill=(*acc, 90), width=1)
 
-    # Pulsing LIVE dot
-    live_a = int(145 + 110 * math.sin(2 * math.pi * t / 1.2))
+    # Pulsing accent dot. (This used to be a red "LIVE" badge, baked into the
+    # loop used for every uploaded video too, which isn't live.)
+    pulse_a = int(145 + 110 * math.sin(2 * math.pi * t / 1.2))
     dx, dy = 38, HEADER_MID
-    d.ellipse([dx - 8, dy - 8, dx + 8, dy + 8], fill=(255, 52, 52, live_a))
-    # Outer ring glow
+    d.ellipse([dx - 8, dy - 8, dx + 8, dy + 8], fill=(*acc, pulse_a))
     d.ellipse([dx - 13, dy - 13, dx + 13, dy + 13],
-              outline=(255, 52, 52, live_a // 3), width=2)
+              outline=(*acc, pulse_a // 3), width=2)
 
     # "LO-FI RADIO"
-    fnt_h = _font(28); fnt_sm = _font_reg(20)
+    fnt_h = _font(28)
     d.text((dx + 22, dy), "LO-FI RADIO",
            fill=(232, 232, 242, 235), font=fnt_h, anchor="lm")
-    lx = dx + 22 + _text_w(d, "LO-FI RADIO", fnt_h) + 22
-    d.text((lx, dy), "LIVE", fill=(255, 52, 52, live_a), font=fnt_sm, anchor="lm")
 
     # Channel name centre
     fnt_ch = _font_reg(24)
     d.text((W // 2, dy), channel_name,
            fill=(195, 195, 212, 180), font=fnt_ch, anchor="mm")
-
-    # Clock
-    now = datetime.datetime.now()
-    fnt_clk = _font(30)
-    d.text((CLOCK_X, dy), now.strftime("%H:%M"),
-           fill=(232, 232, 242, 218), font=fnt_clk, anchor="rm")
+    # No clock: anything baked into a 60-second loop shows the render's wall
+    # time, repeated every minute of the video.
 
     frame[:] = np.array(Image.alpha_composite(pil, ov).convert("RGB"))
 

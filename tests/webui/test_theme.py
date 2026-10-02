@@ -122,12 +122,12 @@ def test_data_row_cells_header_uses_label_role_by_default():
 
 def test_data_row_cells_width_token_maps_to_col_class():
     resolved = theme._data_row_cells([{"text": "x", "width": "lg"}])
-    assert "col-lg" in resolved[0]["classes"]
+    assert "dcol-lg" in resolved[0]["classes"]
 
 
 def test_data_row_cells_grow_width_token():
     resolved = theme._data_row_cells([{"text": "x", "width": "grow"}])
-    assert "col-grow" in resolved[0]["classes"]
+    assert "dcol-grow" in resolved[0]["classes"]
 
 
 def test_data_row_cells_rejects_unknown_width():
