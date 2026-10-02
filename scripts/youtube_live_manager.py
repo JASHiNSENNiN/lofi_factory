@@ -18,7 +18,6 @@ Auth setup (one time):
 """
 
 import os
-import sys
 import time
 import datetime
 import threading
@@ -191,7 +190,7 @@ def _create_broadcast_and_stream(youtube, title, theme_name=None):
         id=broadcast_id,
         streamId=stream_id,
     ).execute()
-    print(f"  [yt-api] Bound broadcast to ingestion stream")
+    print("  [yt-api] Bound broadcast to ingestion stream")
     print(f"  [yt-api] RTMP: {ingest_addr}/***")
 
     return broadcast_id, stream_id, ingest_addr, stream_name, scheduled_start
@@ -221,7 +220,7 @@ def setup_live_stream(theme_name=None, stream_key_override=None):
             print("  [yt-api] WARNING: No API credentials AND no YT_STREAM_KEY set!")
             print("           The stream cannot push to YouTube without one of these.")
         else:
-            print(f"  [yt-api] Using env-var stream key (no API credentials)")
+            print("  [yt-api] Using env-var stream key (no API credentials)")
         return {
             "rtmp_url": fallback_url, "broadcast_id": None,
             "stream_id": None, "scheduled_start": None, "youtube": None,
@@ -257,7 +256,7 @@ def setup_live_stream(theme_name=None, stream_key_override=None):
         }
     except Exception as e:
         print(f"  [yt-api] Broadcast creation failed: {e}")
-        print(f"  [yt-api] Falling back to env-var stream key")
+        print("  [yt-api] Falling back to env-var stream key")
         return {
             "rtmp_url": fallback_url, "broadcast_id": None,
             "stream_id": None, "scheduled_start": None, "youtube": None,

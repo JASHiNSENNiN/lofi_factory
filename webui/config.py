@@ -39,7 +39,7 @@ if not os.path.exists(PYTHON):  # fall back to whatever runs us
     PYTHON = sys.executable
 
 # One definition of the OAuth scopes for the whole project (see there).
-from scripts.upload_youtube import MONETARY_SCOPES, SCOPES  # noqa: E402
+from scripts.upload_youtube import MONETARY_SCOPES, SCOPES  # noqa: E402, F401  (re-exported)
 
 
 def _env(name: str, default: str = "") -> str:

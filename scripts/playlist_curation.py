@@ -35,8 +35,7 @@ import os
 # Mirrors generate_seo.py's 5-pillar taxonomy (see that module's docstring
 # and every concept dict's "pillar" field). Duplicated here as plain data
 # rather than imported: generate_seo.py doesn't export it as a public
-# constant, and this module must not touch that file's internals (owned by
-# a separate agent) just to read a 5-item list.
+# constant.
 PILLARS = ["temporal", "activity", "emotional", "aesthetic", "cross_genre"]
 
 # pillar -> env var holding that pillar's playlist ID. Data-driven so a 6th

@@ -507,7 +507,7 @@ def disable_vaapi(reason: str) -> None:
     frames (99.99% done, the -stats `time=` counter already at the full
     target) and then froze completely for 600s+ until the stall-watchdog
     killed it -- a finalization deadlock, not slowness. Three independent
-    real-run measurements this session (0.568x, 0.527x, 0.484x) also never
+    real-run measurements (0.568x, 0.527x, 0.484x) also never
     once beat this same file's own "software" baseline number (0.56x) in
     the comment this replaced, meaning the claimed ~7x VAAPI speedup was
     never actually materializing here anyway (the CPU-bound EQ-visualizer/

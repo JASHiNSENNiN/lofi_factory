@@ -12,7 +12,6 @@ import pytest
 soundfile = pytest.importorskip("soundfile")
 
 from scripts.track_quality import (
-    AUDIO_LUFS_TARGET_DEFAULT,
     detect_clipping,
     detect_extended_silence,
     measure_lufs,

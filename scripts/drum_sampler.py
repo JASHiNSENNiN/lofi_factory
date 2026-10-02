@@ -67,8 +67,10 @@ def _pick_sample(filenames: list[str]) -> np.ndarray | None:
 # CC0 sample filenames (Boochi44/free-drum-samples, 03-soulful-vintage kit)
 _KICK_FILES  = ["vintage-kick-01.wav", "vintage-kick-02.wav", "vintage-kick-03.wav"]
 _SNARE_FILES = ["vintage-snare-01.wav", "vintage-snare-02.wav", "vintage-snare-03.wav"]
-_CHAT_FILES  = ["ch-lofi.wav", "hi-hat-closed-01.wav"]
-_OHAT_FILES  = ["oh00-lofi.wav", "open-hat-01.wav"]
+# One closed and one open hat: the two extra hat files that used to be
+# listed here were byte-identical copies of these.
+_CHAT_FILES  = ["ch-lofi.wav"]
+_OHAT_FILES  = ["oh00-lofi.wav"]
 
 
 # ─── Synthesis fallbacks ──────────────────────────────────────────────────────

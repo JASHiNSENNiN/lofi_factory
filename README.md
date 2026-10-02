@@ -28,7 +28,7 @@ See `scripts/analytics.py`, `scripts/bandit.py`.
 
 ```bash
 python -m venv venv
-venv/bin/pip install -r requirements.txt   # + requirements-dev.txt for tests
+venv/bin/pip install -r requirements.lock   # exact tested versions (requirements.txt = ranges)
 cp .env.example .env                        # fill in the keys you need — see below
 python run.py --skip-upload --duration "1 hour"
 ```
@@ -85,15 +85,18 @@ only matter once you're actually uploading or streaming.
 ## Testing
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-python -m pytest              # fast suite (default), 450+ tests
+python -m venv .venv && .venv/bin/pip install -r requirements.lock -r requirements-dev.txt ruff
+python -m pytest              # fast suite (default), ~1,100 tests
 python -m pytest -m slow      # + full-resolution Gray-Scott / production-scale tests
+ruff check .                  # undefined names / dead imports (same gate as CI)
 ```
 
-See [tests/](tests/) — covers the algorithmic core (Euclidean rhythms,
-Markov generation, GA voice-leading, noise fields, quality gate) directly;
-audio rendering and video encoding aren't covered here since they need
-FluidSynth/ffmpeg on the actual deploy target, not this dev environment.
+CI (`.github/workflows/ci.yml`) runs the lint gate and the full suite on
+every push, including `tests/test_no_ai.py`, which fails if any AI/LLM
+library or service shows up anywhere in the code, and
+`tests/generate_music/test_musical_correctness.py`, which checks chord
+voicings, melody/chord key agreement, clashes, melody density and track
+length on generated output.
 
 ## Deploying
 

@@ -41,3 +41,19 @@ login.png
 # Cached OAuth tokens
 assets/spotify_token_cache.json
 assets/*_token_cache.json
+
+# --- Runtime state written by the pipeline and web panel (never commit) ---
+assets/.auto_run_state.json
+assets/.encode_speed_history.json
+assets/.vaapi_status.json
+assets/admin_audit.jsonl
+assets/alerts_log.jsonl
+assets/trend_cache.json
+assets/analytics_log.json
+assets/live_state.json
+assets/job_logs/
+assets/*.corrupt-*
+music/stream/
+backups/
+output/tmp_*/
+assets/ir/procedural_*.wav

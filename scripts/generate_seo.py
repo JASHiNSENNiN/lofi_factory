@@ -865,7 +865,7 @@ def _build_setting_story(concept: dict) -> str:
     else:
         templates += [
             f"A lo-fi session for your {act}. {m}",
-            f"Beats that disappear into the background so your focus can come to the foreground.",
+            "Beats that disappear into the background so your focus can come to the foreground.",
             f"{m} {dur} of lofi. Your {act} will thank you.",
             f"No algorithm. No playlist filler. Just {dur} of focused lofi.",
             f"For {act} that needs a soundtrack without the distraction.",

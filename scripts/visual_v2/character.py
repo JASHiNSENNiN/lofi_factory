@@ -10,11 +10,10 @@ oscilloscope).
 
 import math
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 from .config import (
-    W, H, EQ_BARS, EQ_X0, EQ_X1, EQ_Y_BOT, EQ_MAX_H, EQ_MIN_H, EQ_GAP,
-    HEADER_H,
+    W, H, EQ_BARS, EQ_X0, EQ_X1, EQ_Y_BOT, EQ_MAX_H, HEADER_H,
 )
 from .noise import looping_noise
 from .themes import THEMES

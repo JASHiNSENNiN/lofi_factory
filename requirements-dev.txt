@@ -1,3 +1,5 @@
 -r requirements.txt
 
 pytest>=8.0
+# Only the harmony-table cross-checks in tests use it (scripts/harmony_engine.py).
+music21>=9.1

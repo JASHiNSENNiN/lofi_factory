@@ -45,7 +45,6 @@ import glob
 import json
 import os
 import subprocess
-import sys
 import tempfile
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")

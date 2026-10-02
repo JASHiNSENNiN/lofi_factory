@@ -4,12 +4,11 @@ All return numpy arrays composited in generate.py.
 """
 
 import json
-import math
 import os
 import random
 import time
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 
 from .config import W, H, VISUALS_DIR
 from .themes import THEMES

@@ -26,8 +26,7 @@ if _ROOT not in sys.path:
 
 from scripts.composer import (  # noqa: E402
     PPQN, BAR, S16,
-    KICK, SNARE, RIM, CHH, OHH, RIDE, CRASH,
-    PROGRESSIONS, VOICING_OPTIONS, BASS_ROOTS, _GUIDE_TONES,
+    KICK, SNARE, RIM, CHH, OHH, RIDE, PROGRESSIONS, VOICING_OPTIONS, BASS_ROOTS, _GUIDE_TONES,
     DRUM_PATTERNS, DRUM_FILLS, _EUCL_HATS,
     KEY_ROOTS,
     get_pentatonic, get_dorian, get_phrygian, get_major,
@@ -35,15 +34,14 @@ from scripts.composer import (  # noqa: E402
     grid_tick, abs_to_track, build_sustain_pedal,
     build_pad, build_intro_hats, build_break_hats,
     build_texture, build_counter_melody,
-    _SUBGENRE_CONFIG, _SWING_RANGE, _SWING_DEFAULT, _COZY_SUBGENRES,
-    _SUBGENRE_TEXTURE, _SUBGENRE_DRUM_KITS, _DEFAULT_DRUM_KIT_POOL,
+    _SUBGENRE_CONFIG, _SUBGENRE_TEXTURE, _SUBGENRE_DRUM_KITS, _DEFAULT_DRUM_KIT_POOL,
     _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT, generate_song_form,
-    maybe_sub_chord, _tension, _apply_tension_to_drums, _chord_pcs_at_bar,
+    maybe_sub_chord, _apply_tension_to_drums, _chord_pcs_at_bar,
     pick_params, _build_diverse_params, fix_melodic_clashes, fit_form_length,
     full_beat_spans, _AUDIO_RETRIES,
     _save_melody_pitch_classes, _append_recipe_log, _append_audio_quality_log,
     midi_to_wav, _pick_soundfont, MUSIC_DIR,
-    GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_BASS, GM_STRINGS, GM_WARM_PAD,
+    GM_RHODES, GM_BASS, GM_STRINGS, GM_WARM_PAD,
 )
 
 # ── 1. Gaussian humanization ────────────────────────────────────────────────────
@@ -1285,7 +1283,7 @@ def _render_track_v2(index: int, params: dict, attempt: int = 0):
         midi_path = os.path.join(tmp, 'track.mid')
         raw_wav   = os.path.join(tmp, 'raw.wav')
 
-        print(f"  [MIDI v2] Building...")
+        print("  [MIDI v2] Building...")
         build_midi_v2(params, midi_path)
         chosen_sf = _pick_soundfont()
         print(f"  [FluidSynth] Rendering ({os.path.basename(chosen_sf)})...")

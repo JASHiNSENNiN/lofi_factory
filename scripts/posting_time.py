@@ -3,7 +3,7 @@ posting_time.py — recommend the best hour-of-day / day-of-week to publish.
 
 Joins upload timestamps (upload_log.json, written by publish.py's cmd_upload)
 with per-video performance from assets/analytics_log.json (synced by
-scripts/analytics.py, owned by a separate agent) to suggest when future
+scripts/analytics.py) to suggest when future
 uploads are likely to do best.
 
 Schema note: analytics_log.json's exact shape is scripts/analytics.py's to
@@ -16,8 +16,7 @@ first-24h view-velocity metric, so this module uses total views (falling
 back to watch-minutes) as its performance signal — a defensible proxy given
 it's the only per-video performance data available on disk — and degrades
 gracefully any time the log is missing, empty, or a field isn't present,
-rather than assuming a schema this worktree can't verify was finalized
-elsewhere.
+rather than assuming more of the schema than it reads.
 
 This module only ever produces a *suggestion*. Nothing here calls
 auto_service.set_schedule() — see webui/automation.py's "Recommended

@@ -13,7 +13,6 @@ real token.json/.env/upload_log.json.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace

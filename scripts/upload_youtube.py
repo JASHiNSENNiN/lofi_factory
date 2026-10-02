@@ -309,6 +309,7 @@ def main():
     video_id, url = upload_video(youtube, video_path, seo, thumb_path)
 
     # Log upload
+    import datetime as _dt
     from scripts.fileutil import append_json_list
     append_json_list(os.path.join(ROOT, "upload_log.json"), {
         "type":             "upload",

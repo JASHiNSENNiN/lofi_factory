@@ -18,7 +18,7 @@ import math
 import datetime
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 _ROOT      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

@@ -5,7 +5,7 @@ the existing 24: drill/trap-adjacent lofi and world/ethnic-fusion lofi.
 import random
 
 from scripts.composer import (
-    CHH, KICK, OHH, RIM, SNARE,
+    CHH, KICK, SNARE,
     DRUM_PATTERNS,
     GM_KALIMBA,
     GM_KOTO,

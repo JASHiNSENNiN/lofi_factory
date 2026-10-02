@@ -3,7 +3,7 @@ particles.py — Floating orb atmosphere particles for the abstract interface.
 """
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 from .config import W, H, ORB_COUNT
 from .themes import THEMES

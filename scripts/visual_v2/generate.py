@@ -15,8 +15,7 @@ import subprocess
 import numpy as np
 
 from .config import W, H, FPS, VISUALS_DIR
-from .themes import THEMES, ALL_THEMES
-from .noise import looping_noise
+from .themes import THEMES
 from .static_layers import (
     make_gradient_bg, make_star_field, make_scanlines,
     make_vignette, make_star_twinkle,
@@ -26,7 +25,6 @@ from .scene import (
     make_vinyl_body, make_vinyl_label_frames,
     draw_vinyl, draw_tone_arm,
     draw_now_playing, draw_header, draw_divider,
-    paste_img_rgba,
 )
 from .character import EQVisualizer, OscilloscopeBar
 from .particles import FloatingOrbs, MusicNotes

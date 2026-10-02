@@ -2,7 +2,7 @@
 Regression tests for the VAAPI hardware-encode fallback in assemble_video.py.
 
 The happy path (a real encode on a box with a working /dev/dri/renderD128 and
-render-group access) was verified manually this session: apply_vhs_grade()
+render-group access) was verified manually once: apply_vhs_grade()
 correctly detected hardware, produced a valid h264/aac output matching the
 requested duration exactly, and cleaned up its log on success -- not
 practical to re-run in CI (needs real GPU access). These tests instead lock

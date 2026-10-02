@@ -587,7 +587,7 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
         print(f"\n[STREAM TEST] Writing {test_secs}s to {output}")
     else:
         cmd += ["-f", "flv", rtmp_url]
-        print(f"\n[STREAM] Pushing to YouTube... (Ctrl+C to stop)")
+        print("\n[STREAM] Pushing to YouTube... (Ctrl+C to stop)")
 
     last_output_time = [time.time()]
     stop_event = threading.Event()

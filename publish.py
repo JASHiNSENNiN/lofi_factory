@@ -565,7 +565,7 @@ def cmd_stats(args):
             order="date", maxResults=5,
         ).execute()
         if recent.get("items"):
-            print(f"\n  Recent uploads:")
+            print("\n  Recent uploads:")
             vid_ids = [i["id"]["videoId"] for i in recent["items"]]
             vdetail = youtube.videos().list(
                 part="snippet,statistics", id=",".join(vid_ids)
@@ -623,9 +623,9 @@ def cmd_playlist(args):
             title = p["snippet"]["title"]
             count = p["contentDetails"]["itemCount"]
             print(f"  {pid}  ({count:>3} videos)  {title}")
-        print(f"\n  Add IDs to .env, e.g.: YT_PLAYLIST_ACTIVITY=PLxxx  (pillar-based -- see "
-              f"scripts/playlist_curation.py; legacy YT_PLAYLIST_STUDY/YT_PLAYLIST_SLEEP "
-              f"still work as a fallback)")
+        print("\n  Add IDs to .env, e.g.: YT_PLAYLIST_ACTIVITY=PLxxx  (pillar-based -- see "
+              "scripts/playlist_curation.py; legacy YT_PLAYLIST_STUDY/YT_PLAYLIST_SLEEP "
+              "still work as a fallback)")
 
     elif args.playlist_cmd == "create":
         # Gated behind --confirm-create: playlist creation is channel-visible
@@ -1097,7 +1097,7 @@ def cmd_live(args):
     now_utc = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30)
     scheduled_start = now_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    print(f"\n[LIVE] Setting up broadcast...")
+    print("\n[LIVE] Setting up broadcast...")
     print(f"  Title:   {title}")
     print(f"  Video:   {os.path.basename(video_path)}")
     print(f"  Quality: {args.quality}")
@@ -1133,7 +1133,7 @@ def cmd_live(args):
     except Exception as e:
         print(f"  [ERROR] Transition failed: {e}")
         print("          Check YouTube Studio — broadcast may need manual start")
-        print(f"          Manage: https://studio.youtube.com/channel/broadcast")
+        print("          Manage: https://studio.youtube.com/channel/broadcast")
 
     watch_url = f"https://www.youtube.com/watch?v={broadcast_id}"
     manage_url = "https://studio.youtube.com/channel/broadcast"
@@ -1161,7 +1161,7 @@ def cmd_live(args):
         name="midnight-refresh",
     )
     t_refresh.start()
-    print(f"  Midnight refresh scheduled (title + description updates at 00:00 daily)")
+    print("  Midnight refresh scheduled (title + description updates at 00:00 daily)")
 
     # Log
     append_upload_log({
@@ -1205,7 +1205,7 @@ def cmd_live(args):
         except Exception:
             pass
 
-    print(f"\n[LIVE] Duration limit reached — ending broadcast")
+    print("\n[LIVE] Duration limit reached — ending broadcast")
     _end_broadcast(youtube, broadcast_id, ffmpeg_proc)
 
 
@@ -1425,7 +1425,7 @@ def cmd_schedule(args):
         future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
         scheduled_start = future.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    print(f"\n[SCHEDULE] Creating scheduled broadcast")
+    print("\n[SCHEDULE] Creating scheduled broadcast")
     print(f"  Title:  {title}")
     print(f"  Start:  {scheduled_start}")
     print(f"  Privacy: {privacy}")
@@ -1438,9 +1438,9 @@ def cmd_schedule(args):
     watch_url = f"https://www.youtube.com/watch?v={broadcast_id}"
     print(f"\n  Broadcast scheduled: {broadcast_id}")
     print(f"  Watch URL:           {watch_url}")
-    print(f"  Stream key saved to live_state.json")
-    print(f"\n  When ready to go live:")
-    print(f"    python publish.py live --video <video.mp4>  (will use saved stream key)")
+    print("  Stream key saved to live_state.json")
+    print("\n  When ready to go live:")
+    print("    python publish.py live --video <video.mp4>  (will use saved stream key)")
 
     save_live_state({
         "broadcast_id": broadcast_id,

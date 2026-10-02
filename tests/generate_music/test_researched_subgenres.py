@@ -26,7 +26,6 @@ from scripts.composer import (
     GM_VIBRAPHONE,
     GM_WARM_PAD,
     PROGRESSIONS,
-    _PITCHWHEEL_NOTE,
     _SUBGENRE_CONFIG,
     _SUBGENRE_TEXTURE,
     _SWING_RANGE,
@@ -133,7 +132,7 @@ def test_drum_pattern_q_phonk_hat_roll_has_expected_shape():
     # research/theory/rhythm-groove.md Task 5: new curated pattern (index 16)
     # -- straight-8th hat base + a roll-burst on the bar's back quarter +
     # cowbell-style RIM accents, referenced from lofi_phonk.yaml.
-    from scripts.composer import CHH, KICK, OHH, RIM, SNARE
+    from scripts.composer import CHH, KICK, RIM, SNARE
     pattern = DRUM_PATTERNS[16]
     for voice in (KICK, SNARE, CHH, RIM):
         assert voice in pattern

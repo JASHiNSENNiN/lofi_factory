@@ -28,8 +28,8 @@ run.py) can keep their existing call sites; `posterior_mean()` /
 `posterior_stats()` expose the deterministic posterior (no sampling) for
 dashboards and tests that need a reproducible number instead of a fresh draw.
 
-Reference (studied for algorithm structure/API shape only -- nothing copied,
-see repo license-discipline notes in the task writeup): st-tech/zr-obp
+Reference (studied for algorithm structure/API shape only, nothing copied):
+st-tech/zr-obp
 (Apache-2.0) and alison-carrera/mabalgs (Apache-2.0) both implement
 Beta-Bernoulli Thompson Sampling bandits. This is a from-scratch
 implementation using only `random.betavariate` from the Python standard

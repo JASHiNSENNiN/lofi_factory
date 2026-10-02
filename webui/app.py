@@ -72,7 +72,7 @@ def _last_stage(job) -> str:
     return "starting…"
 
 
-# Ported from dashboard.py's TUI stage-detection / ffmpeg progress parsing so the
+# Stage detection / ffmpeg progress parsing (originally from the removed TUI) so the
 # web log gets the same friendly stage names + progress bar as the terminal one.
 def _parse_ffmpeg_progress(line: str) -> dict | None:
     """Parse an ffmpeg -stats line: frame=1234 fps=24.0 time=01:00:00 speed=1.0x"""
@@ -3348,8 +3348,8 @@ def run() -> None:
         if os.path.exists(config.SSL_CERTFILE) and os.path.exists(config.SSL_KEYFILE):
             ssl_kwargs = {"ssl_certfile": config.SSL_CERTFILE, "ssl_keyfile": config.SSL_KEYFILE}
         else:
-            print(f"[webui] WEBUI_SSL_CERTFILE/KEYFILE set but not found on disk "
-                  f"-- serving plain HTTP")
+            print("[webui] WEBUI_SSL_CERTFILE/KEYFILE set but not found on disk "
+                  "-- serving plain HTTP")
 
     ui.run(
         host=config.HTTP_HOST,

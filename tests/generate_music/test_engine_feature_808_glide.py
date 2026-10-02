@@ -12,7 +12,6 @@ at track start.
 """
 import random
 
-import mido
 
 from scripts.composer import (
     PROGRESSIONS,

@@ -6,7 +6,7 @@ Replaces the old room-scene approach with an abstract radio station UI.
 import math
 import os
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
 from .config import (
     W, H, HEADER_H, HEADER_MID,

@@ -4143,7 +4143,7 @@ def _render_track(index: int, params: dict, low_priority: bool, attempt: int = 0
         midi_path = os.path.join(tmp, 'track.mid')
         raw_wav   = os.path.join(tmp, 'raw.wav')
 
-        print(f"  [MIDI] Building...")
+        print("  [MIDI] Building...")
         _, section_transitions = build_midi(params, midi_path)
         chosen_sf = _pick_soundfont()
         print(f"  [FluidSynth] Rendering ({os.path.basename(chosen_sf)})...")

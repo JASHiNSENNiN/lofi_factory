@@ -3,8 +3,7 @@ Tests for the new 3-against-4 cross-rhythm generator
 (generate_polyrhythm_pattern) -- research/theory/rhythm-groove.md's finding
 that a true independent-pulse-train cross-rhythm wasn't represented by the
 existing Euclidean/CA generators (which fold everything into one 16-step
-additive grouping). This is a NEW technique this session's research
-surfaced (not in the theory doc itself), gated to lofi_world/nujabes in
+additive grouping). This technique isn't in the theory doc; it's gated to lofi_world/nujabes in
 pick_params() rather than offered to every genre.
 """
 

@@ -6,7 +6,7 @@ auto-upload run fires on a systemd timer (default: daily at midnight) so it
 keeps generating/uploading on schedule across webui restarts and deploys.
 This module just reflects/controls that independent timer via the shared
 auto_service helper (also used by publish.py's `auto-service` CLI subcommand
-and dashboard.py's TUI panel).
+and the web panel).
 """
 from __future__ import annotations
 
@@ -163,7 +163,7 @@ def render_progress() -> dict | None:
 # Calling that directly from a button handler used to freeze the *entire*
 # webui for every client for the full run duration (TLS handshakes included --
 # the event loop never got back to accept()). Push each call to a worker
-# thread so the event loop stays free; publish.py's CLI and dashboard.py's
+# thread so the event loop stays free; publish.py's CLI and the panel's
 # TUI still call auto_service's sync functions directly, which is fine there
 # since neither has other concurrent clients to starve.
 #

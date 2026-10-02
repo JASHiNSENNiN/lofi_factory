@@ -5,7 +5,6 @@ import json
 import os
 import time
 
-import pytest
 
 import publish
 from scripts import cleanup, fileutil

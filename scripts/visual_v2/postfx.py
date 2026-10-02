@@ -119,7 +119,6 @@ _WATERMARK_OV = None
 
 
 def _get_font(size: int = 22):
-    from PIL import ImageFont
     candidates = [
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
