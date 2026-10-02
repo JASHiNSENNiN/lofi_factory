@@ -207,7 +207,7 @@ def main():
     # sub_genre. Read the first track's .meta.json sidecar to correct the concept.
     #
     # Also stash sub_genre/bpm/music_engine (the fields the composition
-    # bandits — sub_genre_weights()/bpm_bucket_weights()/engine_weights() —
+    # bandits — sub_genre_weights()/bpm_bucket_weights() —
     # need to learn from) onto local vars here, the same way genre_label
     # flows through `concept` above, so they can be copied onto `seo` right
     # after generate_seo() runs and from there into upload_log.json's
@@ -427,7 +427,7 @@ def main():
                 "seo_ref":          seo.get("ref_id", ""),
                 "video_file":       os.path.basename(video_path),
                 # Composition-selection feedback — see scripts/analytics.py's
-                # sub_genre_weights()/bpm_bucket_weights()/engine_weights().
+                # sub_genre_weights()/bpm_bucket_weights().
                 # Defaults mirror sync_analytics()'s container-construction
                 # defaults so an older-format seo dict (missing these keys)
                 # never crashes this log-append.

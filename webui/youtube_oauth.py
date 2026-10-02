@@ -71,27 +71,6 @@ def status() -> dict:
     return info
 
 
-def channel_title() -> str | None:
-    """Fetch the connected channel's title (network call; best-effort)."""
-    if not os.path.exists(config.TOKEN_FILE):
-        return None
-    try:
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
-        from googleapiclient.discovery import build
-
-        creds = Credentials.from_authorized_user_file(config.TOKEN_FILE, config.SCOPES)
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            _write_token(creds)
-        yt = build("youtube", "v3", credentials=creds)
-        resp = yt.channels().list(part="snippet", mine=True).execute()
-        items = resp.get("items") or []
-        return items[0]["snippet"]["title"] if items else None
-    except Exception:
-        return None
-
-
 def _flow():
     from google_auth_oauthlib.flow import Flow
 

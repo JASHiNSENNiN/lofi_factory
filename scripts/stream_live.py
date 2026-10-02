@@ -38,9 +38,9 @@ Process supervision:
   outside; this file assumes that layer exists, it doesn't provide it.
 
 Alerting:
-  Set LOFI_STREAM_ALERT_WEBHOOK to a Slack/Discord-compatible incoming
-  webhook URL to get pinged after repeated reconnect failures (opt-in,
-  unset by default — see _send_alert()).
+  Repeated reconnect failures are sent through webui/alerts.py, to the
+  same LOFI_STREAM_ALERT_WEBHOOK destination(s) as every other alert
+  (opt-in, unset by default -- see _send_alert()).
 """
 
 import os
@@ -81,19 +81,17 @@ YT_RTMP_BASE = "rtmp://a.rtmp.youtube.com/live2"
 # unset by default, so a fresh checkout never makes an outbound network call it
 # wasn't explicitly configured for. Any webhook that accepts a JSON POST with a
 # "text" field works (Slack/Discord-compatible incoming webhook URL).
-_ALERT_WEBHOOK       = os.environ.get("LOFI_STREAM_ALERT_WEBHOOK", "")
 _ALERT_AFTER_ATTEMPTS = 5    # first alert once reconnects have failed this many times in a row
 _ALERT_REPEAT_EVERY   = 10   # then re-alert every N more attempts if still down
 
 
 def _send_alert(message: str) -> None:
-    """Best-effort webhook ping — must never let an alerting failure affect
-    the stream itself, so every failure mode here is swallowed silently."""
-    if not _ALERT_WEBHOOK:
-        return
+    """Best-effort alert through the panel's alert module (the same
+    destinations, apprise URL support and alert history as every other
+    alert). A failure here must never affect the stream."""
     try:
-        import requests
-        requests.post(_ALERT_WEBHOOK, json={"text": f"[lofi-factory] {message}"}, timeout=5)
+        from webui import alerts
+        alerts.send_sync("lofi-factory: live stream", message)
     except Exception:
         pass
 
@@ -526,6 +524,7 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
     tracks: ordered list of music file paths for the monitor thread.
     visual_playlist_path: if set, cycles through multiple pre-graded visuals.
     """
+    global _user_interrupted
     # Pre-grade single visual if no playlist (cached — runs once per file)
     if not visual_playlist_path:
         visual_path = pregrade_visual(visual_path)
@@ -612,6 +611,15 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
             ret = proc.poll()
             if ret is not None:
                 break
+            if _user_interrupted:
+                # SIGTERM only sets the flag; without this check the encoder
+                # ran on until systemd killed everything, and the broadcast
+                # was never ended.
+                print("\n[STREAM] Stop requested.")
+                stop_event.set()
+                proc.terminate()
+                proc.wait(timeout=10)
+                return 0
             # Watchdog: kill if stalled (no stderr output for _STALL_TIMEOUT seconds)
             if not test_secs:
                 stalled = time.time() - last_output_time[0]
@@ -623,7 +631,6 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
             time.sleep(2)
     except KeyboardInterrupt:
         print("\n[STREAM] Interrupted.")
-        global _user_interrupted
         _user_interrupted = True
         stop_event.set()
         proc.terminate()
@@ -652,6 +659,34 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
 # ── Stream with auto-reconnect ────────────────────────────────────────────────
 
 _user_interrupted = False
+
+# The web panel's Live page reads this to show (and stop) a 24/7 stream, the
+# same way it reads publish.py's live_state.json for a single-video stream.
+STREAM_STATE_FILE = os.path.join(ROOT, "stream_state.json")
+
+
+def _write_stream_state(broadcast_id, test_secs) -> None:
+    if test_secs:
+        return
+    try:
+        from scripts.fileutil import atomic_write_json
+        atomic_write_json(STREAM_STATE_FILE, {
+            "mode": "24/7",
+            "pid": os.getpid(),
+            "broadcast_id": broadcast_id,
+            "watch_url": f"https://www.youtube.com/watch?v={broadcast_id}" if broadcast_id else None,
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        })
+    except OSError as e:
+        print(f"  [stream] Couldn't write {STREAM_STATE_FILE}: {e}")
+
+
+def _clear_stream_state() -> None:
+    try:
+        os.remove(STREAM_STATE_FILE)
+    except OSError:
+        pass
+
 
 def _set_interrupted(sig, frame):
     global _user_interrupted
@@ -721,6 +756,8 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
         print("  Auth setup:  python scripts/upload_youtube.py --auth")
         print("  Or set:      export YT_STREAM_KEY='xxxx-xxxx-xxxx-xxxx'")
         return
+
+    _write_stream_state(active_bid, test_secs)
 
     attempt          = 0
     current_visual   = visual_path
@@ -800,6 +837,7 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
         # End broadcast only on deliberate stop — not on reconnect
         if _yt_mgr and active_yt and active_bid:
             _yt_mgr.end_broadcast(active_yt, active_bid)
+        _clear_stream_state()
 
     if _user_interrupted:
         print("[STREAM] Stopped by user.")

@@ -75,24 +75,6 @@ def test_sample_with_explicit_rng_instance_is_reproducible():
         assert b1.sample("b") == b2.sample("b")
 
 
-def test_select_arm_picks_the_dominant_arm_most_of_the_time():
-    # arm "good" has a strong, well-established track record; arm "bad" the
-    # opposite -- over many seeded trials Thompson Sampling should pick
-    # "good" the large majority of the time (exploitation), while still
-    # exploring "bad" occasionally is fine, but not most of the time.
-    b = ThompsonSamplingBandit(["good", "bad"], seed=123)
-    b.update_counts("good", successes=200, failures=5)
-    b.update_counts("bad", successes=5, failures=200)
-    picks = [b.select_arm() for _ in range(200)]
-    assert picks.count("good") > 180
-
-
-def test_select_arm_raises_on_empty_bandit():
-    b = ThompsonSamplingBandit([])
-    with pytest.raises(ValueError):
-        b.select_arm()
-
-
 def test_posterior_stats_shape():
     b = ThompsonSamplingBandit(["a", "b"])
     b.update_counts("a", 3, 1)

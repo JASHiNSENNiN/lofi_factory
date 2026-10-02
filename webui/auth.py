@@ -71,11 +71,20 @@ def _recent(key: str, window: float, now: float) -> list[float]:
     return times
 
 
+# Clients that have logged in successfully recently. The global lockout
+# stops distributed guessing, but on its own it let anyone lock the owner
+# out with 30 bad guesses; clients known to have the password skip it.
+TRUSTED_CLIENT_SECS = 30 * 24 * 3600
+_trusted: dict[str, float] = {}
+
+
 def lockout_remaining(client: str, now: float | None = None) -> float:
     """Seconds until this client may try again (0 if not locked)."""
     now = time.time() if now is None else now
-    return max(0.0, _locked_until.get(client, 0.0) - now,
-               _locked_until.get(_GLOBAL, 0.0) - now)
+    own = _locked_until.get(client, 0.0) - now
+    trusted = now - _trusted.get(client, -1e18) < TRUSTED_CLIENT_SECS
+    global_wait = 0.0 if trusted else _locked_until.get(_GLOBAL, 0.0) - now
+    return max(0.0, own, global_wait)
 
 
 def record_failure(client: str, now: float | None = None) -> None:
@@ -89,9 +98,10 @@ def record_failure(client: str, now: float | None = None) -> None:
             _failures[key] = []
 
 
-def record_success(client: str) -> None:
+def record_success(client: str, now: float | None = None) -> None:
     _failures.pop(client, None)
     _locked_until.pop(client, None)
+    _trusted[client] = time.time() if now is None else now
 
 
 def _password_fingerprint() -> str:

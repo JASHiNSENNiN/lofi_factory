@@ -48,8 +48,10 @@ def _load(filename: str) -> np.ndarray | None:
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
         if orig_sr != SR:
-            import librosa
-            audio = librosa.resample(audio, orig_sr=orig_sr, target_sr=SR)
+            from math import gcd
+            from scipy.signal import resample_poly
+            g = gcd(int(orig_sr), SR)
+            audio = resample_poly(audio, SR // g, orig_sr // g)
         _CACHE[filename] = audio.astype(np.float32)
     except Exception:
         _CACHE[filename] = None
@@ -134,7 +136,7 @@ def _kick(bpm: int, style: str = "standard") -> np.ndarray:
         gain  = random.uniform(0.75, 1.00)
         n     = len(sample)
         # For '808' style, extend the low-end tail perception by boosting low end
-        # (we can't repitch without librosa overhead, so just leave as-is)
+        # (repitching isn't worth it here, so leave as-is)
         return (sample * gain)
     return _synth_kick(bpm, style)
 

@@ -51,14 +51,6 @@ THEME_FX = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _alpha_blend(base: np.ndarray, overlay: np.ndarray, alpha: float) -> np.ndarray:
-    """Blend overlay (RGB) onto base (RGB) with scalar alpha [0,1]."""
-    return np.clip(
-        base.astype(np.float32) * (1 - alpha)
-        + overlay.astype(np.float32) * alpha,
-        0, 255
-    ).astype(np.uint8)
-
 
 def _paste_rgba(base: np.ndarray, rgba: np.ndarray) -> np.ndarray:
     """Alpha-composite an RGBA overlay onto RGB base."""

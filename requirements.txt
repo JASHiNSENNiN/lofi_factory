@@ -10,7 +10,6 @@ requests>=2.31
 scipy>=1.11
 soundfile>=0.12
 pedalboard>=0.9
-librosa>=0.10
 isobar>=0.1
 
 
@@ -19,7 +18,6 @@ nicegui>=3.0
 
 # Analytics forecasting (scripts/analytics.py: simple exponential smoothing
 # over view-velocity for the 7/30-day view-count forecast)
-statsmodels>=0.14
 
 # Loudness measurement/mastering — see track_quality.py, lofi_fx.py.
 pyloudnorm>=0.1
@@ -27,7 +25,6 @@ pyloudnorm>=0.1
 # IR convolution reverb (lofi_fx.py: _apply_ir_reverb, jazz/piano/classical
 # genres) — was imported but never declared here, so the code path was
 # unreachable regardless of whether assets/ir/*.wav files existed.
-audiomentations>=0.36
 
 # System admin page (webui: resource monitor)
 psutil>=5.9

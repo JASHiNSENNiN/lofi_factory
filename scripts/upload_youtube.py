@@ -340,7 +340,7 @@ def main():
         "video_file":       os.path.basename(video_path),
         # Composition-selection feedback (which sub-genre/BPM/generation
         # engine got used) — see scripts/analytics.py's sub_genre_weights()/
-        # bpm_bucket_weights()/engine_weights(). Defaults keep this log-append
+        # bpm_bucket_weights(). Defaults keep this log-append
         # from crashing on an older-format `seo` dict that predates these
         # fields (e.g. a seo_*.json file generated before this feature).
         "sub_genre":        seo.get("sub_genre", ""),

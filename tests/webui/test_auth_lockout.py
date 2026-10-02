@@ -63,3 +63,28 @@ def test_panel_is_never_indexed():
     from webui import auth, theme
     assert "/robots.txt" in auth.UNRESTRICTED
     assert 'name="robots" content="noindex' in theme._HEAD
+
+
+def test_global_lockout_spares_clients_that_logged_in_before():
+    from webui import auth
+    auth._failures.clear(); auth._locked_until.clear(); auth._trusted.clear()
+    auth.record_success("owner", now=1000.0)
+    for i in range(auth.GLOBAL_MAX_FAILURES):
+        auth.record_failure(f"attacker{i}", now=2000.0)
+    assert auth.lockout_remaining("stranger", now=2001.0) > 0
+    assert auth.lockout_remaining("owner", now=2001.0) == 0
+
+
+def test_backups_are_owner_only(tmp_path, monkeypatch):
+    import os
+    import stat
+    from webui import config, system_admin
+    monkeypatch.setattr(config, "ROOT", str(tmp_path))
+    monkeypatch.setattr(system_admin, "BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(system_admin, "audit_log", lambda *a, **k: None)
+    (tmp_path / "upload_log.json").write_text("[]")
+    os.chmod(tmp_path / "upload_log.json", 0o644)
+    info = system_admin.create_backup()
+    f = os.path.join(info["path"], "upload_log.json")
+    assert stat.S_IMODE(os.stat(f).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(tmp_path / "backups").st_mode) == 0o700

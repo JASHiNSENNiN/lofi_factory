@@ -1125,3 +1125,41 @@ completed: 9 tracks, 30:00.0 exactly, 720p24, −17.9 LUFS, LRA 2.4 LU.
   `realize_numeral_pitches`, `postfx.draw_watermark`, `stats.list_replies`,
   `data.latest_video`, `trend_research.compute_trend_deltas`, among others.
 - The panel's first page loads still make cached-but-blocking YouTube calls.
+
+## Round 6: the weak but fixable parts
+
+- Close-cousin genres separated (research/genres.md): study is sparse and
+  half-time with a sparse melody; morning is acoustic (steel-string guitar,
+  side-stick and shaker pattern U); cozy cafe is a brushed trio (acoustic
+  piano, nylon lead, upright, ride); summer is tropical (steel drums, son
+  clave and conga pattern V); chill beats is half-time; bedroom pop is a
+  straighter drum machine; hip-hop lofi is the tighter, faster end; anime
+  lofi gets the "royal road" IV-V-iii-vi (#48, new #60). New YAML field
+  `melody_density`.
+- Thumbnails: an illustrated room (window with the theme's view, lamp-lit
+  desk, mug/plant/books/headphones, sometimes a cat) replaces one small
+  silhouette on a dark gradient. The old scene-slot code was removed.
+- Live: `stream_live.py` (24/7) writes `stream_state.json`; the Live page
+  shows either kind of stream, can start a 24/7 stream, and ends it by
+  signalling that process (PID checked). Fixed a real bug on the way:
+  SIGTERM only set a flag the encoder loop never read, so a stopped 24/7
+  stream kept running and its broadcast was never ended.
+- One alert path: `stream_live` now sends through `webui/alerts.py`.
+- Panel never waits on YouTube while building a page: comments and
+  retention load asynchronously; channel/traffic/subscriber/revenue/
+  engagement caches are refreshed in the background every 90 s.
+- Dependencies: statsmodels, librosa and audiomentations removed (27 fewer
+  packages), replaced by ~30 lines of numpy/scipy; the IR convolution is
+  byte-identical to the old output.
+- Dead code removed (engine_weights, select_arm, compute_trend_deltas,
+  list_replies, draw_watermark, latest_video, subscribe, channel_title,
+  auto_service.restart, and more).
+- Security: clients that have logged in before skip the global lockout;
+  backups are owner-only (0700/0600); trend research refreshes daily.
+- CI compiles every file: ruff missed a syntax error introduced this round.
+- `live_state.json` lives at the repo root but only `assets/live_state.json`
+  was gitignored.
+
+Still not fixable in code: the General MIDI soundfont's sound ceiling, the
+YouTube repetitious-content policy, and testing uploads and streams against
+a real account.

@@ -341,6 +341,9 @@ PROGRESSIONS = [
     # guidance. Long durations (4+4 bars) are deliberate -- a drone holds,
     # it doesn't cycle through changes.
     [('Amadd9',4),('Dmsus4',4)],                            # 59 sparse modal drone vamp
+    # 60: the "royal road" IV-V-iii-vi in G, the signature anime/J-pop move
+    # (#48 is the same in C). masterthescore.com, unison.audio.
+    [('Cmaj9',2),('D9',2),('Bm7',2),('Em7',2)],             # 60
 ]
 
 # Real tonal center of each PROGRESSIONS entry (functional-harmony read: which
@@ -362,6 +365,7 @@ PROGRESSION_KEY = [
     'Eb',                                                        # 50
     'A',  'D',  'Em', 'F#m', 'Bm', 'Ebm', 'C', 'Gm',             # 51-58
     'Am',                                                        # 59 (sparse modal drone -- Amadd9-centered)
+    'G',                                                         # 60 royal road in G
 ]
 assert len(PROGRESSION_KEY) == len(PROGRESSIONS)
 
@@ -922,6 +926,22 @@ DRUM_PATTERNS = [
      SNARE:[0,0,0,0,  100,0,0,0,  0,0,0,0,  100,0,0,0],
      CLAP: [0,0,0,0,  64,0,0,0,  0,0,0,0,  66,0,0,0],
      CHH:  [58,0,52,0,  58,0,52,0,  58,0,52,0,  58,0,52,0]},
+    # U: Acoustic morning -- soft kick on 1 and the "and" of 2, side-stick on
+    # 2 and 4 instead of a snare, a shaker carrying the 16ths. A coffee-shop
+    # acoustic kit rather than a boom-bap one.
+    {KICK: [72,0,0,0,  0,0,56,0,  66,0,0,0,  0,0,0,0],
+     RIM:  [0,0,0,0,  64,0,0,0,  0,0,0,0,  62,0,0,30],
+     SHAKER:[44,22,34,22,  44,22,34,22,  44,22,34,22,  44,22,34,22]},
+    # V: Tropical / summer -- clave on the son 3-2 pattern over two bars,
+    # conga tumbao (open tones on the "and" of 4), steady shaker, light
+    # kick. GM conga notes 62/63/64.
+    {KICK:  [78,0,0,0,  0,0,0,0,  70,0,0,0,  0,0,0,0] * 2,
+     75:    [74,0,0,74,  0,0,74,0,  0,0,0,0,  0,0,0,0,
+             0,0,0,0,  74,0,0,0,  74,0,0,0,  0,0,0,0],
+     62:    [0,0,0,0,  52,0,0,0,  0,0,0,0,  52,0,0,0] * 2,
+     63:    [0,0,0,0,  0,0,0,0,  0,0,0,0,  0,0,70,70] * 2,
+     64:    [0,0,0,0,  0,0,0,0,  0,0,58,0,  0,0,0,0] * 2,
+     SHAKER:[40,0,30,0,  40,0,30,0,  40,0,30,0,  40,0,30,0] * 2},
 ]
 
 # Index of pattern Q above -- the only pattern _scale_roll_intensity() acts
@@ -981,6 +1001,7 @@ _BEATLESS_GENRES: set = genre_presets.build_beatless_genres()
 _WALKING_BASS: dict = genre_presets.build_walking_bass()
 _BASS_PROGRAMS: dict = genre_presets.build_bass_programs()
 _PAD_PROGRAMS: dict = genre_presets.build_pad_programs()
+_MELODY_DENSITY: dict = genre_presets.build_melody_density()
 
 # Drum fills (1 bar of 16 steps — fire at last bar of a section)
 DRUM_FILLS = [
@@ -2941,14 +2962,6 @@ def _pick_subgenre_weighted(history: list[dict]) -> str:
     return random.choices(all_subs, weights=weights, k=1)[0]
 
 
-def _pick_key_avoiding_recent(sub: str, history: list[dict]) -> str:
-    """Pick a key that hasn't been used for this sub-genre in the last 8 picks."""
-    all_keys = list(KEY_ROOTS.keys())
-    recent = {h['key'] for h in history[-8:] if h.get('sub_genre') == sub and h.get('key')}
-    available = [k for k in all_keys if k not in recent] or all_keys
-    return random.choice(available)
-
-
 def _pick_progression_avoiding_recent(sub: str, cfg: dict, history: list[dict]) -> int:
     """Pick a progression not recently used for this sub-genre.
 
@@ -3053,7 +3066,7 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         'bpm':            random.randint(*cfg['bpm']),
         'swing':          round(random.uniform(sw_lo, sw_hi), 2),
         'mood':           _pick_mood_phrase(concept_hint, sub_genre=sub, history=history),
-        'melody_density': random.choice(['sparse', 'medium']),
+        'melody_density': _MELODY_DENSITY.get(sub) or random.choice(['sparse', 'medium']),
         'melody_scale':   random.choice(cfg['scale']),
         'bass_walking':   _WALKING_BASS.get(sub, random.random() < 0.4),
         'drum_pattern_a': pat_a,
@@ -4308,7 +4321,7 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
     # Save sidecar metadata for stream now-playing display AND for run.py's
     # concept/meta-alignment step (which stashes sub_genre/bpm/music_engine
     # onto the SEO dict so they reach upload_log.json -> analytics_log.json
-    # -> sub_genre_weights()/bpm_bucket_weights()/engine_weights()).
+    # -> sub_genre_weights()/bpm_bucket_weights()).
     # music_engine is hardcoded "v1" here — this module is the v1 generator;
     # generate_music_v2.py's own generate_track() hardcodes "v2" in its
     # equivalent sidecar write.

@@ -20,7 +20,7 @@ black-box: Beta-posterior weights (from a composite engagement score at a
 fixed video age) bias concept pillars, title variants and sub-genres; a
 Bonferroni-corrected two-proportion z-test flags videos whose CTR is
 well below the channel's and swaps in their alternate thumbnail; CUSUM
-flags viral moments; `statsmodels` forecasts 7/30-day views. With roughly
+flags viral moments; simple exponential smoothing forecasts 7/30-day views. With roughly
 one upload a day these signals take months to mean anything, so treat
 them as weak nudges, not findings.
 See `scripts/analytics.py`, `scripts/bandit.py`.

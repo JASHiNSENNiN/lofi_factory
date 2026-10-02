@@ -116,17 +116,6 @@ class Job:
     def duration(self) -> float:
         return (self.finished_at or time.time()) - self.started_at
 
-    def subscribe(self, on_line: Callable[[str], None],
-                  on_status: Callable[[], None]) -> Callable[[], None]:
-        """Attach UI callbacks; returns an unsubscribe function."""
-        self._line_subs.add(on_line)
-        self._status_subs.add(on_status)
-
-        def _off() -> None:
-            self._line_subs.discard(on_line)
-            self._status_subs.discard(on_status)
-
-        return _off
 
     def _emit_line(self, line: str) -> None:
         # Job output is kept, shown in the panel and written to job_logs/;

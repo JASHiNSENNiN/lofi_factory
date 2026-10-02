@@ -5,7 +5,7 @@ composition:
   melody_program: GM_VIBRAPHONE
   countermelody_program: GM_FLUTE
   scales: [major_pent, major, pent]
-  drum_pattern_indices: [0, 4, 7, 13]
+  drum_pattern_indices: [6, 0]
   bpm_range: [78, 92]
   energy: null
   # 51: A major modal interchange -- research/subgenres/bedroom_pop.md:
@@ -13,7 +13,7 @@ composition:
   # step up from its default two-chord simplicity; A also matches this key's
   # KEY_ROOTS comment ("energetic, bedroom pop").
   progression_indices: [16, 17, 22, 18, 44, 46, 49, 51]
-swing_range: [0.58, 0.65]
+swing_range: [0.52, 0.58]
 cozy_bias: true
 texture: {program: GM_GUITAR_NYLON, style: strum}
 drum_sampler_pattern: null
@@ -23,3 +23,4 @@ song_form: null
 bass_program: GM_FINGER_BASS
 pad_program: GM_WARM_PAD
 # Genre rework: clean, chorused guitar chords carry bedroom pop (guitarchalk.com, melodigging.com).
+# Separation pass: a straighter, drum-machine feel (melodigging.com bedroom pop).

@@ -19,6 +19,9 @@ jobs:
         run: |
           pip install -r requirements.lock
           pip install -r requirements-dev.txt ruff
+      # ruff misses some syntax errors (e.g. a name used before its `global`).
+      - name: Compile every file
+        run: python -m compileall -q -x '(^|/)(research|venv|\.git)/' .
       - name: Lint (undefined names, dead imports)
         run: ruff check .
       - name: Tests (includes the no-AI guard, tests/test_no_ai.py)

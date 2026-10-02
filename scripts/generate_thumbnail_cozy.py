@@ -401,70 +401,6 @@ def _apply_bloom(img: Image.Image, threshold: int = 130,
 
 # ── Theme-specific atmosphere FX ───────────────────────────────────────────────
 
-def _add_theme_fx(img: Image.Image, theme: str, rng: np.random.Generator) -> Image.Image:
-    """Overlay subtle atmospheric elements that hint at the theme's setting."""
-    draw = ImageDraw.Draw(img, "RGBA")
-
-    if theme in ("cozy_rain", "forest_rain"):
-        # Diagonal rain streaks
-        n = int(rng.integers(35, 60))
-        for _ in range(n):
-            x    = int(rng.uniform(0, TW))
-            y0   = int(rng.uniform(0, TH * 0.85))
-            ln   = int(rng.uniform(14, 38))
-            a    = int(rng.uniform(20, 50))
-            draw.line([(x, y0), (x + int(ln * 0.12), y0 + ln)],
-                      fill=(190, 215, 255, a), width=1)
-
-    elif theme == "winter_snow":
-        # Soft snow dots scattered across frame
-        n = int(rng.integers(45, 75))
-        for _ in range(n):
-            x = int(rng.uniform(0, TW))
-            y = int(rng.uniform(0, TH))
-            a = int(rng.uniform(35, 85))
-            draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill=(225, 238, 255, a))
-
-    elif theme == "neon_tokyo":
-        # Subtle retro perspective grid on lower half
-        hy = int(TH * 0.42)
-        vp = TW // 2
-        ac = THEMES[theme]["accent"]
-        line_col = (int(ac[0] * 0.25), int(ac[1] * 0.25), int(ac[2] * 0.25), 38)
-        for i in range(-9, 10):
-            draw.line([(vp, hy), (vp + i * 115, TH)], fill=line_col, width=1)
-        rows = 6
-        for j in range(rows):
-            frac = j / rows
-            y    = hy + int((TH - hy) * frac * frac)
-            a    = int(38 * frac)
-            draw.line([(0, y), (TW, y)],
-                      fill=(int(ac[0]*0.2), int(ac[1]*0.2), int(ac[2]*0.2), a), width=1)
-
-    elif theme in ("sakura_night", "spring_dawn"):
-        # Oval petal shapes drifting across upper frame
-        ac = THEMES[theme]["accent"]
-        n  = int(rng.integers(14, 24))
-        for _ in range(n):
-            px = int(rng.uniform(0, TW))
-            py = int(rng.uniform(0, TH * 0.68))
-            pr = int(rng.uniform(5, 12))
-            a  = int(rng.uniform(45, 95))
-            draw.ellipse([px - pr, py - pr // 2, px + pr, py + pr // 2],
-                         fill=(*ac, a))
-
-    elif theme == "amber_night":
-        # Subtle warm horizontal haze bands (candlelight flicker suggestion)
-        ac = THEMES[theme]["accent"]
-        n  = int(rng.integers(3, 6))
-        for _ in range(n):
-            y = int(rng.uniform(TH * 0.55, TH))
-            a = int(rng.uniform(8, 20))
-            h = int(rng.uniform(4, 14))
-            draw.rectangle([(0, y), (TW, y + h)], fill=(*ac, a))
-
-    return img
-
 
 # ── Vignette ──────────────────────────────────────────────────────────────────
 
@@ -616,63 +552,7 @@ def _max_card_width(layout: str) -> int:
     return TW - 64   # centered
 
 
-# ── Scene silhouette ────────────────────────────────────────────────────────────
-#
-# The single biggest gap versus competing lofi-channel thumbnails: this
-# generator was pure abstract gradient + text, with no focal subject. Nearly
-# every high-CTR lofi thumbnail (Lofi Girl etc.) leads with a recognizable
-# illustrated scene. Added here as flat, single-tone silhouette shapes built
-# from plain PIL polygon/ellipse primitives -- no external art assets, no AI
-# image generation, same toolkit already used for the rain streaks / neon
-# grid / petals in `_add_theme_fx`.
-
-def _scene_colors(theme: str) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
-    """(fill, rim) colors for a scene silhouette: a near-black fill (reads as
-    a silhouette regardless of theme tint) and an accent-colored rim used
-    sparingly for backlit edge details (headphone band, steam, vinyl grooves)."""
-    c = THEMES[theme]
-    fill = (
-        max(0, c["bg_top"][0] // 3),
-        max(0, c["bg_top"][1] // 3),
-        max(0, c["bg_top"][2] // 3),
-        235,
-    )
-    # Bright enough to outline the shape: without a rim light a near-black
-    # silhouette disappears into the night-sky backgrounds.
-    rim = (*c["accent"], 170)
-    return fill, rim
-
-
-def _silhouette_listener(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
-    """Person-at-desk-with-headphones bust -- universal fallback subject."""
-    scale = min(w, h)
-    head_r = scale * 0.17
-    head_cy = cy - scale * 0.18
-    shoulder_w = scale * 0.55
-    shoulder_top = head_cy + head_r * 1.15   # small neck gap below the head
-    shoulder_bot = cy + scale * 0.42
-    # Rounded shoulders (a straight-sided trapezoid read as a tombstone),
-    # rim-lit so the shape reads against a dark background.
-    draw.rounded_rectangle(
-        [cx - shoulder_w * 0.5, shoulder_top, cx + shoulder_w * 0.5, shoulder_bot],
-        radius=int(shoulder_w * 0.32), fill=fill, outline=rim, width=2)
-    draw.ellipse([cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r],
-                 fill=fill, outline=rim, width=2)
-    band_r = head_r * 1.25
-    draw.arc(
-        [cx - band_r, head_cy - band_r * 1.1, cx + band_r, head_cy + band_r * 0.9],
-        200, 340, fill=rim, width=max(2, int(scale * 0.02)),
-    )
-    cup_r = head_r * 0.42
-    draw.ellipse([cx - band_r - cup_r * 0.3, head_cy - cup_r,
-                  cx - band_r + cup_r * 1.1, head_cy + cup_r], fill=fill, outline=rim, width=2)
-    draw.ellipse([cx + band_r - cup_r * 1.1, head_cy - cup_r,
-                  cx + band_r + cup_r * 0.3, head_cy + cup_r], fill=fill, outline=rim, width=2)
-    x0 = cx - shoulder_w * 0.5 - cup_r
-    x1 = cx + shoulder_w * 0.5 + cup_r
-    y0 = head_cy - band_r * 1.1
-    y1 = shoulder_bot
-    return (x0, y0, x1, y1)
+# ── Desk-object silhouettes (used by scripts/thumbnail_scene.py) ────────────────
 
 
 def _silhouette_cat(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
@@ -762,142 +642,6 @@ def _silhouette_coffee_cup(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, f
     return (x0, y0, x1, y1)
 
 
-def _silhouette_vinyl_cassette(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
-    """Spinning vinyl record: disc + concentric grooves + label."""
-    scale = min(w, h)
-    r = scale * 0.4
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
-    for frac in (0.78, 0.6, 0.42):
-        draw.ellipse([cx - r * frac, cy - r * frac, cx + r * frac, cy + r * frac],
-                      outline=rim, width=1)
-    label_r = r * 0.28
-    draw.ellipse([cx - label_r, cy - label_r, cx + label_r, cy + label_r], fill=rim)
-    hole_r = r * 0.04
-    draw.ellipse([cx - hole_r, cy - hole_r, cx + hole_r, cy + hole_r], fill=fill)
-    return (cx - r, cy - r, cx + r, cy + r)
-
-
-def _silhouette_window_scene(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, float, float, float]:
-    """Window frame with a small skyline glimpsed through the lower pane."""
-    scale = min(w, h)
-    fw, fh = scale * 0.6, scale * 0.82
-    x0, y0, x1, y1 = cx - fw / 2, cy - fh / 2, cx + fw / 2, cy + fh / 2
-    frame_w = max(4, int(scale * 0.035))
-    draw.rounded_rectangle([x0, y0, x1, y1], radius=scale * 0.03, outline=fill, width=frame_w)
-    draw.line([(cx, y0), (cx, y1)], fill=fill, width=frame_w)
-    my = y0 + (y1 - y0) * 0.55
-    draw.line([(x0, my), (x1, my)], fill=fill, width=frame_w)
-    n = 4
-    pane_w = (x1 - x0) / n
-    for i in range(n):
-        bx0 = x0 + pane_w * i + 3
-        bx1 = x0 + pane_w * (i + 1) - 3
-        bh  = (fh * 0.5) * rng.uniform(0.25, 0.55)
-        draw.rectangle([bx0, y1 - bh, bx1, y1 - 2], fill=fill)
-    return (x0, y0, x1, y1)
-
-
-# Per-theme scene pools -- deterministic index picks a scene that fits the
-# theme's setting (rain -> window, house/vaporwave -> vinyl, cozy themes ->
-# cat/plant/coffee), same "pick from a themed pool via stable hash" pattern
-# TITLE_TEMPLATES already uses.
-SCENE_POOL = {
-    "cozy_rain":      ("window_scene", "listener", "coffee_cup"),
-    "midnight_cafe":  ("coffee_cup", "listener", "vinyl_cassette"),
-    "purple_dusk":    ("listener", "vinyl_cassette", "plant"),
-    "amber_night":    ("coffee_cup", "plant", "listener"),
-    "winter_snow":    ("window_scene", "cat", "listener"),
-    "autumn_study":   ("plant", "cat", "coffee_cup"),
-    "spring_dawn":    ("plant", "cat", "listener"),
-    "neon_tokyo":     ("window_scene", "vinyl_cassette", "listener"),
-    "summer_lofi":    ("plant", "listener", "vinyl_cassette"),
-    "blue_hour":      ("listener", "window_scene", "vinyl_cassette"),
-    "forest_rain":    ("window_scene", "cat", "plant"),
-    "sakura_night":   ("plant", "listener", "cat"),
-    "vaporwave":      ("vinyl_cassette", "listener", "window_scene"),
-    "lofi_house":     ("vinyl_cassette", "listener", "coffee_cup"),
-    "lofi_classical": ("vinyl_cassette", "listener", "plant"),
-    "bedroom_pop":    ("listener", "vinyl_cassette", "plant"),
-    "lofi_rnb":       ("vinyl_cassette", "coffee_cup", "listener"),
-}
-
-_SCENE_FUNCS = {
-    "listener":      _silhouette_listener,
-    "cat":           _silhouette_cat,
-    "plant":         _silhouette_plant,
-    "coffee_cup":    _silhouette_coffee_cup,
-    "vinyl_cassette": _silhouette_vinyl_cassette,
-    "window_scene":  _silhouette_window_scene,
-}
-
-
-def _select_scene(theme_name: str, variant: int) -> str:
-    """Deterministically pick a scene from (theme_name, variant), same
-    reproducibility guarantee as `_select_layout`/`_select_side`."""
-    pool = SCENE_POOL.get(theme_name, ("listener", "vinyl_cassette", "plant"))
-    idx = (_stable_int(theme_name + "|scene") + variant) % len(pool)
-    return pool[idx]
-
-
-def _scene_slot(layout: str, side: str) -> tuple[int, int, int, int]:
-    """Region (cx, cy, max_w, max_h) on the side opposite the text card where
-    a scene silhouette can be drawn without touching it."""
-    opp = "right" if side == "left" else "left"
-    if layout == "thirds":
-        cx = int(TW * (0.76 if opp == "right" else 0.24))
-        return cx, int(TH * 0.46), int(TW * 0.30), int(TH * 0.62)
-    if layout == "edge":
-        cx = int(TW * (0.82 if opp == "right" else 0.18))
-        return cx, int(TH * 0.36), int(TW * 0.30), int(TH * 0.56)
-    # centered: the card spans nearly the full width mid-frame, so there's
-    # only room for a corner accent -- tucked bottom-right, clear of both the
-    # top-left duration badge and the mid-frame card. Pulled in from the
-    # extreme corner (and sized up a bit) so it doesn't disappear into the
-    # heaviest vignette falloff -- a corner accent nobody can see isn't
-    # earning its keep.
-    return int(TW * 0.86), int(TH * 0.80), int(TW * 0.20), int(TH * 0.26)
-
-
-def _check_scene_card_collision(scene_bbox, card_bbox) -> bool:
-    """True if the two axis-aligned boxes overlap."""
-    if scene_bbox is None:
-        return False
-    sx0, sy0, sx1, sy1 = scene_bbox
-    cx0, cy0, cx1, cy1 = card_bbox
-    return sx0 < cx1 and sx1 > cx0 and sy0 < cy1 and sy1 > cy0
-
-
-def _draw_scene_silhouette(
-    img: Image.Image,
-    theme: str,
-    layout: str,
-    side: str,
-    variant: int,
-    rng: np.random.Generator,
-    avoid_bbox: tuple[int, int, int, int],
-) -> tuple[Image.Image, tuple[float, float, float, float] | None]:
-    """
-    Draw a themed silhouette scene into the slot opposite the text card. The
-    collision check runs against the *reserved slot box* before any pixels
-    are drawn (rather than drawing then undoing), shrinking once and finally
-    skipping the scene entirely rather than ever drawing over the card.
-    Returns (img, scene_bbox); scene_bbox is None if nothing was drawn.
-    """
-    scene_name = _select_scene(theme, variant)
-    fn = _SCENE_FUNCS[scene_name]
-    fill, rim = _scene_colors(theme)
-    cx, cy, max_w, max_h = _scene_slot(layout, side)
-
-    for scale_mult in (1.0, 0.65):
-        w, h = int(max_w * scale_mult), int(max_h * scale_mult)
-        reserved = (cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
-        if not _check_scene_card_collision(reserved, avoid_bbox):
-            draw = ImageDraw.Draw(img, "RGBA")
-            bbox = fn(draw, cx, cy, w, h, fill, rim, rng)
-            return img, bbox
-    return img, None
-
-
 # ── Elegant frosted-glass text card ───────────────────────────────────────────
 
 def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
@@ -906,8 +650,8 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
     Compute the text card's fonts/sizes/position without drawing anything.
     Font metrics don't depend on image content, so this is deterministic
     given the same inputs -- callers that need to know the card's real
-    footprint *before* it's drawn (scene silhouette placement) can call this
-    directly and get exactly the geometry `_draw_text_card` will later use.
+    footprint *before* it's drawn can call this directly and get exactly the
+    geometry `_draw_text_card` will later use.
     """
     font_path = _resolve_title_font()
 
@@ -1237,8 +981,12 @@ def generate_thumbnail(
     print(f"[THUMB] {theme_name} | '{short_title}' | {duration} | layout={layout}/{side}")
 
     base_img = _build_bg(theme_name, seed)
+    # The room (window with the theme's view, lamp-lit desk) goes in before
+    # bloom so the lamp, moon and city lights get a real glow.
+    from scripts.thumbnail_scene import draw_room, window_side_for
+    base_img = draw_room(base_img, THEMES[theme_name], theme_name,
+                         window_side_for(layout, side), rng)
     base_img = _apply_bloom(base_img)
-    base_img = _add_theme_fx(base_img, theme_name, rng)
     base_img = _apply_vignette(base_img, strength=0.44)
     base_img = _apply_film_grain(base_img, seed)
     base_img = _draw_duration_badge(base_img, theme_name, duration)
@@ -1249,11 +997,8 @@ def generate_thumbnail(
     # card-background opacity; if it still fails the small-preview contrast
     # check, fall back to the centered layout with a forced near-black
     # (highest-contrast) card background rather than silently shipping an
-    # unreadable thumbnail. The scene silhouette is placed first each attempt,
-    # into the slot opposite whichever (layout, side) that attempt uses, and
-    # is checked against that attempt's real card geometry (via
-    # `_card_geometry`) before a single scene pixel is drawn -- so it can
-    # never end up behind/under the text card.
+    # unreadable thumbnail. The room scene is already in the background, with
+    # its window on the side away from the title.
     attempts = [
         (layout,     side, 155, False),
         (layout,     side, 205, False),
@@ -1263,15 +1008,6 @@ def generate_thumbnail(
     img = None
     for i, (lyt, sd, alpha, solid_dark) in enumerate(attempts):
         candidate = base_img.copy()
-        measure_draw = ImageDraw.Draw(candidate, "RGBA")
-        geom = _card_geometry(measure_draw, theme_name, short_title, duration, lyt, sd)
-        pending_card_bbox = (
-            geom["card_x"], geom["card_y"],
-            geom["card_x"] + geom["card_w"], geom["card_y"] + geom["card_h"],
-        )
-        candidate, _scene_bbox = _draw_scene_silhouette(
-            candidate, theme_name, lyt, sd, variant, rng, avoid_bbox=pending_card_bbox,
-        )
         candidate, card_bbox = _draw_text_card(
             candidate, theme_name, short_title, duration,
             layout=lyt, side=sd, glass_alpha=alpha, force_solid_dark=solid_dark,

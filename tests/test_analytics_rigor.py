@@ -11,7 +11,6 @@ import pytest
 
 import scripts.analytics as analytics_mod
 from scripts.analytics import (
-    binarize_above_median,
     composite_engagement_score,
     cusum_change_points,
     detect_viral_moment,
@@ -80,12 +79,6 @@ def test_composite_score_reads_from_longitudinal_history_format():
 
 
 # ── binarize_above_median ────────────────────────────────────────────────────
-def test_binarize_above_median_empty():
-    assert binarize_above_median([]) == []
-
-
-def test_binarize_above_median_ties_count_as_success():
-    assert binarize_above_median([1, 2, 3]) == [False, True, True]  # median=2, 2>=2 True
 
 
 # ── two_proportion_ztest (checked against statsmodels' reference implementation) ──

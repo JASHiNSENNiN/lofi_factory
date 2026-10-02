@@ -44,11 +44,12 @@ _BPM_CEILING_OVERRIDES = {
 
 # Chill, jazz-family instrument voices lofi is built on -- deliberately
 # excludes synth leads, distortion guitar, brass sections, etc.
-# Soft chord instruments. Acoustic piano (piano/anime/classical lofi), nylon
-# and clean guitar (bossa, bedroom pop) and polysynth pad (synthwave) are the
-# genre-correct chord voices there (research/genres.md).
+# Soft chord instruments. Acoustic piano (piano/anime/classical/cafe lofi),
+# nylon, steel-string and clean guitar (bossa, morning, bedroom pop) and
+# polysynth pad (synthwave) are the genre-correct chord voices there
+# (research/genres.md).
 _LOFI_CHORD_INSTRUMENTS = {GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_WARM_PAD,
-                           0, 24, 27, 90}
+                           0, 24, 25, 27, 90}
 
 _JAZZY_MARKERS = ('7', '9', '11', '13', 'dim', 'aug')
 

@@ -58,3 +58,6 @@ backups/
 output/tmp_*/
 assets/ir/procedural_*.wav
 assets/genre_playlists.json
+/live_state.json
+/stream_state.json
+/ffmpeg_stream.log

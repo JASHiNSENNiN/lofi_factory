@@ -139,36 +139,69 @@ def output_videos(limit: int = 20) -> list[dict]:
     return out
 
 
-def latest_video() -> str | None:
-    vids = output_videos(limit=1)
-    return vids[0]["path"] if vids else None
+def _pid_alive(pid) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (ProcessLookupError, PermissionError, ValueError):
+        return False
 
 
 def live_status() -> dict | None:
-    """live_state.json plus a real liveness check against ffmpeg_pid.
+    """The running broadcast, from either live system, with a real liveness
+    check. `mode` is "single" (publish.py live: one finished video, looped;
+    live_state.json) or "24/7" (stream_live.py: endless, generating music;
+    stream_state.json).
 
-    None means no broadcast has been started (or state was cleared after one
-    ended). A non-None result with alive=False means the state file thinks a
-    stream is running but the ffmpeg process behind it has actually died --
-    same "CRASHED / STALE" distinction the TUI dashboard makes.
+    None means nothing is live (or the state was cleared after it ended).
+    alive=False means a state file says a stream runs but its process is gone
+    (CRASHED / STALE).
     """
-    path = os.path.join(config.ROOT, "live_state.json")
-    if not os.path.exists(path):
-        return None
-    try:
-        state = json.load(open(path))
-    except Exception:
-        return None
-    pid = state.get("ffmpeg_pid")
-    alive = False
-    if pid:
+    for name, mode, pid_key in (("live_state.json", "single", "ffmpeg_pid"),
+                                ("stream_state.json", "24/7", "pid")):
+        path = os.path.join(config.ROOT, name)
+        if not os.path.exists(path):
+            continue
         try:
-            os.kill(pid, 0)
-            alive = True
-        except (ProcessLookupError, PermissionError):
-            alive = False
-    state["alive"] = alive
-    return state
+            with open(path) as f:
+                state = json.load(f)
+        except Exception:
+            continue
+        state["mode"] = mode
+        state["alive"] = _pid_alive(state.get(pid_key))
+        return state
+    return None
+
+
+def clear_247_state() -> None:
+    try:
+        os.remove(os.path.join(config.ROOT, "stream_state.json"))
+    except OSError:
+        pass
+
+
+def stop_247_stream() -> bool:
+    """Ask a running stream_live.py to stop. It ends its YouTube broadcast and
+    clears stream_state.json itself. Only signals a PID that really is that
+    script, so a stale file can't hit an unrelated process."""
+    import signal
+    path = os.path.join(config.ROOT, "stream_state.json")
+    try:
+        with open(path) as f:
+            pid = int(json.load(f).get("pid"))
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            cmdline = f.read().replace(b"\0", b" ").decode(errors="replace")
+    except (OSError, ValueError, TypeError):
+        return False
+    if "stream_live" not in cmdline and "--stream" not in cmdline:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except ProcessLookupError:
+        return False
 
 
 def render_delete_manifest(card: dict) -> list[dict]:

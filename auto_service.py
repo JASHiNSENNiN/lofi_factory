@@ -144,12 +144,6 @@ def stop() -> None:
         raise RuntimeError(out or "systemctl stop failed")
 
 
-def restart() -> None:
-    rc, out = _systemctl("restart")
-    if rc != 0:
-        raise RuntimeError(out or "systemctl restart failed")
-
-
 def set_enabled(enabled: bool) -> None:
     rc, out = _systemctl("enable" if enabled else "disable")
     if rc != 0:

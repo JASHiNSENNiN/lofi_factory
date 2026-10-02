@@ -60,7 +60,7 @@ _engagement_cache: dict = {}  # video_id -> {"at": float, "likes": int, "comment
 _ENGAGEMENT_TTL = 120
 
 
-def video_engagement(video_ids: list[str]) -> dict[str, dict]:
+def video_engagement(video_ids: list[str], force: bool = False) -> dict[str, dict]:
     """{video_id: {likes, comments, views}} via one batched videos.list call
     (up to 50 ids per request, chunked if more). Cached per-id for 2 min;
     safe/no-throw -- missing ids on error just aren't included in the
@@ -68,7 +68,7 @@ def video_engagement(video_ids: list[str]) -> dict[str, dict]:
     now = time.time()
     fresh = {vid: {"likes": v["likes"], "comments": v["comments"], "views": v.get("views", 0)}
              for vid, v in _engagement_cache.items()
-             if vid in video_ids and now - v["at"] < _ENGAGEMENT_TTL}
+             if not force and vid in video_ids and now - v["at"] < _ENGAGEMENT_TTL}
     stale = [v for v in video_ids if v not in fresh]
     if not stale:
         return fresh
@@ -323,28 +323,6 @@ def list_comments(video_id: str, *, force: bool = False, client=None) -> list[di
         return None
     _comments_cache[video_id] = {"at": now, "data": out}
     return out
-
-
-def list_replies(parent_id: str, *, client=None) -> list[dict] | None:
-    """Full reply list for one top-level comment via comments.list(parentId=...)
-    -- for when a thread's totalReplyCount exceeds the 5 inlined by
-    list_comments() above and the moderator expands "show more replies"."""
-    try:
-        yt = _yt_client(client)
-        out: list[dict] = []
-        page_token = None
-        while True:
-            r = yt.comments().list(
-                part="snippet", parentId=parent_id, maxResults=100,
-                textFormat="plainText", pageToken=page_token,
-            ).execute()
-            out.extend(_shape_comment(item["snippet"], item["id"]) for item in r.get("items", []))
-            page_token = r.get("nextPageToken")
-            if not page_token:
-                break
-        return out
-    except Exception:
-        return None
 
 
 _MODERATION_STATUSES = {"heldForReview", "published", "rejected"}
@@ -639,3 +617,29 @@ def fmt_count(n: int | None) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"
     return str(n)
+
+
+# ── Background refresh ───────────────────────────────────────────────────────
+# Page builders read these cached calls synchronously. Refreshing them here,
+# off the event loop and more often than their 120 s TTL, means a page load
+# finds a warm cache instead of waiting on YouTube (which stalled every open
+# panel). Without a token every call returns at once, so this costs nothing
+# before YouTube is connected.
+WARM_EVERY_SECS = 90
+
+
+def warm_caches() -> None:
+    for fn in (lambda: channel_stats(force=True),
+               lambda: traffic_sources(force=True),
+               lambda: subscriber_growth(force=True),
+               lambda: revenue_stats(force=True) if revenue_available() else None):
+        try:
+            fn()
+        except Exception:
+            pass
+    try:
+        vids = [c["video_id"] for c in library(limit=200) if c.get("video_id")]
+        if vids:
+            video_engagement(vids, force=True)   # entries are replaced, never emptied
+    except Exception:
+        pass

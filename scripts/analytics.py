@@ -337,9 +337,9 @@ def sync_analytics() -> dict:
                     "title_chosen_idx":      entry.get("title_chosen_idx", 0),
                     "title_chosen_strategy": entry.get("title_chosen_strategy"),
                     "duration_secs":         entry.get("duration_secs"),
-                    # Composition-selection feedback (sub-genre/BPM/engine
-                    # bandits -- see sub_genre_weights()/bpm_bucket_weights()/
-                    # engine_weights() below): copied through the same way as
+                    # Composition-selection feedback (sub-genre/BPM bandits --
+                    # see sub_genre_weights()/bpm_bucket_weights() below):
+                    # copied through the same way as
                     # pillar/duration_secs above, defaulting sensibly for
                     # older upload_log entries logged before these fields
                     # existed so a pre-existing log never breaks a sync.
@@ -524,29 +524,13 @@ def composite_engagement_score(entry: dict, duration_secs: float | None = None) 
     return sum(w * v for w, v in components) / total_w
 
 
-def binarize_above_median(values: list[float]) -> list[bool]:
-    """
-    Split a list of scores into successes (True, >= pooled median) and
-    failures (False, < median). Median-split rather than a fixed absolute
-    cutoff so binarization automatically adapts to each channel's own
-    baseline performance (a 3% CTR might be great for a small channel and
-    poor for a big one) -- the same philosophy the old code used when it
-    compared every metric against a *channel average* rather than a fixed
-    number. Ties go to the median value counting as a success (>=).
-    """
-    if not values:
-        return []
-    med = statistics.median(values)
-    return [v >= med for v in values]
-
-
 def _build_bucket_bandit(buckets: dict[str, list[float]]) -> ThompsonSamplingBandit:
     """
     Build a Beta-Bernoulli bandit (scripts/bandit.py) with
     one arm per bucket label, updated from `buckets` ({label: [scores]})
-    binarized against the *pooled* median across all buckets
-    (binarize_above_median's median-split — see that function's docstring
-    for why). Shared by _bandit_weights() (derives the weight multiplier)
+    binarized against the *pooled* median across all buckets (a
+    median split: one bucket's own median would call half of every bucket
+    a "win"). Shared by _bandit_weights() (derives the weight multiplier)
     and pillar_bandit_posteriors() (exposes the raw posterior for the
     dashboard). Every label in `buckets` becomes an arm even if its value
     list is empty (starts at the uninformative Beta(1,1) prior).
@@ -936,45 +920,6 @@ def bpm_bucket_weights(bucket_width: int = 10, analytics: dict | None = None) ->
     return bandit_weights or {}
 
 
-def engine_weights(analytics: dict | None = None) -> dict[str, float]:
-    """
-    Weight multipliers for the {"v1", "v2"} music-generation-engine arms,
-    bandit-backed the same way as pillar_weights() -- 0.5x-2.0x, neutral 1.0
-    default for both arms when data is sparse (run.py's engine selection
-    treats this as a 50/50 coin flip at cold start).
-
-    Entries logged before music_engine tracking existed default to "v1" at
-    the sync_analytics() container-construction step (see there), so older
-    rows contribute to the "v1" arm's sample count rather than being
-    silently dropped.
-    """
-    arms = ["v1", "v2"]
-    default = {a: 1.0 for a in arms}
-    if analytics is None:
-        analytics = load_analytics()
-    if not analytics:
-        return default
-
-    from collections import defaultdict as _dd
-    by_engine: dict[str, list[float]] = _dd(list)
-    for entry in analytics.values():
-        e = entry.get("music_engine") or "v1"
-        if e not in arms:
-            continue
-        score = composite_engagement_score(entry)
-        if score is None:
-            continue
-        by_engine[e].append(score)
-
-    bandit_weights = _bandit_weights(by_engine, min_samples=5)
-    if bandit_weights is None:
-        return default
-
-    weights = dict(default)
-    weights.update(bandit_weights)
-    return weights
-
-
 def report(analytics: dict | None = None) -> None:
     """Print CTR and watch time grouped by pillar, sorted best-first."""
     if analytics is None:
@@ -1303,8 +1248,7 @@ def forecast_views(
 ) -> dict | None:
     """
     Project a video's cumulative view count `horizon_days` ahead using
-    simple exponential smoothing (statsmodels
-    `statsmodels.tsa.holtwinters.SimpleExpSmoothing`) over its view-velocity
+    simple exponential smoothing (_ses_level) over its view-velocity
     series (views gained per day between consecutive longitudinal
     snapshots — see _view_velocity()). SES has no trend component, so it
     forecasts a smoothed *constant* future daily velocity; that estimate is
@@ -1312,8 +1256,7 @@ def forecast_views(
     each requested horizon.
 
     Guards: needs at least `min_points` snapshots (fewer than that gives too
-    few velocity observations for SES to fit anything meaningful) and
-    statsmodels/scipy must be importable and the fit must succeed — returns
+    few velocity observations for SES to fit anything meaningful) — returns
     None rather than raising on any failure, since forecasting is a
     dashboard nice-to-have that must never break the analytics page or the
     sync pipeline.
@@ -1330,11 +1273,8 @@ def forecast_views(
         return None
 
     try:
-        from statsmodels.tsa.holtwinters import SimpleExpSmoothing
-
         series = [v["velocity"] for v in velocities]
-        model = SimpleExpSmoothing(series, initialization_method="estimated").fit()
-        next_velocity = max(0.0, float(model.forecast(1)[0]))
+        next_velocity = max(0.0, _ses_level(series))
         current_views = float(snaps[-1]["views"])
         return {
             "current_views": current_views,
@@ -1345,6 +1285,22 @@ def forecast_views(
         }
     except Exception:
         return None
+
+
+def _ses_level(series: list[float]) -> float:
+    """Simple exponential smoothing: the smoothed level after the last point,
+    which is SES's forecast for every future step. The smoothing factor is
+    the one (on a 0.05 grid) with the smallest one-step-ahead squared error,
+    as statsmodels' "estimated" fit does; it replaces that dependency."""
+    best_sse, best_level = None, float(series[-1])
+    for alpha in [a / 20 for a in range(1, 20)]:
+        level, sse = float(series[0]), 0.0
+        for x in series[1:]:
+            sse += (x - level) ** 2
+            level = alpha * x + (1 - alpha) * level
+        if best_sse is None or sse < best_sse:
+            best_sse, best_level = sse, level
+    return best_level
 
 
 def main() -> None:

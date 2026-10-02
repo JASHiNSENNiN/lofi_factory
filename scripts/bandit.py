@@ -101,13 +101,6 @@ class ThompsonSamplingBandit:
         """{arm: one posterior draw} for every known arm."""
         return {a: self.sample(a) for a in self.arms}
 
-    def select_arm(self):
-        """Thompson Sampling arm selection: sample every arm once, return the
-        argmax. Raises ValueError if the bandit has no arms."""
-        if not self.arms:
-            raise ValueError("bandit has no arms to select from")
-        samples = self.sample_all()
-        return max(samples, key=samples.get)
 
     def posterior_mean(self, arm) -> float:
         """Deterministic posterior mean E[theta_i] = alpha / (alpha + beta)

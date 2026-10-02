@@ -50,3 +50,5 @@ GM_NEW_AGE_PAD    = 88
 GM_POLYSYNTH_PAD  = 90   # synthwave chords
 GM_AGOGO          = 113  # pitched bell: phonk's cowbell melody
 GM_CLAVI          = 7    # lo_fi_funk stabs
+GM_GUITAR_STEEL   = 25   # morning_lofi acoustic chords
+GM_STEEL_DRUMS    = 114  # summer_vibes lead

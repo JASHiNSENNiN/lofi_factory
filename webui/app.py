@@ -506,6 +506,24 @@ async def _retry_job(job_id: str) -> None:
         ui.notify(str(e), type="negative")
 
 
+def _retention_chart(points) -> None:
+    if points:
+        xs = [round(p["t"] * 100) for p in points]
+        ys = [round(p["pct"] * 100, 1) for p in points]
+        ui.echart({
+            "grid": {"left": 40, "right": 16, "top": 16, "bottom": 28},
+            "xAxis": {"type": "category", "data": xs,
+                      "name": "% of video", "axisLabel": {"color": theme.MUTED}},
+            "yAxis": {"type": "value", "name": "% watching",
+                      "axisLabel": {"color": theme.MUTED}},
+            "series": [{"type": "line", "data": ys, "smooth": True,
+                        "areaStyle": {"opacity": 0.15}, "color": theme.PRIMARY}],
+        }).classes("w-full").style("height:220px")
+    else:
+        ui.label("No retention data yet — needs more views, or check that YouTube "
+                 "is connected in Settings.").classes(theme.SUB)
+
+
 def _job_details_dialog(j) -> None:
     """Full detail behind one job row: exact command, absolute timestamps,
     exit code, slot -- not just what fits in the summary row. The "detailed"
@@ -921,22 +939,17 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
         if c.get("video_id"):
             ui.separator()
             ui.label("Audience retention").classes(theme.H)
-            points = stats.retention(c["video_id"])
-            if points:
-                xs = [round(p["t"] * 100) for p in points]
-                ys = [round(p["pct"] * 100, 1) for p in points]
-                ui.echart({
-                    "grid": {"left": 40, "right": 16, "top": 16, "bottom": 28},
-                    "xAxis": {"type": "category", "data": xs,
-                              "name": "% of video", "axisLabel": {"color": theme.MUTED}},
-                    "yAxis": {"type": "value", "name": "% watching",
-                              "axisLabel": {"color": theme.MUTED}},
-                    "series": [{"type": "line", "data": ys, "smooth": True,
-                                "areaStyle": {"opacity": 0.15}, "color": theme.PRIMARY}],
-                }).classes("w-full").style("height:220px")
-            else:
-                ui.label("No retention data yet — needs more views, or check that YouTube "
-                         "is connected in Settings.").classes(theme.SUB)
+            retention_box = ui.column().classes("w-full")
+            with retention_box:
+                ui.label("Loading…").classes(theme.SUB)
+
+            async def _fill_retention(vid=c["video_id"]) -> None:
+                points = await asyncio.to_thread(stats.retention, vid)
+                retention_box.clear()
+                with retention_box:
+                    _retention_chart(points)
+
+            ui.timer(0.05, _fill_retention, once=True)
 
         # ── Comments (list + reply + moderate + delete) ───────────────────────
         if c.get("video_id"):
@@ -984,9 +997,10 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
                                     ui.label(f"👍 {rep['like_count']}").classes(theme.SUB)
                                 ui.label(rep["text"]).classes("text-xs")
 
-            def _render_comments(force: bool = False) -> None:
+            async def _render_comments(force: bool = False) -> None:
+                # YouTube API calls: off the event loop, or every open panel stalls.
+                comment_list = await asyncio.to_thread(stats.list_comments, c["video_id"], force=force)
                 comments_container.clear()
-                comment_list = stats.list_comments(c["video_id"], force=force)
                 with comments_container:
                     if comment_list is None:
                         ui.label("No comment data — check that YouTube is connected in "
@@ -998,34 +1012,36 @@ def _open_detail(cards: list[dict], index: int, on_change=lambda: None) -> None:
                         for cm in comment_list:
                             _render_one_comment(cm)
 
-            def _moderate(cm: dict, status: str) -> None:
-                ok = stats.set_comment_moderation(cm["id"], status)
+            async def _moderate(cm: dict, status: str) -> None:
+                ok = await asyncio.to_thread(stats.set_comment_moderation, cm["id"], status)
                 ui.notify("Moderation updated" if ok else "Failed — check YouTube connection",
                           type="positive" if ok else "negative")
                 if ok:
-                    _render_comments(force=True)
+                    await _render_comments(force=True)
 
-            def _delete(cm: dict) -> None:
-                ok = stats.delete_comment(cm["id"])
+            async def _delete(cm: dict) -> None:
+                ok = await asyncio.to_thread(stats.delete_comment, cm["id"])
                 ui.notify("Comment deleted" if ok else "Failed — check YouTube connection",
                           type="positive" if ok else "negative")
                 if ok:
-                    _render_comments(force=True)
+                    await _render_comments(force=True)
 
-            def _reply(cm: dict, box) -> None:
+            async def _reply(cm: dict, box) -> None:
                 text = (box.value or "").strip()
                 if not text:
                     return
-                result = stats.reply_to_comment(cm["id"], text)
+                result = await asyncio.to_thread(stats.reply_to_comment, cm["id"], text)
                 if result:
                     box.value = ""
                     ui.notify("Reply posted", type="positive")
-                    _render_comments(force=True)
+                    await _render_comments(force=True)
                 else:
                     ui.notify("Reply failed — check YouTube connection", type="negative")
 
             comments_refresh_btn.on_click(lambda: _render_comments(force=True))
-            _render_comments()
+            with comments_container:
+                ui.label("Loading comments…").classes(theme.SUB)
+            ui.timer(0.05, _render_comments, once=True)
     dlg.open()
 
 
@@ -1137,6 +1153,9 @@ def view_library(root) -> None:
 _PILL_STATUS_CLASSES = "text-muted text-teal text-rose text-amber"
 
 
+_LIVE_MODES = {"single": "Loop the latest video", "247": "24/7 with new music"}
+
+
 def view_live(root) -> None:
     with root:
         with theme.card():
@@ -1149,35 +1168,55 @@ def view_live(root) -> None:
                     pill.text = "○ OFFLINE"
                     pill.classes(remove=_PILL_STATUS_CLASSES, add="text-muted")
                     detail.text = "No active broadcast."
-                elif st["alive"]:
+                    return
+                kind = "24/7 stream" if st["mode"] == "24/7" else "Looping one video"
+                if st["alive"]:
                     pill.text = "🔴 LIVE"
                     pill.classes(remove=_PILL_STATUS_CLASSES, add="text-teal")
                     started = (st.get("started_at") or "")[:16].replace("T", " ")
-                    detail.text = f"{st.get('title', '')} · started {started}"
+                    title = st.get("title") or st.get("watch_url") or ""
+                    detail.text = f"{kind} · {title} · started {started}"
                 else:
                     pill.text = "⚠ CRASHED / STALE"
                     pill.classes(remove=_PILL_STATUS_CLASSES, add="text-rose")
-                    detail.text = ("live_state.json says a stream is running, but the ffmpeg "
-                                   "process is gone. Use Force kill / End stream to clean up.")
+                    detail.text = (f"{kind}: the state file says it is running, but its process "
+                                   "is gone. Press End stream to clean up.")
 
             refresh_live_status()
             ui.timer(5.0, refresh_live_status)
 
-        with theme.card("Live stream", "Start, end, or inspect a 24/7 broadcast."):
-            with ui.row().classes("items-end gap-4"):
+        with theme.card("Live stream", "Loop the latest finished video, or run an endless "
+                        "stream that keeps composing new music while it plays."):
+            with ui.row().classes("items-end gap-4 flex-wrap"):
+                msel = ui.select(_LIVE_MODES, value="single", label="Mode").classes("w-56")
                 qsel = ui.select(config.STREAM_QUALITY, value="720p15", label="Quality").classes("w-40")
                 psel = ui.select(config.PRIVACY, value="public", label="Privacy").classes("w-36")
+            msel.on_value_change(lambda e: qsel.set_visibility(e.value == "single"))
 
             async def start() -> None:
+                if msel.value == "247":
+                    args, name = ["run.py", "--stream"], "live 24/7"
+                else:
+                    args = ["publish.py", "live", "--quality", qsel.value, "--privacy", psel.value]
+                    name = "live"
                 try:
-                    await jobs.manager.run(
-                        "live", ["publish.py", "live", "--quality", qsel.value,
-                                 "--privacy", psel.value], slot="stream")
+                    await jobs.manager.run(name, args, slot="stream")
                     ui.notify("Starting live stream…", type="positive")
                 except RuntimeError as e:
                     ui.notify(str(e), type="warning")
 
             async def end() -> None:
+                st = data.live_status()
+                if st and st["mode"] == "24/7":
+                    if not st["alive"]:
+                        data.clear_247_state()
+                        ui.notify("Cleared a stale 24/7 stream record.", type="info")
+                    elif data.stop_247_stream():
+                        ui.notify("Stopping the 24/7 stream; it ends the broadcast itself.",
+                                  type="positive")
+                    else:
+                        ui.notify("Couldn't signal the 24/7 stream process.", type="negative")
+                    return
                 try:
                     await jobs.manager.run("end", ["publish.py", "end"], slot="control")
                 except RuntimeError as e:
@@ -1201,8 +1240,9 @@ def view_live(root) -> None:
 
             def refresh_buttons() -> None:
                 streaming = jobs.manager.stream_running()
-                start_btn.set_enabled(not streaming)
-                end_btn.set_enabled(streaming or data.live_status() is not None)
+                live = data.live_status()
+                start_btn.set_enabled(not streaming and not (live and live["alive"]))
+                end_btn.set_enabled(streaming or live is not None)
                 kill_btn.set_enabled(streaming)
 
             refresh_buttons()
@@ -3336,12 +3376,29 @@ def yt_monetary_callback(request: Request):
         return RedirectResponse(f"/?yt_error={type(ex).__name__}")
 
 
+_warmer_task = None
+
+
+def _start_stats_warmer() -> None:
+    """Keep stats.py's YouTube caches warm in the background (see
+    stats.warm_caches) so building a page never waits on the network."""
+    global _warmer_task
+
+    async def loop() -> None:
+        while True:
+            await asyncio.to_thread(stats.warm_caches)
+            await asyncio.sleep(stats.WARM_EVERY_SECS)
+    if _warmer_task is None or _warmer_task.done():
+        _warmer_task = asyncio.create_task(loop())
+
+
 def run() -> None:
     auth.install(app)
     # Batch upload queue: start draining assets/job_queue.json once the event
     # loop is up (see webui/jobs.py's JobQueue — additive to the existing
     # single-job model, so this is the only new startup wiring it needs).
     app.on_startup(jobs.start_queue_drain)
+    app.on_startup(_start_stats_warmer)
     app.add_static_files("/media", config.ASSETS_DIR)
     app.add_static_files("/videos", config.OUTPUT_DIR)
     app.add_static_files("/music", config.MUSIC_DIR)

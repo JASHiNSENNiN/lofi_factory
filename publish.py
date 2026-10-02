@@ -789,7 +789,7 @@ def cmd_upload(args):
         "seo_ref":          seo.get("ref_id", ""),
         "video_file":       os.path.basename(video_path),
         # Composition-selection feedback — see scripts/analytics.py's
-        # sub_genre_weights()/bpm_bucket_weights()/engine_weights(). Defaults
+        # sub_genre_weights()/bpm_bucket_weights(). Defaults
         # keep this from crashing on an older-format seo dict.
         "sub_genre":        seo.get("sub_genre", ""),
         "bpm":              seo.get("bpm"),

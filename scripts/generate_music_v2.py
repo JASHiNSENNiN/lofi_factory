@@ -455,8 +455,6 @@ class Motif:
         return Motif(self.pitches[:], [d * f for d in self.durations],
                      self.velocities[:])
 
-    def diminish(self, f: float = 0.5) -> 'Motif':
-        return self.augment(f)
 
     def fragment(self, n: int = 2) -> 'Motif':
         return Motif(self.pitches[:n], self.durations[:n], self.velocities[:n])

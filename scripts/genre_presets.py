@@ -135,6 +135,9 @@ def _parse_one(path: str) -> tuple[str, dict]:
     doc['generated_drums'] = bool(raw.get('generated_drums', False))
     doc['drums'] = bool(raw.get('drums', True))
     doc['walking_bass'] = raw.get('walking_bass')     # True/False forces it; None = sometimes
+    doc['melody_density'] = raw.get('melody_density')  # 'sparse'|'medium'; None = either
+    if doc['melody_density'] not in (None, 'sparse', 'medium'):
+        _fail(filename, 'melody_density', "expected sparse or medium")
 
     tex_raw = raw.get('texture')
     if tex_raw is not None:
@@ -450,3 +453,7 @@ def build_beatless_genres() -> set:
 def build_walking_bass() -> dict:
     return {k: bool(d['walking_bass']) for k, d in load_all().items()
             if d.get('walking_bass') is not None}
+
+
+def build_melody_density() -> dict:
+    return {k: d['melody_density'] for k, d in load_all().items() if d.get('melody_density')}

@@ -346,8 +346,9 @@ EXPECTED_SIDECHAIN_DUCK_GENRES = {"lofi_house", "lo_fi_funk", "hip_hop_lofi", "c
 
 _GENRE_REWORK = {
     'ambient':        {'melody': 11},
-    'anime_lofi':     {'piano': 0, 'melody': 0},
-    'bedroom_pop':    {'piano': 27, 'melody': 11},
+    'anime_lofi':     {'piano': 0, 'melody': 0,
+                       'progs': [22, 25, 16, 18, 24, 44, 45, 46, 49, 48, 60]},
+    'bedroom_pop':    {'piano': 27, 'melody': 11, 'drum_pats': [6, 0]},
     'bossa_lofi':     {'piano': 24, 'melody': 73, 'cmelo': 11, 'drum_pats': [18, 4]},
     'city_pop':       {'melody': 65, 'cmelo': 27, 'drum_pats': [8, 17, 6], 'bpm': (90, 108)},
     'lofi_classical': {'piano': 0},
@@ -360,9 +361,19 @@ _GENRE_REWORK = {
     'nujabes':        {'piano': 0, 'melody': 73, 'cmelo': 66},
     'piano_lofi':     {'piano': 0, 'melody': 0},
     'vaporwave':      {'piano': 4, 'melody': 65},
+    # Separation pass (research/genres.md): the close-cousin genres.
+    'chillhop':       {'drum_pats': [0, 1, 2]},
+    'hip_hop_lofi':   {'drum_pats': [6, 2, 0], 'bpm': (84, 94)},
+    'study_lofi':     {'drum_pats': [7, 9, 13], 'energy': 'low'},
+    'morning_lofi':   {'piano': 25, 'drum_pats': [20, 4], 'bpm': (78, 92)},
+    'cozy_cafe':      {'piano': 0, 'melody': 24, 'drum_pats': [10, 3, 13]},
+    'summer_vibes':   {'melody': 114, 'drum_pats': [21, 12], 'bpm': (86, 100)},
+    'chill_beats':    {'drum_pats': [9, 7, 13]},
 }
 _SWING_REWORK = {'bossa_lofi': (0.5, 0.56), 'city_pop': (0.5, 0.56),
-                 'lofi_house': (0.5, 0.56), 'lofi_synthwave': (0.5, 0.52)}
+                 'lofi_house': (0.5, 0.56), 'lofi_synthwave': (0.5, 0.52),
+                 'bedroom_pop': (0.52, 0.58), 'summer_vibes': (0.52, 0.58),
+                 'morning_lofi': (0.53, 0.6)}
 
 
 def test_subgenre_config_matches_pre_refactor_literal():

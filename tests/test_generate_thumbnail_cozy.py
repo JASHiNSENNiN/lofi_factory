@@ -8,12 +8,6 @@ from scripts.generate_thumbnail_cozy import (
     _select_side,
     _check_card_legibility,
     _contrast_ratio,
-    SCENE_POOL,
-    _select_scene,
-    _scene_slot,
-    _check_scene_card_collision,
-    _draw_scene_silhouette,
-    _card_geometry,
     _check_brightness,
     generate_thumbnail,
 )
@@ -139,79 +133,8 @@ def test_contrast_ratio_is_symmetric_and_bounded():
 
 # ── Scene silhouette selection ───────────────────────────────────────────────
 
-def test_scene_selection_is_deterministic_for_same_inputs():
-    for theme in ("cozy_rain", "neon_tokyo", "winter_snow", "vaporwave"):
-        for variant in range(5):
-            first  = _select_scene(theme, variant)
-            second = _select_scene(theme, variant)
-            assert first == second
-            assert first in SCENE_POOL.get(theme, ())
-
-
-def test_scene_selection_varies_across_variants():
-    seen = {_select_scene("cozy_rain", v) for v in range(12)}
-    assert len(seen) > 1
-
-
-def test_ab_variant_pair_can_use_different_scenes():
-    # Not a hard guarantee like layout (scene pools are only 3 wide and
-    # variant deltas of 1 can land on the same index), but across a spread
-    # of themes/variants the A/B pair should show real variety somewhere.
-    diffs = sum(
-        1
-        for theme in SCENE_POOL
-        for variant in range(0, 6)
-        if _select_scene(theme, variant) != _select_scene(theme, variant + 1)
-    )
-    assert diffs > 0
-
 
 # ── Scene / card collision avoidance ─────────────────────────────────────────
-
-def test_check_scene_card_collision_detects_overlap():
-    card = (500, 500, 800, 600)
-    assert _check_scene_card_collision((600, 520, 700, 580), card) is True
-    assert _check_scene_card_collision((0, 0, 100, 100), card) is False
-    assert _check_scene_card_collision(None, card) is False
-
-
-def test_draw_scene_silhouette_never_overlaps_the_real_card_geometry():
-    # Exercises the actual runtime path: compute the real card bbox via
-    # `_card_geometry` (what `generate_thumbnail` does before drawing the
-    # scene), then confirm whatever `_draw_scene_silhouette` returns -- a
-    # bbox, or None if it chose to skip -- never overlaps that card.
-    import numpy as np
-    from PIL import ImageDraw
-    from scripts.generate_thumbnail_cozy import TW, TH
-
-    titles = ["a genuinely long night of study and soft rain on the window",
-              "short one", "the deadline blinked first and then blinked again"]
-    for theme in list(SCENE_POOL)[:8]:
-        for variant in range(4):
-            layout = _select_layout(theme, variant)
-            side   = _select_side(theme, variant)
-            title  = titles[variant % len(titles)]
-            img  = Image.new("RGB", (TW, TH), (0, 0, 0))
-            draw = ImageDraw.Draw(img, "RGBA")
-            geom = _card_geometry(draw, theme, title, "2 hours", layout, side)
-            card_bbox = (geom["card_x"], geom["card_y"],
-                         geom["card_x"] + geom["card_w"], geom["card_y"] + geom["card_h"])
-            rng = np.random.default_rng(0)
-            _, scene_bbox = _draw_scene_silhouette(
-                img, theme, layout, side, variant, rng, avoid_bbox=card_bbox,
-            )
-            assert not _check_scene_card_collision(scene_bbox, card_bbox)
-
-
-def test_scene_slot_sits_on_the_side_opposite_the_card():
-    # thirds/edge layouts place the card on `side`; the scene slot should be
-    # on the opposite horizontal half of the frame.
-    from scripts.generate_thumbnail_cozy import TW
-    for layout in ("thirds", "edge"):
-        cx_left, *_ = _scene_slot(layout, "left")
-        cx_right, *_ = _scene_slot(layout, "right")
-        assert cx_left > TW / 2   # card on the left -> scene on the right
-        assert cx_right < TW / 2  # card on the right -> scene on the left
 
 
 # ── Whole-frame brightness check ─────────────────────────────────────────────
@@ -254,3 +177,37 @@ def test_generate_thumbnail_ab_pair_uses_different_layouts(tmp_path, monkeypatch
     for p in (primary_path, alt_path):
         with Image.open(p) as img:
             assert img.size == (gtc.TW, gtc.TH)
+
+
+# ── Room scene (scripts/thumbnail_scene.py) ──────────────────────────────────
+def test_window_goes_opposite_the_title():
+    from scripts.thumbnail_scene import window_side_for
+    assert window_side_for("thirds", "left") == "right"
+    assert window_side_for("edge", "right") == "left"
+    assert window_side_for("centered", "left") == "center"
+
+
+def test_room_shows_the_themes_view_through_the_window():
+    import numpy as np
+    from PIL import Image
+    from scripts import generate_thumbnail_cozy as gtc
+    from scripts.thumbnail_scene import _window_box, draw_room
+
+    def window_mean(theme):
+        img = Image.new("RGB", (gtc.TW, gtc.TH), gtc.THEMES[theme]["bg_top"])
+        draw_room(img, gtc.THEMES[theme], theme, "right", np.random.default_rng(1))
+        x0, y0, x1, y1 = _window_box("right", gtc.TW, gtc.TH)
+        return np.asarray(img.crop((x0, y0, x1, y1)), dtype=float).mean(axis=(0, 1))
+
+    summer, night = window_mean("summer_lofi"), window_mean("midnight_cafe")
+    assert summer.mean() > night.mean() + 30          # a sunset is brighter than a night city
+    snow = window_mean("winter_snow")
+    assert snow[2] > snow[0]                           # snowy night reads blue
+
+
+def test_room_has_no_dark_halo_rings_around_the_moon():
+    import numpy as np
+    from scripts import generate_thumbnail_cozy as gtc
+    from scripts.thumbnail_scene import _view_layer
+    layer = _view_layer("moon", gtc.THEMES["lofi_classical"], 400, 300, np.random.default_rng(2))
+    assert layer.mode == "RGB"     # opaque: translucent shapes blend, never punch holes

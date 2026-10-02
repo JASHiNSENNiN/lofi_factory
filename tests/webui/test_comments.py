@@ -1,6 +1,6 @@
 """
 Unit tests for webui/stats.py's comment listing/moderation functions
-(list_comments, list_replies, set_comment_moderation, reply_to_comment,
+(list_comments, set_comment_moderation, reply_to_comment,
 delete_comment). Never hits the real YouTube API -- every function takes an
 optional `client=` kwarg that, when supplied, is used as-is instead of
 building a real googleapiclient client from token.json, so these tests pass
@@ -66,7 +66,6 @@ class FakeClient:
     def comments(self):
         return self
 
-    # comments().list(...) -- used by list_replies()
     def list(self, **kwargs):
         self.list_calls.append(kwargs)
         token = kwargs.get("pageToken")
@@ -194,24 +193,6 @@ def test_list_comments_force_bypasses_cache():
     assert len(client._threads.list_calls) == 2
 
 
-# ── list_replies ─────────────────────────────────────────────────────────────
-def test_list_replies_shapes_and_paginates():
-    page1 = {"items": [_reply_item("r1")], "nextPageToken": "1"}
-    page2 = {"items": [_reply_item("r2")]}
-    client = FakeClient(comment_list_pages=[page1, page2])
-
-    result = stats.list_replies("c1", client=client)
-
-    assert [r["id"] for r in result] == ["r1", "r2"]
-    assert client.list_calls[0]["parentId"] == "c1"
-
-
-def test_list_replies_returns_none_on_error():
-    class Client:
-        def comments(self):
-            raise RuntimeError("boom")
-
-    assert stats.list_replies("c1", client=Client()) is None
 
 
 # ── set_comment_moderation ───────────────────────────────────────────────────

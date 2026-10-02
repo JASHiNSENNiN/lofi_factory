@@ -39,11 +39,12 @@ _LOFI_BPM_FLOOR, _LOFI_BPM_CEILING = 55, 105
 
 # Chord-instrument allowlist test_genre_authenticity.py enforces for every
 # subgenre's piano_program.
-# Soft chord instruments. Acoustic piano (piano/anime/classical lofi), nylon
-# and clean guitar (bossa, bedroom pop) and polysynth pad (synthwave) are the
-# genre-correct chord voices there (research/genres.md).
+# Soft chord instruments. Acoustic piano (piano/anime/classical/cafe lofi),
+# nylon, steel-string and clean guitar (bossa, morning, bedroom pop) and
+# polysynth pad (synthwave) are the genre-correct chord voices there
+# (research/genres.md).
 _LOFI_CHORD_INSTRUMENTS = {GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_WARM_PAD,
-                           0, 24, 27, 90}
+                           0, 24, 25, 27, 90}
 
 
 def test_new_subgenres_are_registered():

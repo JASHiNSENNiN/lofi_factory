@@ -50,7 +50,7 @@ _DEFAULT_PRESET = {"lpf": 10000, "bits": 11, "room": 0.40, "wet": 0.22, "wobble_
 #
 # The room impulses are synthesized (see _synthesize_room_ir), like the
 # plate: no third-party impulse files, so no redistribution terms to meet.
-# Needs the `audiomentations` dependency (see requirements.txt).
+# Convolution is done with scipy (see _convolve_ir).
 _IR_GENRES = genre_presets.build_ir_genres()
 _IR_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ir")
 
@@ -983,8 +983,7 @@ def _apply_ir_reverb(audio: "np.ndarray", sr: int,
     the remaining (room/hall/salon-character) files, excluding the plate --
     keeps the two IR "pools" from mixing across the boom-bap/jazz-piano
     genre split they're each tuned for. Returns the wet signal (same shape
-    as input), or None if no IR files exist or audiomentations is
-    unavailable.
+    as input), or None if no IR file is usable.
     """
 
     if sub_genre in _PLATE_IR_GENRES:
@@ -993,18 +992,40 @@ def _apply_ir_reverb(audio: "np.ndarray", sr: int,
         ir_path = random.choice(_ensure_room_ir_files())
 
     try:
-        import numpy as np
-        from audiomentations import ApplyImpulseResponse
-        # ApplyImpulseResponse expects (channels, samples) float32 numpy array.
-        # Constructor param is `ir_path` (singular, accepts a str/Path or a
-        # list) -- the previous `ir_paths=[...]` kwarg here doesn't exist on
-        # this library and raised TypeError every call, silently swallowed
-        # by this function's own except-and-return-None below.
-        transform = ApplyImpulseResponse(ir_path=ir_path, p=1.0, leave_length_unchanged=True)
-        wet = transform(audio.copy().astype(np.float32), sample_rate=sr)
-        return wet
+        return _convolve_ir(audio, sr, ir_path)
     except Exception:
         return None
+
+
+def _resample(x: "np.ndarray", orig_sr: int, target_sr: int) -> "np.ndarray":
+    """Polyphase resampling along the last axis (scipy; replaces librosa)."""
+    from math import gcd
+    import numpy as np
+    from scipy.signal import resample_poly
+    if orig_sr == target_sr:
+        return x
+    g = gcd(int(orig_sr), int(target_sr))
+    return resample_poly(x, target_sr // g, orig_sr // g, axis=-1).astype(np.float32)
+
+
+def _convolve_ir(audio: "np.ndarray", sr: int, ir_path: str) -> "np.ndarray":
+    """Convolution reverb, channel by channel, peak-normalised to 0.5 and cut
+    to the input length: the same result audiomentations' ApplyImpulseResponse
+    gave, without that dependency. `audio` is (channels, samples) or 1-D."""
+    import numpy as np
+    import soundfile as sf
+    from scipy.signal import fftconvolve
+    ir, ir_sr = sf.read(ir_path, dtype="float32", always_2d=True)
+    ir = _resample(ir.T, ir_sr, sr)                    # (ir_channels, n)
+    if audio.ndim == 1:
+        ir = ir.mean(axis=0, keepdims=True)
+    samples = np.atleast_2d(audio.astype(np.float32))
+    wet = np.stack([fftconvolve(ch, ir[i % len(ir)])[: samples.shape[1]]
+                    for i, ch in enumerate(samples)]).astype(np.float32)
+    peak = float(np.max(np.abs(wet)))
+    if peak > 0:
+        wet *= 0.5 / peak
+    return wet[0] if audio.ndim == 1 else wet
 
 
 def _make_crackle(n_samples: int, amplitude: float, sr: int = 44100) -> "np.ndarray":

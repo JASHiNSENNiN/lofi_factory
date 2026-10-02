@@ -2,11 +2,10 @@
 Tests for trend_research.py's historical competitor tracking (Stage 1
 "Analytics rigor" item 7): assets/trend_cache.json as an append-only history
 of dated snapshots instead of a single overwritten row, plus
-compute_trend_deltas() for tracking competitor view-count changes over time.
+the snapshot history kept in assets/trend_cache.json.
 """
 import json
 
-import pytest
 
 import scripts.trend_research as tr
 
@@ -72,54 +71,6 @@ def test_save_history_caps_at_max_history(tmp_path, monkeypatch):
     assert [s["fetched_at"][:10] for s in saved] == ["2026-01-03", "2026-01-04", "2026-01-05"]
 
 
-# ── compute_trend_deltas ─────────────────────────────────────────────────────
-def test_compute_trend_deltas_none_with_fewer_than_two_snapshots():
-    assert tr.compute_trend_deltas([]) is None
-    assert tr.compute_trend_deltas([_snapshot("2026-01-01T00:00:00+00:00", [])]) is None
-
-
-def test_compute_trend_deltas_matches_by_title_and_computes_delta():
-    prev = _snapshot("2026-01-01T00:00:00+00:00", [
-        {"title": "cozy rain lofi", "channel": "c1", "views": 1000},
-        {"title": "midnight study beats", "channel": "c2", "views": 500},
-    ])
-    latest = _snapshot("2026-01-08T00:00:00+00:00", [
-        {"title": "cozy rain lofi", "channel": "c1", "views": 1500},
-        {"title": "midnight study beats", "channel": "c2", "views": 400},
-        {"title": "brand new video", "channel": "c3", "views": 200},  # no prior match
-    ])
-    result = tr.compute_trend_deltas([prev, latest])
-
-    assert result["date_prev"] == "2026-01-01"
-    assert result["date_latest"] == "2026-01-08"
-    assert result["total_views_prev"] == 1500
-    assert result["total_views_latest"] == 2100
-    assert result["delta_total"] == 600
-    assert result["delta_pct"] == pytest.approx(600 / 1500)
-
-    by_title = {r["title"]: r for r in result["per_video"]}
-    assert set(by_title.keys()) == {"cozy rain lofi", "midnight study beats"}
-    assert by_title["cozy rain lofi"]["delta"] == 500
-    assert by_title["midnight study beats"]["delta"] == -100
-    # Sorted largest-positive-delta first.
-    assert result["per_video"][0]["title"] == "cozy rain lofi"
-
-
-def test_compute_trend_deltas_no_overlap_still_returns_totals():
-    prev = _snapshot("2026-01-01T00:00:00+00:00", [{"title": "old vid", "views": 100}])
-    latest = _snapshot("2026-01-08T00:00:00+00:00", [{"title": "new vid", "views": 300}])
-    result = tr.compute_trend_deltas([prev, latest])
-    assert result["per_video"] == []
-    assert result["total_views_prev"] == 100
-    assert result["total_views_latest"] == 300
-
-
-def test_compute_trend_deltas_zero_prev_views_delta_pct_none():
-    prev = _snapshot("2026-01-01T00:00:00+00:00", [])
-    latest = _snapshot("2026-01-08T00:00:00+00:00", [{"title": "x", "views": 100}])
-    result = tr.compute_trend_deltas([prev, latest])
-    assert result["total_views_prev"] == 0
-    assert result["delta_pct"] is None
 
 
 # ── get_trend_snapshot: append-only history ─────────────────────────────────
@@ -146,9 +97,6 @@ def test_get_trend_snapshot_appends_new_snapshot_on_force_refresh(tmp_path, monk
     history_after_2 = json.loads(cache.read_text())
     assert len(history_after_2) == 2  # appended, not overwritten
     assert history_after_2[0]["yt_videos"][0]["views"] == 1000  # first snapshot preserved
-
-    deltas = tr.compute_trend_deltas(history_after_2)
-    assert deltas["per_video"][0]["delta"] == 1000
 
 
 def test_get_trend_snapshot_uses_cache_without_appending_when_fresh(tmp_path, monkeypatch):

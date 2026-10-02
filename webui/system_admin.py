@@ -264,12 +264,18 @@ def create_backup() -> dict:
     download -- these are live secrets (OAuth token, .env, upload log)."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest = os.path.join(BACKUP_DIR, ts)
-    os.makedirs(dest, exist_ok=True)
+    # Owner-only: these are live secrets (OAuth token, .env). copy2 keeps the
+    # source's mode, which for upload_log.json is world-readable.
+    os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(BACKUP_DIR, 0o700)
+    os.makedirs(dest, mode=0o700, exist_ok=True)
     copied = []
     for name in BACKUP_FILES:
         src = os.path.join(config.ROOT, name)
         if os.path.exists(src):
-            shutil.copy2(src, os.path.join(dest, name))
+            target = os.path.join(dest, name)
+            shutil.copy2(src, target)
+            os.chmod(target, 0o600)
             copied.append(name)
     audit_log("config_backup", {"name": ts, "files": copied})
     return {"name": ts, "path": dest, "files": copied}
