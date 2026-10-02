@@ -32,6 +32,16 @@ from scripts.fileutil import CorruptStateFile, atomic_write_json, load_json_or_q
 _MAX_LINES = 4000
 
 
+def _failure_summary(lines) -> str:
+    """The most useful line of a failed job's output: its last error line
+    (or traceback message) if it has one, else the last non-empty line."""
+    lines = [ln.strip() for ln in lines if ln.strip()]
+    for ln in reversed(lines):
+        if "[ERROR]" in ln or "Error:" in ln or ln.startswith("Error"):
+            return ln[:300]
+    return (lines[-1] if lines else "")[:300]
+
+
 @dataclass
 class Job:
     id: str
@@ -239,6 +249,10 @@ class JobManager:
         # The live-stream job is tracked separately so a generation run and an
         # active broadcast can coexist.
         self.stream: Job | None = None
+        # Short broadcast control commands (end, status). They get their own
+        # slot: in the stream slot, "end" was refused while the very stream
+        # it should stop was running.
+        self.control: Job | None = None
         self._tasks: set[asyncio.Task] = set()
 
     # ── queries ──────────────────────────────────────────────────────────────
@@ -258,6 +272,9 @@ class JobManager:
         if slot == "stream":
             if self.stream_running():
                 raise RuntimeError("A live stream is already running.")
+        elif slot == "control":
+            if self.control is not None and self.control.running:
+                raise RuntimeError("A stream command is already running.")
         else:
             if self.is_busy():
                 raise RuntimeError("Another job is already running.")
@@ -267,6 +284,8 @@ class JobManager:
                   name=name, cmd=cmd, slot=slot)
         if slot == "stream":
             self.stream = job
+        elif slot == "control":
+            self.control = job
         else:
             self.current = job
         self.history.insert(0, job)
@@ -286,6 +305,7 @@ class JobManager:
             proc = await asyncio.create_subprocess_exec(
                 *job.cmd,
                 cwd=config.ROOT,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 start_new_session=True,
@@ -312,10 +332,12 @@ class JobManager:
         finally:
             job.finished_at = time.time()
             if job.status == "failed":
-                job.error = next((l for l in reversed(job.lines) if l.strip()), "")[:300]
+                job.error = _failure_summary(job.lines)
             _append_history_file(job, self._history_path)
             _write_job_log(job, history_path=self._history_path, job_logs_dir=self._job_logs_dir)
-            if job.status == "failed":
+            if job.status == "failed" and job.slot != "control":
+                # A failed "status"/"end" click is shown on screen right away;
+                # alerting is for renders and streams nobody is watching.
                 try:
                     await alerts.send_job_failure(job)
                 except Exception:
@@ -337,7 +359,7 @@ class JobManager:
     async def cancel(self, slot: str = "main") -> None:
         """Stop the job and every process it started. _pump() records the
         job as cancelled (not failed), so no failure alert is sent."""
-        job = self.stream if slot == "stream" else self.current
+        job = {"stream": self.stream, "control": self.control}.get(slot, self.current)
         if not (job and job.running and job._proc):
             return
         job._cancel_requested = True

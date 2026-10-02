@@ -18,7 +18,7 @@ def test_missing_upload_log_is_unavailable(tmp_path):
         analytics_log_path=str(tmp_path / "no_such_analytics.json"),
     )
     assert result["available"] is False
-    assert "upload history" in result["reason"]
+    assert result["reason"] == "no uploads yet"
 
 
 def test_empty_upload_log_is_unavailable(tmp_path):

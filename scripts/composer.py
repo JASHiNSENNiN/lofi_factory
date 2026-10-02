@@ -4253,12 +4253,21 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
     anchor = pick_params(concept_hint=concept_hint, genre_hint=genre_hint)
     param_sets = [anchor]
     sub = anchor.get('sub_genre')
+    used_moods = {anchor.get('mood')}
     for _ in range(1, count):
         params = None
         for _attempt in range(4):
-            params = pick_params(concept_hint=concept_hint, genre_hint=sub)
+            # Only the first track carries the video's concept as its title;
+            # the others get their own phrase (they're named one by one in
+            # the live stream's now-playing line).
+            params = pick_params(concept_hint=None, genre_hint=sub)
             if params.get('progression') != param_sets[-1].get('progression'):
                 break
+        for _attempt in range(8):
+            if params['mood'] not in used_moods:
+                break
+            params['mood'] = _compose_mood_phrase(sub)
+        used_moods.add(params['mood'])
         param_sets.append(params)
     return param_sets
 

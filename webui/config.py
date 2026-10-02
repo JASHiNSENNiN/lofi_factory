@@ -94,7 +94,10 @@ THEMES = [
     "blue_hour", "forest_rain", "sakura_night", "vaporwave", "lofi_house",
     "lofi_classical", "bedroom_pop", "lofi_rnb",
 ]
-DURATIONS = ["1 hour", "2 hours", "3 hours", "all night"]
+# Longer options exist in assemble_video.DURATION_MAP, but a software x264
+# encode of 3+ hours outruns the render timeout on the target box, so the
+# panel only offers lengths that finish.
+DURATIONS = ["30 min", "1 hour", "2 hours"]
 PRIVACY = ["public", "unlisted", "private"]
 STREAM_QUALITY = ["720p15", "720p", "1080p", "1080p60"]
 
@@ -119,9 +122,16 @@ def is_configured() -> bool:
 
 
 # ── Render defaults (persisted to .env, read fresh each render dialog open) ───
-DEFAULT_THEME = _env("DEFAULT_THEME", "random")
-DEFAULT_DURATION = _env("DEFAULT_DURATION", "2 hours")
-DEFAULT_PRIVACY = _env("DEFAULT_PRIVACY", "public")
+def _choice(name: str, options: list[str], fallback: str) -> str:
+    """A .env default that isn't one of the dropdown's options would make
+    NiceGUI's ui.select raise when the dialog opens, so fall back instead."""
+    value = _env(name, fallback)
+    return value if value in options else fallback
+
+
+DEFAULT_THEME = _choice("DEFAULT_THEME", THEMES, "random")
+DEFAULT_DURATION = _choice("DEFAULT_DURATION", DURATIONS, "1 hour")
+DEFAULT_PRIVACY = _choice("DEFAULT_PRIVACY", PRIVACY, "public")
 
 
 # ── .env editing (Settings tab) ─────────────────────────────────────────────

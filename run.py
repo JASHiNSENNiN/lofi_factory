@@ -48,10 +48,18 @@ def _acquire_pipeline_lock():
     used when uploading. Returns the open lock file (keep it referenced for
     the lifetime of the run — closing it releases the lock).
     """
+    import time as _time
     lock_file = open(_LOCK_PATH, "w")
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    # The web panel checks whether a run is active by taking this lock for an
+    # instant, so a few quick retries tell that probe apart from a real run.
+    for attempt in range(10):
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if attempt < 9:
+                _time.sleep(0.2)
+    else:
         print("[run.py] Another pipeline run is already in progress "
               f"(lock held: {_LOCK_PATH}).")
         print("          If this is the 24/7 auto-upload loop, wait for it to finish or stop it:")

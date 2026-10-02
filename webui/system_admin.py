@@ -162,17 +162,22 @@ def _dir_size_bytes(path: str) -> int:
 
 
 def disk_usage_breakdown() -> dict[str, int]:
-    """Byte totals for the factory's main content directories."""
-    dirs = {
-        "output": config.OUTPUT_DIR,
-        "music": config.MUSIC_DIR,
-        "visuals": config.VISUALS_DIR,
-        "assets": config.ASSETS_DIR,
+    """Byte totals for the factory's content directories. The stream
+    library is listed apart from the per-render tracks next to it: it is
+    kept on purpose, while render tracks are pruned after each upload."""
+    stream_dir = os.path.join(config.MUSIC_DIR, "stream")
+    music_total = _dir_size_bytes(config.MUSIC_DIR) if os.path.isdir(config.MUSIC_DIR) else 0
+    stream = _dir_size_bytes(stream_dir) if os.path.isdir(stream_dir) else 0
+    sizes = {
+        "Finished videos": config.OUTPUT_DIR,
+        "Visual loops": config.VISUALS_DIR,
+        "Thumbnails, logs, samples": config.ASSETS_DIR,
     }
-    return {
-        name: _dir_size_bytes(path) if os.path.isdir(path) else 0
-        for name, path in dirs.items()
-    }
+    out = {name: _dir_size_bytes(path) if os.path.isdir(path) else 0
+           for name, path in sizes.items()}
+    out["Render tracks"] = music_total - stream
+    out["Live stream library"] = stream
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────

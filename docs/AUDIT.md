@@ -968,3 +968,43 @@ R3-5, R3-6 (except below), R3-7, R3-8, R3-10–R3-16; repo hygiene
 - SEC-5: backups still live on the same disk.
 - Section 10: description byte limit and `<`/`>` stripping.
 - Listening tests: the music was measured, not judged by ear.
+
+## Round 4: clicking through the web panel
+
+Every page was opened and every button clicked by a browser script,
+during a real render started from the command line.
+
+**Found and fixed:**
+- WEB-1: "End stream" ran in the same slot as the stream and was refused
+  while a stream was running, so the panel could never end one. End and
+  Status now have their own slot.
+- WEB-2: `publish.py end` logged in to YouTube before stopping ffmpeg, so
+  without a valid token the stream kept running. It now stops ffmpeg
+  first, and only after checking the stored PID still belongs to ffmpeg.
+- WEB-3: a network error while refreshing the YouTube token deleted
+  `token.json`. Only a rejected token is removed now.
+- WEB-4: without a token, headless runs (timer, panel jobs) started an
+  interactive login server and waited forever. They now exit with a
+  message; panel jobs get no stdin.
+- WEB-5: the render dialog offered 3 hours and "all night", which don't
+  finish in time, defaulted to 2 hours, and offered an "Auto
+  (bandit-selected)" composer that no longer exists. A `.env` default
+  outside the list made the dialog fail to open.
+- WEB-6: "Sync now" blocked the server for the whole sync, said "synced"
+  when nothing was fetched, and a missing token killed it with
+  `sys.exit` inside the web server.
+- WEB-7: channel stats and the device-code login polled YouTube on the
+  event loop, freezing the panel for every user.
+- WEB-8: file names and video IDs were pasted into raw HTML unescaped.
+- WEB-9: a render started outside the panel showed as "idle"; New render,
+  sample delete and render delete didn't check for it.
+- WEB-10: the System page's three resource bars were stacked on one line,
+  the disk chart lumped the stream library in with render scratch, and
+  the scratch cleaner called every render track "orphaned".
+- WEB-11: failed "status"/"end" clicks sent failure alerts, and a failed
+  job's summary showed its last line instead of its error line.
+- WEB-12: Settings said changes need a restart (they don't), and render
+  defaults really did need one. Copy on Analytics, Settings and
+  Automation was rewritten without file names and statistics jargon.
+- MUS-1: every track in a video had the same title phrase. Now only the
+  first carries the concept; the rest get their own.

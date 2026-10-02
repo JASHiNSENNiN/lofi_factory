@@ -300,6 +300,11 @@ body,.q-page,.nicegui-content{
 /* progress bar / field radius */
 .q-linear-progress{ border-radius:0; }
 .q-field__control{ border-radius:3px !important; }
+
+/* file pickers: no empty file-list box under the header */
+.compact-upload{ background:transparent !important; }
+.compact-upload .q-uploader__list{ min-height:0; padding:0; }
+.compact-upload .q-uploader__subtitle{ display:none; }
 """
 
 _HEAD = """

@@ -76,15 +76,25 @@ def get_authenticated_service():
     if not creds or not creds.valid:
         refreshed = False
         if creds and creds.expired and creds.refresh_token:
+            from google.auth.exceptions import RefreshError
             try:
                 creds.refresh(Request())
                 refreshed = True
-            except Exception as e:
-                print(f"[AUTH] Token refresh failed ({e}) — re-authenticating...")
+            except RefreshError as e:
+                # Revoked or expired grant: the token is useless now. Anything
+                # else (network down, Google 5xx) is transient, and deleting
+                # the token there would force a manual re-login for nothing.
+                print(f"[AUTH] Token was rejected ({e}); you need to reconnect YouTube.")
                 os.remove(TOKEN_FILE)
                 creds = None
 
         if not refreshed:
+            if not sys.stdin.isatty():
+                # Unattended (systemd timer, web panel job): an interactive
+                # login would wait forever for a browser that never comes.
+                print("[ERROR] YouTube isn't connected. Connect it in the web panel "
+                      "(Settings > Connect YouTube) or run this command in a terminal.")
+                sys.exit(1)
             if not os.path.exists(CLIENT_SECRET):
                 print(f"[ERROR] client_secret.json not found at {CLIENT_SECRET}")
                 print("  Download it from Google Cloud Console > APIs > Credentials")

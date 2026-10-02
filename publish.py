@@ -1234,9 +1234,16 @@ def _end_broadcast(youtube, broadcast_id: str, ffmpeg_proc: subprocess.Popen | N
     clear_live_state()
 
 
-def cmd_end(args):
-    youtube = get_youtube()
+def _is_ffmpeg(pid: int) -> bool:
+    """Guard against PID reuse: only signal a PID that is still ffmpeg."""
+    try:
+        with open(f"/proc/{pid}/comm", encoding="utf-8") as f:
+            return f.read().strip() == "ffmpeg"
+    except OSError:
+        return False
 
+
+def cmd_end(args):
     broadcast_id = args.broadcast_id
 
     # If no ID given, load from state file
@@ -1250,21 +1257,23 @@ def cmd_end(args):
         ffmpeg_pid   = state.get("ffmpeg_pid")
         print(f"[END] Ending broadcast {broadcast_id}  (from state file)")
 
-        # Kill the ffmpeg process if still running
-        if ffmpeg_pid:
+        # Stop the local encoder first, so it stops even when YouTube is
+        # unreachable or the token has expired.
+        if ffmpeg_pid and _is_ffmpeg(ffmpeg_pid):
             try:
                 os.kill(ffmpeg_pid, signal.SIGTERM)
-                print(f"  Killed ffmpeg PID {ffmpeg_pid}")
+                print(f"  Stopped ffmpeg PID {ffmpeg_pid}")
             except ProcessLookupError:
                 pass   # already dead
     else:
         print(f"[END] Ending broadcast {broadcast_id}")
 
     try:
-        _transition_broadcast(youtube, broadcast_id, "complete")
+        _transition_broadcast(get_youtube(), broadcast_id, "complete")
         print("  Broadcast ended.")
-    except Exception as e:
-        print(f"  [WARN] {e}")
+    except (Exception, SystemExit) as e:
+        print(f"  [WARN] Couldn't mark the broadcast complete on YouTube ({e}); "
+              "YouTube ends it on its own once the stream stops.")
 
     clear_live_state()
     print("  Done.")
@@ -1502,8 +1511,7 @@ def main():
                         help="Free-text mood/concept phrase override for the music generator")
     p_auto.add_argument("--music-v2",    dest="music_v2", action=argparse.BooleanOptionalAction,
                         default=None,
-                        help="Force v2 (beta) or v1 (--no-music-v2) music generator; "
-                             "omit to let the engagement-analytics bandit choose")
+                        help="Use the experimental v2 composer (default: v1)")
 
     # ── upload ───────────────────────────────────────────────────
     p_up = sub.add_parser("upload", help="Upload video as a regular YouTube video")

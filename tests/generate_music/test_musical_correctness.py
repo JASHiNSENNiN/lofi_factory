@@ -62,6 +62,14 @@ def test_all_tracks_of_a_video_share_genre_and_key_follows_progression():
         assert p['key'] == g.PROGRESSION_KEY[p['progression']]
 
 
+def test_each_track_gets_its_own_title_and_the_first_keeps_the_concept():
+    random.seed(5)
+    sets = _quiet(g._build_diverse_params, 6, concept_hint='rain on the window')
+    moods = [p['mood'] for p in sets]
+    assert moods[0] == 'rain on the window'
+    assert len(set(moods)) == len(moods)
+
+
 def test_genre_hint_applies_to_every_track():
     random.seed(4)
     sets = _quiet(g._build_diverse_params, 4, genre_hint='jazz_cafe')

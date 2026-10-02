@@ -109,7 +109,7 @@ def recommend(upload_log_path: str | None = None,
     """
     raw_uploads = _load_json(upload_log_path or UPLOAD_LOG)
     if not raw_uploads:
-        return _empty_result("no upload history yet (upload_log.json is missing or empty)")
+        return _empty_result("no uploads yet")
 
     entries = raw_uploads if isinstance(raw_uploads, list) else raw_uploads.get("entries", [])
     analytics = _load_json(analytics_log_path or ANALYTICS_LOG)

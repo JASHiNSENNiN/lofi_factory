@@ -68,3 +68,12 @@ def test_job_ids_are_unique_within_the_same_second(tmp_path):
 
     a, b = asyncio.run(scenario())
     assert a != b
+
+
+def test_failure_summary_prefers_the_error_line():
+    from webui.jobs import _failure_summary
+    lines = ["[END] Ending broadcast", "[ERROR] No active broadcast found.",
+             "  To list broadcasts: python publish.py status", ""]
+    assert _failure_summary(lines) == "[ERROR] No active broadcast found."
+    assert _failure_summary(["a", "b"]) == "b"
+    assert _failure_summary([]) == ""

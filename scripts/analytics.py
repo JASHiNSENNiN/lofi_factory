@@ -53,14 +53,17 @@ _METRIC_KEYS = (
 _PILLARS = ["temporal", "activity", "emotional", "aesthetic", "cross_genre"]
 
 
+class AnalyticsUnavailable(RuntimeError):
+    """Analytics can't be fetched: not connected, or no channel ID."""
+
+
 def _get_analytics_service():
     from google.oauth2.credentials import Credentials
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
     if not os.path.exists(TOKEN_FILE):
-        print("[analytics] ERROR: token.json not found. Run: python scripts/upload_youtube.py --auth")
-        sys.exit(1)
+        raise AnalyticsUnavailable("YouTube isn't connected (token.json not found).")
 
     creds = Credentials.from_authorized_user_file(TOKEN_FILE, _ANALYTICS_SCOPES)
     if creds.expired and creds.refresh_token:
@@ -88,8 +91,8 @@ def _get_channel_id() -> str:
             return items[0]["id"]
     except Exception as ex:
         print(f"[analytics] Could not fetch channel ID: {ex}")
-    print("[analytics] ERROR: Set YT_CHANNEL_ID in .env or ensure token has youtube.readonly scope.")
-    sys.exit(1)
+    raise AnalyticsUnavailable("Couldn't find the channel ID. Set YT_CHANNEL_ID in .env "
+                               "or reconnect YouTube.")
 
 
 def fetch_video_metrics(
@@ -1350,7 +1353,11 @@ def main() -> None:
     parser.add_argument("--swap-thumbs", action="store_true", help="Swap thumbnails for low-CTR videos")
     args = parser.parse_args()
 
-    analytics = sync_analytics()
+    try:
+        analytics = sync_analytics()
+    except AnalyticsUnavailable as e:
+        print(f"[analytics] ERROR: {e}")
+        sys.exit(1)
     if args.report:
         report(analytics)
     if args.swap_thumbs:
