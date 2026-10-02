@@ -314,10 +314,12 @@ def _apply_pedalboard(wav_in: str, wav_out: str, sub_genre: str | None,
     # conservative integrated loudness.
     processed = _apply_lufs_mastering(processed, sr)
 
-    # Final peak-safety ceiling to -1dB.
+    # Final peak-safety ceiling: -1.5 dBFS sample peak, so inter-sample peaks
+    # after AAC encoding stay under YouTube's -1 dBTP.
     peak = np.max(np.abs(processed)) + 1e-9
-    if peak > 0.89:
-        processed = processed * (0.89 / peak)
+    ceiling = 10 ** (-1.5 / 20)
+    if peak > ceiling:
+        processed = processed * (ceiling / peak)
 
     sf.write(wav_out, processed.T, sr, subtype="PCM_16")
 

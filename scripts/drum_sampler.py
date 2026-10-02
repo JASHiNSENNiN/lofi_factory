@@ -27,6 +27,7 @@ from scipy.signal import butter, sosfilt, lfilter
 from scripts import genre_presets
 
 SR = 44_100
+_PEAK_CEILING = 10 ** (-1.5 / 20)   # -1.5 dBFS
 _ASSET_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "drums")
 
 # ─── Sample bank ─────────────────────────────────────────────────────────────
@@ -314,6 +315,7 @@ def layer_drum_break(
     sub_genre: str = "chillhop",
     volume: float = 0.22,
     swing: float = 0.62,
+    spans: list[tuple[int, int]] | None = None,
 ) -> None:
     """
     Generate a drum break and mix it into base_wav.
@@ -323,6 +325,9 @@ def layer_drum_break(
     Real CC0 samples used when present in assets/drums/; synthesis otherwise.
 
     swing: pass params['swing'] so drums land in the same pocket as the MIDI render.
+    spans: (start_sample, end_sample) ranges where the break should play
+    (the arrangement's full-beat sections). Outside them it is silent, with
+    short fades at the edges. None plays it across the whole file.
     Reads base_wav fully before writing → in-place (src == dst) is safe.
     """
     using_real = any(_load(f) is not None
@@ -342,11 +347,24 @@ def layer_drum_break(
     n_reps = int(np.ceil(n_samples / len(macro)))
     drums  = np.tile(macro, n_reps)[:n_samples]
 
+    if spans is not None:
+        mask = np.zeros(n_samples, dtype=np.float32)
+        fade = int(0.03 * SR)
+        for start, end in spans:
+            start, end = max(0, int(start)), min(n_samples, int(end))
+            if end - start <= 2 * fade:
+                continue
+            mask[start:end] = 1.0
+            mask[start:start + fade] = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            mask[end - fade:end] = np.linspace(1.0, 0.0, fade, dtype=np.float32)
+
     base_rms = float(np.sqrt(np.mean(audio ** 2)))
     drum_rms = float(np.sqrt(np.mean(drums ** 2))) + 1e-9
     # If base is silent use a fixed target RMS of 0.1; otherwise match base level.
     target_rms = base_rms if base_rms > 1e-4 else 0.10
     drums = drums * (target_rms / drum_rms) * volume
+    if spans is not None:
+        drums = drums * mask
 
     if audio.shape[1] == 2:
         spread   = random.uniform(-0.08, 0.08)
@@ -356,8 +374,10 @@ def layer_drum_break(
     else:
         mixed = audio + drums.reshape(-1, 1)
 
+    # -1.5 dBFS sample-peak ceiling: leaves room for inter-sample peaks so the
+    # AAC-encoded upload stays under YouTube's -1 dBTP.
     peak = float(np.max(np.abs(mixed))) + 1e-9
-    if peak > 0.95:
-        mixed = mixed * (0.95 / peak)
+    if peak > _PEAK_CEILING:
+        mixed = mixed * (_PEAK_CEILING / peak)
 
     sf.write(output_wav, mixed, SR, subtype="PCM_16")

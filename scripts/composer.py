@@ -103,7 +103,7 @@ VOICING_OPTIONS = {
     'Em7':   [[52,55,59,62], [55,59,62,64], [52,59,62,67], [55,59,64,67]],
     'Gm7':   [[55,58,62,65], [58,62,65,67], [55,62,65,70], [50,55,62,65], [58,65,67,70]],
     'Gm9':   [[55,58,62,65,69], [58,62,65,69], [55,62,69,70], [50,62,65,69], [58,65,69,74]],
-    'Cm7':   [[48,51,55,58], [51,55,58,60], [48,55,58,63], [44,48,55,58], [51,58,60,63]],
+    'Cm7':   [[48,51,55,58], [51,55,58,60], [48,55,58,63], [46,51,55,60], [51,58,60,63]],
     'Fm7':   [[53,56,60,63], [56,60,63,65], [53,60,63,68], [48,53,60,63], [56,63,65,68]],
     'Bm7b5': [[59,62,65,69], [62,65,69,71], [59,65,69,74], [62,65,71,74]],
     'Cmaj7': [[60,64,67,71], [64,67,71,72], [55,60,67,71], [60,67,71,76], [64,71,72,76]],
@@ -118,12 +118,12 @@ VOICING_OPTIONS = {
     'G7b9':  [[55,59,65,68], [59,65,68,71], [55,65,68,71]],
     'E7':    [[52,56,59,62], [56,59,62,64], [52,59,62,68], [56,62,64,68]],
     'E7b9':  [[52,56,65,68], [56,65,68,71], [52,65,68,74]],
-    'C7':    [[48,52,55,58], [52,55,58,60], [48,55,58,63], [52,58,60,63]],
+    'C7':    [[48,52,55,58], [52,55,58,60], [48,55,58,64], [52,58,62,67]],
     'Bb7':   [[58,62,65,68], [62,65,68,70], [58,65,68,74], [62,68,70,74]],
     'D7':    [[50,54,57,60], [54,57,60,62], [50,57,60,66], [54,60,62,66]],
     'D9':    [[50,54,57,60,64], [54,57,60,64], [50,57,60,64,69]],
     # Secondary dominant voicings used in new progressions
-    'F7':    [[53,57,60,63], [57,60,63,65], [53,60,63,68], [57,63,65,68]],
+    'F7':    [[53,57,60,63], [57,60,63,65], [53,60,63,69], [57,63,67,72]],
     'A7':    [[57,61,64,67], [61,64,67,69], [57,64,67,73], [61,67,69,73]],
 
     # Modal-interchange / borrowed-chord additions (research/theory/
@@ -160,7 +160,7 @@ VOICING_OPTIONS = {
     # harmony-voicings.md "Concrete additions" table -- the remaining gaps
     # after the modal-interchange/minor-ii-V-i/tritone-sub work above).
     'G13':    [[55,59,62,64,69], [59,62,64,69,71]],   # dominant 13, cheap _CHORD_EXTEND_UP tension option
-    'G7alt':  [[55,59,63,66], [59,63,66,68]],          # b9/#9/b5/b7 compressed altered-dominant voicing
+    'G7alt':  [[55,59,65,68], [59,65,68,70]],          # 7(b9) and 3-b7-b9-#9 altered-dominant voicings
     'Am11':   [[57,60,64,67,72], [60,64,67,72,74]],    # minor 11ths are consonant, no #11 needed
     'Dm11':   [[50,53,57,60,65]],
     'Am6':    [[57,60,64,66], [60,64,66,69]],          # 6th-chord color: softer than maj7/m7, common Rhodes voicing
@@ -271,24 +271,24 @@ PROGRESSIONS = [
     [('Gm7',2),('Fmaj7',2),('Ebmaj7',2),('Cm7',2)],     # 15 dark descending
     # Morning / bright major progressions
     [('Cmaj9',2),('Am9',2),('Fmaj9',2),('G7',2)],       # 16 morning I-vi-IV-V in C
-    [('Fmaj9',2),('Cmaj9',2),('Am9',2),('Gmaj7',2)],    # 17 floating morning major
+    [('Fmaj9',2),('Cmaj9',2),('Am9',2),('G13',2)],    # 17 floating morning major
     [('Gmaj7',2),('Em7',2),('Am9',2),('Fmaj7',2)],      # 18 G major arc (I-vi-ii-IV)
     # Chill vamps
     [('Am9',4),('Cmaj9',4)],                             # 19 chill 2-chord vamp
     [('Fmaj9',2),('Em7',2),('Dm9',2),('Cmaj9',2)],      # 20 descending chill IV-iii-ii-I
     # Bright / cozy major progressions
-    [('Fmaj9',2),('Gmaj7',2),('Am9',2),('Cmaj9',2)],    # 21 IV-V-vi-I uplifting
-    [('Cmaj9',2),('Gmaj7',2),('Am9',2),('Fmaj9',2)],    # 22 I-V-vi-IV (iconic cozy pop loop)
-    [('Gmaj7',2),('Cmaj9',2),('Fmaj9',2),('Cmaj9',2)],  # 23 V-I-IV-I resolution arc
-    [('Am9',1),('Gmaj7',1),('Fmaj9',1),('Cmaj9',1)],    # 24 quick major turn (quarter note chords)
-    [('Cmaj9',2),('Em7',2),('Fmaj9',2),('Gmaj7',2)],    # 25 I-iii-IV-V warm major build
+    [('Fmaj9',2),('G13',2),('Am9',2),('Cmaj9',2)],    # 21 IV-V-vi-I uplifting
+    [('Cmaj9',2),('G13',2),('Am9',2),('Fmaj9',2)],    # 22 I-V-vi-IV (iconic cozy pop loop)
+    [('G13',2),('Cmaj9',2),('Fmaj9',2),('Cmaj9',2)],  # 23 V-I-IV-I resolution arc
+    [('Am9',1),('G13',1),('Fmaj9',1),('Cmaj9',1)],    # 24 quick major turn (quarter note chords)
+    [('Cmaj9',2),('Em7',2),('Fmaj9',2),('G13',2)],    # 25 I-iii-IV-V warm major build
     # Funk / soul
     [('Dm9',1),('G7',1),('Cmaj9',1),('Fmaj9',1)],       # 26 ii-V-I-IV jazz-funk turn
     [('Am9',2),('Fmaj9',2),('G7',2),('Am9',2)],          # 27 neo-soul groove vamp
     # Jazz major turnarounds (C/G/F major key contexts)
     [('Cmaj7',2),('Am9',2),('Dm9',2),('G7',2)],          # 28 I-vi-ii-V jazz (C major)
     [('Fmaj9',2),('Em7',2),('Am9',2),('D7',2)],           # 29 IV-iii-vi-V (G major arc)
-    [('Gm9',2),('Cm7',2),('Fmaj9',2),('Bbmaj7',2)],      # 30 minor gospel cycle (F context)
+    [('Gm9',2),('Cm7',2),('F7',2),('Bbmaj7',2)],         # 30 vi-ii-V-I gospel cycle in Bb
     # Extended jazz cycles
     [('Fm7',2),('Bb7',2),('Ebmaj7',2),('Cm7',2)],        # 31 Cm/Fm jazz cycle (European)
     [('Bm7b5',1),('E7b9',1),('Am7',2),('D7',2)],          # 32 extended ii-V-i with deceptive
@@ -297,7 +297,7 @@ PROGRESSIONS = [
     # Modal / minimal drifts
     [('Fmaj9',4),('Cmaj9',4)],                             # 35 2-chord Lydian drift (meditative)
     [('Am7',3),('Cmaj9',1)],                               # 36 ultra-minimal Am vamp
-    [('Am9',2),('Fmaj7s',2),('Gmaj7',2),('Em7',2)],       # 37 Lydian floating arc
+    [('Am9',2),('Fmaj7s',2),('G13',2),('Em7',2)],       # 37 Lydian floating arc
     # Soul / funk depth
     [('Dm9',2),('Am9',2),('Fmaj9',2),('G7',2)],           # 38 Dm funk cycle
     [('Am7',1),('Bm7b5',1),('E7b9',1),('Am7',1)],         # 39 minor with tritone sub
@@ -309,12 +309,12 @@ PROGRESSIONS = [
     # Bright round-the-clock major
     [('Gmaj7',2),('Am9',2),('Cmaj9',2),('Fmaj9',2)],      # 44 G major round
     [('Fmaj9',1),('Em7',1),('Am9',1),('D7',1)],            # 45 quick 4-chord IV-iii-vi-V
-    [('Cmaj9',2),('Fmaj9',2),('Gmaj7',2),('Am9',2)],       # 46 I-IV-V-vi in C
+    [('Cmaj9',2),('Fmaj9',2),('G13',2),('Am9',2)],       # 46 I-IV-V-vi in C
     [('Bbmaj7',2),('Gm9',2),('Cm7',2),('Ebmaj7',2)],       # 47 Bb major jazz swing
     # City pop / modern Japanese
-    [('Fmaj9',2),('Gmaj7',2),('Em7',2),('Am9',2)],         # 48 IV-V-iii-vi city pop
-    [('Cmaj9',2),('Em7',2),('Gmaj7',1),('Am9',1)],          # 49 I-iii-V-vi city pop
-    [('Ebmaj7',2),('Bbmaj7',2),('Gm7',2),('Cm7',2)],        # 50 Eb warm jazz cycle
+    [('Fmaj9',2),('G13',2),('Em7',2),('Am9',2)],         # 48 IV-V-iii-vi city pop
+    [('Cmaj9',2),('Em7',2),('G13',1),('Am9',1)],          # 49 I-iii-V-vi city pop
+    [('Ebmaj7',2),('Bb7',2),('Gm7',2),('Cm7',2)],        # 50 Eb warm jazz cycle
 
     # ── Modal-interchange / borrowed-chord + minor ii-V-i additions ──────
     # (research/theory/harmony-voicings.md "Concrete additions" table).
@@ -2276,7 +2276,9 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
     var_idx = 0
     events = []
     bar = start_bar
-    rest_min = 2 if density == 'sparse' else (1 if density == 'medium' else 0)
+    # Bars of rest after each phrase: call-and-response phrasing, a phrase
+    # then a breath, not a phrase every eight bars.
+    rest_min = 1 if density == 'sparse' else 0
     scale_pcs = {n % 12 for n in notes_scale}
     prev_final_note = None   # tracks the last emitted note, across phrases, for Markov nudging
     phrase_prob = 0.72 + 0.15 * tension
@@ -2289,12 +2291,14 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
             var_idx += 1
             phrase_len   = len(phrase_notes)
             phrase_start = bar * 16 + random.randint(0, 5)
+            phrase_last_g = phrase_start
             prev_step = 0   # leap-then-step-reversal lookback, see below
 
             for i, note in enumerate(phrase_notes):
                 g = phrase_start + i * random.randint(2, 5)
                 if g >= (start_bar + num_bars) * 16:
                     break
+                phrase_last_g = g
 
                 # Phi-point contour: ascending before 0.618, descending after.
                 # Step choice is tension-weighted toward the wider leap as
@@ -2391,9 +2395,12 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                 if gamaka and random.random() < _GAMAKA_PROB:
                     events += _gamaka_pitchbend_events(t, dur, bpm)
 
-            bar += phrase_len + random.randint(rest_min, rest_min + 3)
+            # Advance by the phrase's real length in bars. (This used to add
+            # the phrase's *note count* as bars, leaving ~3 of 4 bars empty.)
+            phrase_bars = max(1, -(-(phrase_last_g + 4 - phrase_start) // 16))
+            bar += phrase_bars + random.randint(rest_min, rest_min + 1)
         else:
-            bar += random.randint(2, 5)
+            bar += random.randint(1, 2)
 
     return events
 
@@ -2600,55 +2607,35 @@ def build_counter_melody(key_root: int, start_bar: int, num_bars: int,
 # Procedural mood-phrase composer — generates unique phrases, never repeats
 # ---------------------------------------------------------------------------
 _MOOD_WORDS: dict[str, tuple[str, ...]] = {
-    'adj_texture':  ('worn', 'hollow', 'amber', 'pale', 'thick', 'smooth', 'heavy',
-                     'thin', 'distant', 'muted', 'cracked', 'dim', 'loose', 'bleached',
-                     'frayed', 'corroded', 'lacquered', 'oxidized', 'chalky', 'matte',
-                     'grained', 'washed-out', 'raw', 'spare', 'flat', 'rough',
-                     'translucent', 'porous', 'layered', 'compressed'),
-    'adj_feeling':  ('tired', 'restless', 'borrowed', 'lost', 'empty', 'broken',
-                     'aching', 'unhurried', 'uneasy', 'half-awake', 'bare', 'residual',
-                     'suspended', 'provisional', 'overdue', 'unfinished', 'peripheral',
-                     'off-beat', 'misplaced', 'tangential', 'stubborn', 'overcast',
-                     'untethered', 'spent', 'exact', 'specific'),
-    'noun_sensory': ('light', 'smoke', 'static', 'groove', 'hum', 'pulse', 'echo',
-                     'rhythm', 'silence', 'noise', 'dust', 'fog', 'shadow', 'breath',
-                     'glow', 'grain', 'hiss', 'crackle', 'resonance', 'drift',
-                     'diesel', 'chalk', 'copper', 'tar', 'ozone', 'rust', 'resin',
-                     'frequency', 'current', 'signal', 'pressure', 'interference',
-                     'feedback', 'static', 'flux', 'charge'),
+    'adj_texture':  ('worn', 'amber', 'pale', 'soft', 'warm', 'faded', 'dusty', 'hazy',
+                     'muted', 'dim', 'golden', 'quiet', 'slow', 'grainy', 'velvet',
+                     'washed-out', 'blue', 'grey', 'mellow', 'low', 'sleepy', 'cloudy',
+                     'distant', 'gentle', 'tender', 'still', 'cold', 'silver'),
+    'adj_feeling':  ('tired', 'restless', 'unhurried', 'half-awake', 'quiet', 'lonely',
+                     'hopeful', 'wistful', 'calm', 'drowsy', 'content', 'unfinished',
+                     'easy', 'idle', 'thoughtful', 'homesick', 'patient', 'lazy'),
+    'noun_sensory': ('light', 'smoke', 'static', 'groove', 'hum', 'echo', 'rain',
+                     'silence', 'dust', 'fog', 'shadow', 'breath', 'glow', 'hiss',
+                     'crackle', 'drift', 'steam', 'snow', 'tea', 'coffee', 'neon',
+                     'streetlight', 'lamplight', 'moonlight', 'haze', 'breeze', 'vinyl'),
     'noun_place':   ('street', 'window', 'hallway', 'staircase', 'rooftop', 'kitchen',
-                     'doorway', 'alley', 'overpass', 'library', 'laundromat', 'bus stop',
-                     'fire escape', 'turnstile', 'underpass', 'server room', 'tollbooth',
-                     'waiting room', 'loading dock', 'parking structure', 'switchboard',
-                     'copy room', 'basement', 'corridor', 'storage unit', 'phone booth',
-                     'breakroom', 'transit hub', 'side entrance'),
+                     'doorway', 'alley', 'library', 'laundromat', 'bus stop', 'balcony',
+                     'fire escape', 'train platform', 'bookshop', 'corner cafe', 'porch',
+                     'attic', 'garden', 'harbor', 'record store', 'night bus', 'bedroom',
+                     'back seat', 'riverbank', 'study desk'),
     'noun_time':    ('morning', 'evening', 'afternoon', 'tuesday', 'sunday', 'winter',
-                     'autumn', 'hour', 'moment', 'monday', 'late november', 'early march',
-                     'the small hours', '3am', 'dusk', 'dawn', 'a thursday in october',
-                     'the hour before the test', 'last tuesday', 'two weeks ago',
-                     'the end of the fiscal quarter', 'shift change', 'closing time',
-                     'the week before moving out', 'fourth period', 'overtime'),
-    'noun_abstract':('weight', 'feeling', 'grief', 'longing', 'distance', 'ache',
-                     'doubt', 'void', 'space', 'gravity', 'texture', 'absence',
-                     'motion', 'stillness', 'blur', 'residue', 'friction', 'inertia',
-                     'pressure', 'threshold', 'margin', 'recursion', 'latency',
-                     'interference', 'drift', 'entropy', 'voltage', 'frequency',
-                     'amplitude', 'lag', 'overhead', 'clearance'),
-    'verb_ing':     ('falling', 'echoing', 'waiting', 'breathing', 'floating',
-                     'turning', 'leaking', 'blooming', 'slowing', 'humming', 'settling',
-                     'dissolving', 'lingering', 'stretching', 'wandering', 'unraveling',
-                     'compressing', 'accumulating', 'transmitting', 'buffering',
-                     'oscillating', 'receding', 'converging', 'circling', 'stalling',
-                     'iterating', 'looping', 'clipping', 'saturating'),
-    'verb_past':    ('stayed', 'opened', 'closed', 'fell', 'crept', 'settled',
-                     'broke', 'leaned', 'hummed', 'spilled', 'held', 'kept',
-                     'let go', 'carried on', 'clocked out', 'ran out', 'reset',
-                     'overran', 'missed', 'stalled', 'accumulated', 'exceeded'),
+                     'autumn', 'spring', 'midnight', 'late november', 'early march',
+                     'the small hours', '3am', 'dusk', 'dawn', 'a rainy thursday',
+                     'the night before the exam', 'last summer', 'closing time',
+                     'the last train home', 'a snow day', 'a slow weekend'),
+    'noun_abstract':('weight', 'longing', 'distance', 'stillness', 'quiet', 'memory',
+                     'warmth', 'calm', 'nostalgia', 'comfort', 'daydream', 'patience',
+                     'solitude', 'drift', 'afterglow', 'slowness', 'hush'),
+    'verb_ing':     ('falling', 'echoing', 'waiting', 'breathing', 'floating', 'drifting',
+                     'turning', 'humming', 'settling', 'lingering', 'wandering', 'fading',
+                     'dreaming', 'resting', 'swaying', 'glowing', 'melting'),
     'prep':         ('through', 'beneath', 'beside', 'beyond', 'under', 'across',
-                     'within', 'over', 'against', 'between', 'along', 'past',
-                     'around', 'toward', 'behind', 'inside', 'adjacent to',
-                     'in spite of', 'at the edge of', 'two floors above'),
-    'det':          ('the', 'a', 'that', 'this'),
+                     'over', 'along', 'past', 'around', 'behind', 'inside', 'outside'),
 }
 
 # Genre-specific word tints — pull toward sonic character without hardcoding titles
@@ -2685,27 +2672,23 @@ _MOOD_TINTS: dict[str, dict[str, tuple[str, ...]]] = {
                        'noun_sensory': ('groove', 'warmth', 'hum', 'melody', 'pulse', 'breath')},
 }
 
+# Every pattern reads as a complete phrase for any choice of words.
 _MOOD_PATTERNS: tuple[str, ...] = (
     '{adj_texture} {noun_sensory}',
-    '{det} {noun_abstract} of {noun_time}',
-    '{noun_sensory} {prep} {det} {noun_place}',
-    '{adj_texture} {noun_time} on {det} {adj_feeling} {noun_place}',
-    '{det} {adj_texture} {noun_sensory}',
-    '{noun_sensory} {prep} {noun_abstract}',
-    '{verb_ing} {prep} {det} {noun_sensory}',
+    'the {noun_abstract} of {noun_time}',
+    '{noun_sensory} {prep} the {noun_place}',
+    '{adj_texture} {noun_time}',
+    '{adj_feeling} {noun_time}',
+    '{verb_ing} {prep} the {noun_place}',
     '{noun_time}, {adj_texture} and {adj_feeling}',
-    '{det} {noun_place} {verb_past} {adj_texture}',
     '{adj_texture} {noun_place}, {adj_feeling} {noun_sensory}',
-    '{verb_ing} like {det} {adj_texture} {noun_abstract}',
-    '{det} {noun_abstract} {verb_past} {prep} {det} {noun_place}',
-    '{noun_time} {noun_sensory} on {det} {adj_feeling} {noun_place}',
-    '{adj_feeling} {noun_abstract}, {adj_texture} {noun_sensory}',
-    'when {det} {noun_place} {verb_past} {adj_texture}',
-    'all that {adj_texture} {noun_abstract}',
-    '{det} last {noun_sensory} of {noun_time}',
-    'lost {prep} {det} {adj_texture} {noun_place}',
-    'still {verb_ing} {prep} {det} {noun_abstract}',
-    '{adj_texture} {noun_sensory} {prep} {det} {noun_place}',
+    'the last {noun_sensory} of {noun_time}',
+    'lost {prep} the {adj_texture} {noun_place}',
+    'still {verb_ing}',
+    '{adj_texture} {noun_sensory} {prep} the {noun_place}',
+    '{noun_sensory} and {noun_sensory}',
+    '{noun_time} {noun_sensory}',
+    '{adj_feeling} {noun_abstract}',
 )
 
 
@@ -2972,6 +2955,31 @@ def _pick_mood_phrase(concept_hint: str | None = None, sub_genre: str = '',
     return _compose_mood_phrase(sub_genre)
 
 
+_MAJOR_STEPS = (0, 2, 4, 5, 7, 9, 11)
+_MINOR_STEPS = (0, 2, 3, 5, 7, 8, 10, 9, 11)   # natural minor + dorian 6th + leading tone
+
+
+def _key_pitch_classes(key: str) -> set:
+    root = KEY_ROOTS.get(key, 57) % 12
+    steps = _MINOR_STEPS if key.endswith('m') else _MAJOR_STEPS
+    return {(root + s) % 12 for s in steps}
+
+
+def progression_fits_key(progression, key: str, max_outside: float = 0.25) -> bool:
+    """True if at most `max_outside` of the chords use notes outside `key`.
+    Unknown chord symbols count as outside."""
+    key_pcs = _key_pitch_classes(key)
+    chords = [name for name, _ in progression]
+    if not chords:
+        return False
+    outside = 0
+    for name in chords:
+        voicings = VOICING_OPTIONS.get(name)
+        if not voicings or {n % 12 for v in voicings for n in v} - key_pcs:
+            outside += 1
+    return outside / len(chords) <= max_outside
+
+
 def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) -> dict:
     history = _load_params_history()
 
@@ -3089,14 +3097,20 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
     # fixed 51-entry table (Phase-A bump; started at 18%) — params['progression']
     # keeps its int index either way (for history/logging); generated_progression,
     # when present, takes priority in build_midi().
+    # The walk pools transitions from progressions written in different keys,
+    # so it can wander off the melody's key; only keep walks that stay in it.
     if random.random() < 0.30:
         try:
             chord_count = len(PROGRESSIONS[prog]) if PROGRESSIONS[prog] else 4
-            params['generated_progression'] = generate_progression(
-                length=max(2, min(6, chord_count)),
-                jazziness=round(random.uniform(0.2, 0.8), 2),
-                seed_chord=PROGRESSIONS[prog][0][0],
-            )
+            for _attempt in range(6):
+                walked = generate_progression(
+                    length=max(2, min(6, chord_count)),
+                    jazziness=round(random.uniform(0.2, 0.8), 2),
+                    seed_chord=PROGRESSIONS[prog][0][0],
+                )
+                if progression_fits_key(walked, key):
+                    params['generated_progression'] = walked
+                    break
         except Exception as e:
             print(f"  [params] Progression generation failed ({e}) — using curated table")
 
@@ -3175,6 +3189,44 @@ def _apply_tension_to_drums(drum_ev, total_bars, base_mult=1.0):
 
 # Form = list of (section_label, num_prog_loops)
 # Labels: 'I'=intro, 'A'=A section, 'BR'=break, 'B'=B section, 'O'=outro
+# Lofi tracks run roughly two to four minutes. Forms are written in loops
+# of the progression, so the real length depends on the progression's bar
+# count and the tempo; fit_form_length() adds or removes loops of the main
+# sections to land inside this window.
+TRACK_MIN_SECS = 120
+TRACK_MAX_SECS = 240
+_RESIZABLE_SECTIONS = ('A', 'B', 'BR')
+
+
+def form_seconds(form, prog_bars: int, bpm: float) -> float:
+    return sum(n for _, n in form) * prog_bars * 4 * 60.0 / bpm
+
+
+def fit_form_length(form, prog_bars: int, bpm: float,
+                    lo: float = TRACK_MIN_SECS, hi: float = TRACK_MAX_SECS) -> list:
+    """Return a copy of `form` with A/B/BR loop counts adjusted so the track
+    lasts between `lo` and `hi` seconds (as close as the loop size allows).
+    Sections are never dropped; each keeps at least one loop."""
+    form = [list(sec) for sec in form]
+    loop_secs = prog_bars * 4 * 60.0 / bpm
+    for _ in range(64):
+        secs = sum(n for _, n in form) * loop_secs
+        if secs > hi:
+            shrinkable = [sec for sec in form if sec[0] in _RESIZABLE_SECTIONS and sec[1] > 1]
+            if not shrinkable:
+                break
+            max(shrinkable, key=lambda sec: sec[1])[1] -= 1
+        elif secs < lo and secs + loop_secs <= hi + loop_secs / 2:
+            growable = [sec for sec in form if sec[0] in ('A', 'B')] or \
+                       [sec for sec in form if sec[0] in _RESIZABLE_SECTIONS]
+            if not growable:
+                break
+            min(growable, key=lambda sec: sec[1])[1] += 1
+        else:
+            break
+    return [tuple(sec) for sec in form]
+
+
 _SONG_FORMS = {
     'standard': [('I',1),('A',4),('BR',1),('B',4),('O',1)],   # 1+4+1+4+1 = 11 loops
     'ambient':  [('I',2),('A',6),('BR',2),('B',4),('O',2)],   # longer drift = 16
@@ -3335,56 +3387,79 @@ def _compute_section_transitions(form: list[tuple[str, int]], prog_bars: int,
     return transitions
 
 
-# In-track key modulation (new research this session -- no existing
-# research/theory/*.md doc covers this). The "truck driver modulation": an
-# abrupt whole-step (occasionally half-step) key rise with no pivot chord,
-# conventionally landing on the final full statement of the theme for a
-# lift/energy effect. Deliberately rare and form-gated -- most lofi loop-
-# and-vamp tracks shouldn't modulate; this is an occasional device, not a
-# universal effect, so it's only offered to forms with a real "final
-# statement" section to modulate into.
-#
-# Wired end-to-end: build_midi() decides `_modulation` once (form/form_name
-# are fixed pre-retry-loop, see there), then applies `_apply_modulation_tail`
-# -- a head/tail split on each event's own abs_tick, transposing only the
-# tail via _transpose_events() -- to piano_ev/bass_ev/mel_ev/pad_ev/
-# cmelo_ev/texture_ev after the retry loop resolves best_events. drum_ev
-# (note numbers select drum voices, not pitches) and sustain_ev (CC64
-# pedal on/off tuples, not 4-tuple note events) are deliberately excluded.
-_MODULATION_ELIGIBLE_FORMS = {'build', 'aaba', 'standard'}
-_MODULATION_PROB = 0.12
+# Sections where the arrangement plays the full beat. The sampled drum break
+# layered on after rendering (drum_sampler.layer_drum_break) belongs only
+# here; intros, bridges and outros have their own sparser drum parts.
+_FULL_BEAT_SECTIONS = ('A', 'B')
 
 
-def maybe_modulate_key(form: list[tuple[str, int]], form_name: str,
-                       seed: int | None = None) -> tuple[int, int] | None:
-    """
-    Decide whether this track gets an in-track key modulation. Returns
-    (section_index, semitone_shift) -- modulation would apply from that
-    section index (the LAST 'A' section in `form`, i.e. the final full
-    theme statement) through the end of the track -- or None if this track
-    doesn't modulate (the common case; most tracks return None).
-    """
-    rng = random.Random(seed) if seed is not None else random
-    if form_name not in _MODULATION_ELIGIBLE_FORMS:
-        return None
-    a_indices = [i for i, (label, _) in enumerate(form) if label == 'A']
-    if len(a_indices) < 2:
-        return None
-    if rng.random() >= _MODULATION_PROB:
-        return None
-    semitones = rng.choice([1, 2, 2, 2])   # whole-step is the more common/distinctive convention
-    return a_indices[-1], semitones
+def full_beat_spans(form: list[tuple[str, int]], prog_bars: int, bpm: float,
+                    sr: int = 44100) -> list[tuple[int, int]]:
+    """(start_sample, end_sample) for each A/B section, adjacent spans merged."""
+    bar_seconds = 240.0 / bpm
+    spans: list[tuple[int, int]] = []
+    bar = 0
+    for label, n_loops in form:
+        end_bar = bar + prog_bars * n_loops
+        if label in _FULL_BEAT_SECTIONS:
+            start, end = int(bar * bar_seconds * sr), int(end_bar * bar_seconds * sr)
+            if spans and spans[-1][1] == start:
+                spans[-1] = (spans[-1][0], end)
+            else:
+                spans.append((start, end))
+        bar = end_bar
+    return spans
 
 
-def _transpose_events(events: list[tuple], semitones: int) -> list[tuple]:
-    """Shift every real note in an (abs_tick, note, velocity, duration)
-    events list by `semitones` -- used for in-track key-modulation tail
-    sections. Pitchwheel sentinel events (_PITCHWHEEL_NOTE) are left
-    untouched, they're not real notes."""
-    if semitones == 0:
-        return events
-    return [ev if ev[1] == _PITCHWHEEL_NOTE else (ev[0], ev[1] + semitones, ev[2], ev[3])
-            for ev in events]
+# Avoid-note filter. Several chord sources can put a chord under the melody
+# that isn't in the melody's key: deliberate borrowed chords in the curated
+# table, the Markov progression walk, the functional-harmony engine's
+# secondary dominants, and the bridge reharmonization. A melody note one
+# semitone above a chord tone (a minor 9th against it) is the classic
+# "wrong note" clash, so any sustained melodic note that lands there is
+# pulled down onto that chord tone. Short passing notes are left alone.
+_CLASH_MIN_DUR = PPQN // 2          # eighth note or longer
+_CHORD_GATHER_TICKS = PPQN // 2     # chord notes struck within this window form one chord
+
+
+def _chord_timeline(piano_ev: list[tuple]) -> tuple[list[int], list[set]]:
+    """Group piano note onsets into chords: (sorted onset ticks, pitch-class sets)."""
+    notes = sorted((ev[0], ev[1]) for ev in piano_ev if ev[1] != _PITCHWHEEL_NOTE)
+    times: list[int] = []
+    chords: list[set] = []
+    for t, n in notes:
+        if times and t - times[-1] <= _CHORD_GATHER_TICKS:
+            chords[-1].add(n % 12)
+        else:
+            times.append(t)
+            chords.append({n % 12})
+    return times, chords
+
+
+def fix_melodic_clashes(events: list[tuple], piano_ev: list[tuple]) -> tuple[list[tuple], int]:
+    """Move sustained notes that sit a semitone above a chord tone (and aren't
+    chord tones themselves) down onto that chord tone. Returns (events, n_fixed)."""
+    import bisect
+    times, chords = _chord_timeline(piano_ev)
+    if not times:
+        return events, 0
+    out, fixed = [], 0
+    for ev in events:
+        t, note = ev[0], ev[1]
+        if note == _PITCHWHEEL_NOTE or ev[3] < _CLASH_MIN_DUR:
+            out.append(ev)
+            continue
+        i = bisect.bisect_right(times, t + _CHORD_GATHER_TICKS // 2) - 1
+        if i < 0:
+            out.append(ev)
+            continue
+        pcs = chords[i]
+        pc = note % 12
+        if len(pcs) >= 3 and pc not in pcs and (pc - 1) % 12 in pcs:
+            ev = (t, note - 1) + tuple(ev[2:])
+            fixed += 1
+        out.append(ev)
+    return out, fixed
 
 
 # Secondary genre-specific instrument texture layer
@@ -3707,6 +3782,7 @@ def build_midi(params, output_path):
             form_name = 'generative'
         except Exception as e:
             print(f"  [form] Generative form grammar failed ({e}) — using '{form_name}'")
+    form = fit_form_length(form, prog_bars, bpm)
 
     # Total bars and fill bars (last bar before each section transition)
     TOTAL = sum(prog_bars * n for _, n in form)
@@ -3723,31 +3799,7 @@ def build_midi(params, output_path):
     # whichever attempt the quality gate ends up keeping as best_events --
     # no need to fold this into that loop's bookkeeping.
     section_transitions = _compute_section_transitions(form, prog_bars, bpm)
-
-    # In-track key modulation ("truck driver modulation" -- new research
-    # this session, no existing theory doc covers it, see maybe_modulate_key
-    # for the full rationale). Decided once here, same reasoning as
-    # section_transitions above: form/form_name are fixed pre-retry-loop, so
-    # this is already consistent with whichever attempt wins. Deliberately
-    # NOT applied to drum_ev (drum note numbers select instrument voices,
-    # not pitches -- transposing would swap to a different drum sound) or
-    # sustain_ev (CC64 pedal on/off tuples, a different shape entirely --
-    # _transpose_events assumes a 4-tuple note event).
-    _modulation = maybe_modulate_key(form, form_name)
-    _mod_tick = _mod_semitones = None
-    if _modulation is not None:
-        _mod_sec_idx, _mod_semitones = _modulation
-        _mod_tick = sum(prog_bars * n for _, n in form[:_mod_sec_idx]) * BAR
-
-    def _apply_modulation_tail(events: list[tuple]) -> list[tuple]:
-        """Transpose only the events at/after _mod_tick, leaving the head of
-        the track (before the modulation lands) untouched. No-op when this
-        track didn't roll a modulation."""
-        if _mod_tick is None:
-            return events
-        head = [e for e in events if e[0] < _mod_tick]
-        tail = [e for e in events if e[0] >= _mod_tick]
-        return head + _transpose_events(tail, _mod_semitones)
+    params['full_beat_spans'] = full_beat_spans(form, prog_bars, bpm)
 
     # ── Motif scale (recomputed fresh per retry attempt below) ──
     # Uses the same _resolve_scale() dispatch as build_melody()/
@@ -3821,8 +3873,15 @@ def build_midi(params, output_path):
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                # Bass enters a couple of bars in, but stays in sync with the
+                # chords: build the whole intro's bass line from the section
+                # start and drop the notes before the entry bar. (Starting
+                # build_bass() at the entry bar put the bass one chord behind
+                # the piano and ran it past the end of the intro.)
                 bass_s = sec_start + min(2, prog_bars - 1)
-                bass_ev += build_bass(prog, bass_s, 1, swing, bpm, False, glide=use_glide_bass)
+                bass_ev += [e for e in build_bass(prog, sec_start, n_loops, swing, bpm, False,
+                                                  glide=use_glide_bass)
+                            if bass_s * BAR - S16 <= e[0] < (sec_start + sec_bars) * BAR]
                 hat_s = sec_start + min(2, prog_bars - 1)
                 hat_b = sec_bars - (hat_s - sec_start)
                 if hat_b > 0:
@@ -3960,16 +4019,12 @@ def build_midi(params, output_path):
 
     piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev = best_events
 
-    # ── In-track key modulation: transpose the tail from _mod_tick onward ──
-    # (see _apply_modulation_tail above; a no-op when this track didn't roll
-    # a modulation). drum_ev/sustain_ev are deliberately excluded -- see the
-    # comment where _modulation was decided.
-    piano_ev   = _apply_modulation_tail(piano_ev)
-    bass_ev    = _apply_modulation_tail(bass_ev)
-    mel_ev     = _apply_modulation_tail(mel_ev)
-    pad_ev     = _apply_modulation_tail(pad_ev)
-    cmelo_ev   = _apply_modulation_tail(cmelo_ev)
-    texture_ev = _apply_modulation_tail(texture_ev)
+    # ── Avoid-note filter: no sustained melody note a semitone above the chord ──
+    mel_ev, _n_mel_fix = fix_melodic_clashes(mel_ev, piano_ev)
+    cmelo_ev, _n_cm_fix = fix_melodic_clashes(cmelo_ev, piano_ev)
+    texture_ev, _n_tx_fix = fix_melodic_clashes(texture_ev, piano_ev)
+    if _n_mel_fix + _n_cm_fix + _n_tx_fix:
+        print(f"  [harmony] Moved {_n_mel_fix + _n_cm_fix + _n_tx_fix} clashing note(s) onto chord tones")
 
     # ── Tension arc: replaces flat energy_mult with per-bar dynamic curve ──────
     drum_ev = _apply_tension_to_drums(drum_ev, TOTAL, energy_mult)
@@ -4078,19 +4133,11 @@ def midi_to_wav(midi_path: str, wav_path: str, soundfont: str | None = None,
 
 # ─── ENTRY ────────────────────────────────────────────────────────────────────
 
-def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, song_dna: dict = None,
-                    low_priority: bool = False):
-    print(f"\n[Track {index+1}] Picking parameters...")
-    if song_dna is not None:
-        # Pre-computed params (from generate_tracks' per-track diversity pass)
-        params = dict(song_dna)
-        # Add minor per-track variation so tracks in the same cover aren't identical
-        params['drum_pattern_b'] = (params.get('drum_pattern_b', 3) + index) % len(DRUM_PATTERNS)
-        params['swing'] = round(min(0.70, max(0.58, params.get('swing', 0.62) + random.uniform(-0.03, 0.03))), 2)
-        print(f"  [DNA] bpm={params.get('bpm')} key={params.get('key')} sub={params.get('sub_genre')}")
-    else:
-        params = pick_params(concept_hint=concept_hint, genre_hint=genre_hint)
+_AUDIO_RETRIES = 2   # re-renders allowed when the audio quality gate fails
 
+
+def _render_track(index: int, params: dict, low_priority: bool, attempt: int = 0):
+    """Build MIDI, render, run the FX chain and drum layer. Returns (wav_path, audio_score)."""
     with tempfile.TemporaryDirectory() as tmp:
         midi_path = os.path.join(tmp, 'track.mid')
         raw_wav   = os.path.join(tmp, 'raw.wav')
@@ -4102,7 +4149,7 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
         midi_to_wav(midi_path, raw_wav, soundfont=chosen_sf, low_priority=low_priority)
         print(f"  [FX] Lo-fi chain ({params.get('sub_genre', '?')})...")
         ts = int(time.time())
-        out = os.path.join(MUSIC_DIR, f'track_{ts}_{index:02d}.wav')
+        out = os.path.join(MUSIC_DIR, f'track_{ts}_{index:02d}_{attempt}.wav')
         from scripts.lofi_fx import apply_lofi_fx as _lofi_fx
 
         _lofi_fx(raw_wav, out,
@@ -4120,7 +4167,8 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
                          bpm=params.get('bpm', 80),
                          sub_genre=params.get('sub_genre', 'chillhop'),
                          volume=0.22,
-                         swing=float(params.get('swing', 0.62)))
+                         swing=float(params.get('swing', 0.62)),
+                         spans=params.get('full_beat_spans'))
         except Exception as _de:
             print(f"  [DRUMS] Skipped ({_de})")
 
@@ -4128,12 +4176,8 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
         # — see track_quality.score_audio_quality) on the FINAL rendered
         # WAV, i.e. after FluidSynth render + the full lofi_fx chain + drum
         # layering above — this is the audio the pipeline is actually about
-        # to publish. Deliberately diagnostic only, same as the pre-render
-        # MIDI-structural gates in build_midi(): logs to the recipe log and
-        # stdout, never blocks or retries (the MIDI-level retry loop already
-        # ran; re-rendering audio here would be expensive and there's
-        # nothing cheaper left to swap in). See track_quality.py's module
-        # docstring for the full rationale.
+        # to publish. generate_track() re-renders when the score is below
+        # AUDIO_MIN_QUALITY_SCORE.
         try:
             import soundfile as _sf
             from scripts.track_quality import score_audio_quality
@@ -4143,6 +4187,38 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
             _append_audio_quality_log(out, _audio_score, _audio_failures)
         except Exception as _aqe:
             print(f"  [audio-quality] Scoring skipped ({_aqe})")
+            _audio_score = None
+    return out, _audio_score
+
+
+def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, song_dna: dict = None,
+                    low_priority: bool = False):
+    print(f"\n[Track {index+1}] Picking parameters...")
+    if song_dna is not None:
+        # Pre-computed params (from generate_tracks' per-track diversity pass)
+        params = dict(song_dna)
+        print(f"  [DNA] bpm={params.get('bpm')} key={params.get('key')} sub={params.get('sub_genre')}")
+    else:
+        params = pick_params(concept_hint=concept_hint, genre_hint=genre_hint)
+
+    from scripts.track_quality import AUDIO_MIN_QUALITY_SCORE
+    best_out, best_score = None, None
+    for attempt in range(1 + _AUDIO_RETRIES):
+        out, score = _render_track(index, params, low_priority, attempt)
+        if score is None or score >= AUDIO_MIN_QUALITY_SCORE:
+            if best_out and best_out != out:
+                os.remove(best_out)
+            best_out, best_score = out, score
+            break
+        print(f"  [audio-quality] {score:.2f} is below {AUDIO_MIN_QUALITY_SCORE:.2f} -- "
+              f"re-rendering ({attempt + 1}/{_AUDIO_RETRIES + 1})")
+        if best_score is None or score > best_score:
+            if best_out:
+                os.remove(best_out)
+            best_out, best_score = out, score
+        else:
+            os.remove(out)
+    out = best_out
 
     # Save sidecar metadata for stream now-playing display AND for run.py's
     # concept/meta-alignment step (which stashes sub_genre/bpm/music_engine
@@ -4165,154 +4241,23 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
 
 def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> list[dict]:
     """
-    Pre-compute N diverse param dicts for a multi-track video.
-    Track 0: call pick_params as anchor.
-    Tracks 1+: random fallback with forced sub-genre + key rotation so no two
-               adjacent tracks share the same sub-genre or key.
-    This replaces calling pick_params() N times with the same prompt (which
-    produces monotonous-sounding videos).
+    Param sets for the N tracks of one video. Every track stays in the
+    anchor track's sub-genre (the video is titled, thumbnailed and labelled
+    for one genre) and differs in progression, key and tempo. Every set
+    comes from pick_params(), which derives the melody key from the chosen
+    progression -- building tracks any other way put melodies in a
+    different key from the chords underneath them.
     """
-    all_keys  = list(KEY_ROOTS.keys())
-    all_subs  = list(_SUBGENRE_CONFIG.keys())
-    n_pats    = len(DRUM_PATTERNS)
-
-    # Track 0: anchor
     anchor = pick_params(concept_hint=concept_hint, genre_hint=genre_hint)
     param_sets = [anchor]
-
-    if count == 1:
-        return param_sets
-
-    # Reuse the anchor's self-referential Markov melody table (if pick_params
-    # built one) across all tracks in this video, rather than rebuilding it
-    # per-track — same model, no redundant isobar passes.
-    self_markov = anchor.get('markov_melody_nodes')
-
-    # Build rotation pools — shuffle to avoid always starting at the same place
-    sub_pool  = [s for s in all_subs if s != anchor.get('sub_genre')]
-    key_pool  = [k for k in all_keys if k != anchor.get('key')]
-    random.shuffle(sub_pool)
-    random.shuffle(key_pool)
-
-    for i in range(1, count):
-        # Rotate sub-genre pool
-        if not sub_pool:
-            sub_pool = [s for s in all_subs if s != param_sets[-1].get('sub_genre')]
-            random.shuffle(sub_pool)
-        sub = sub_pool.pop(0)
-
-        # Rotate key pool
-        if not key_pool:
-            key_pool = [k for k in all_keys if k != param_sets[-1].get('key')]
-            random.shuffle(key_pool)
-        key = key_pool.pop(0)
-
-        cfg     = _SUBGENRE_CONFIG[sub]
-        pat_a   = random.choice(cfg['drum_pats']) % n_pats
-        others  = [p % n_pats for p in cfg['drum_pats'] if p % n_pats != pat_a] or [pat_a]
-        pat_b   = random.choice(others)
-
-        # Alternate mood/concept so long videos have a light/dark arc
-        mood = concept_hint or anchor.get('mood', 'lofi dreams')
-        if i % 4 == 2:
-            mood = random.choice([
-                '3am and the city is finally quiet',
-                'borrowed light from a window across the street',
-                'the weight of almost',
-            ])
-        elif i % 4 == 0:
-            mood = random.choice([
-                'sunday morning light through the curtains',
-                'slow mornings that taste like possibility',
-                'the groove that keeps you moving forward',
-            ])
-
-        diverse_energy = cfg.get('energy') or random.choice(['low', 'medium', 'high'])
-        track_params = {
-            'key':            key,
-            'progression':    random.choice(cfg['progs']),
-            'bpm':            random.randint(*cfg['bpm']),
-            'swing':          round(random.uniform(0.58, 0.68), 2),
-            'mood':           mood,
-            'melody_density': random.choice(['sparse', 'medium']),
-            'melody_scale':   random.choice(cfg['scale']),
-            'bass_walking':   random.random() < 0.4,
-            'drum_pattern_a': pat_a,
-            'drum_pattern_b': pat_b,
-            'drum_energy':    diverse_energy,
-            'sub_genre':      sub,
-        }
-        # Same ~35% independent chance for a generated Euclidean pattern as
-        # the single-track pick_params() path — see generate_euclidean_drum_pattern.
-        # Individually try/except'd: a failure here must never abort building
-        # the rest of this track's params, or the whole multi-track video.
-        energy_f = _DRUM_ENERGY_TO_FLOAT.get(diverse_energy, 0.55)
-        complexity_f = round(random.uniform(0.3, 0.8), 2)
-        if random.random() < 0.35:
-            try:
-                track_params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
-                track_params['drum_pattern_a_source'] = 'euclidean'
-            except Exception as e:
-                print(f"  [params] Euclidean drum A generation failed ({e}) — using curated table")
-        elif random.random() < 0.20:
-            try:
-                track_params['drum_pattern_a_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
-                track_params['drum_pattern_a_source'] = 'ca'
-            except Exception as e:
-                print(f"  [params] CA drum A generation failed ({e}) — using curated table")
-        if random.random() < 0.35:
-            try:
-                track_params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
-                track_params['drum_pattern_b_source'] = 'euclidean'
-            except Exception as e:
-                print(f"  [params] Euclidean drum B generation failed ({e}) — using curated table")
-        elif random.random() < 0.20:
-            try:
-                track_params['drum_pattern_b_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
-                track_params['drum_pattern_b_source'] = 'ca'
-            except Exception as e:
-                print(f"  [params] CA drum B generation failed ({e}) — using curated table")
-
-        # Same ~30% chance for a Markov-generated progression as pick_params().
-        if random.random() < 0.30:
-            try:
-                chord_count = len(PROGRESSIONS[track_params['progression']])
-                track_params['generated_progression'] = generate_progression(
-                    length=max(2, min(6, chord_count)),
-                    jazziness=round(random.uniform(0.2, 0.8), 2),
-                )
-            except Exception as e:
-                print(f"  [params] Progression generation failed ({e}) — using curated table")
-
-        # Same ~20% chance for the music21 functional-harmony engine as
-        # pick_params() (see there for the full rationale).
-        if os.getenv('HARMONY_ENGINE_ENABLED', '1') != '0' and random.random() < 0.20:
-            try:
-                from scripts.harmony_engine import generate_functional_progression, center_for_key
-                chord_count = len(PROGRESSIONS[track_params['progression']])
-                center, hmode = center_for_key(key)
-                hp = generate_functional_progression(
-                    tonal_center=center, mode=hmode,
-                    length=max(2, min(6, chord_count)),
-                    secondary_dominant_prob=round(random.uniform(0.2, 0.5), 2),
-                )
-                track_params['harmony_progression'] = hp.chords
-                track_params['harmony_roman_numerals'] = hp.roman_numerals
-            except Exception as e:
-                print(f"  [params] Harmony-engine progression failed ({e}) — using curated table")
-        if self_markov:
-            track_params['markov_melody_nodes'] = self_markov
-
-        # Non-anchor tracks previously never recorded to params history, so
-        # the anti-repeat steering (_pick_key_avoiding_recent etc.) was blind
-        # to ~83% of actually-generated tracks at the default 6-track count.
-        try:
-            _save_params_history(track_params)
-        except Exception as e:
-            print(f"  [params] History save failed ({e}) — continuing")
-
-        param_sets.append(track_params)
-
+    sub = anchor.get('sub_genre')
+    for _ in range(1, count):
+        params = None
+        for _attempt in range(4):
+            params = pick_params(concept_hint=concept_hint, genre_hint=sub)
+            if params.get('progression') != param_sets[-1].get('progression'):
+                break
+        param_sets.append(params)
     return param_sets
 
 
@@ -4320,9 +4265,8 @@ def generate_tracks(count=3, concept_hint: str = None, genre_hint: str = None, s
     import concurrent.futures
     print(f"[MUSIC] Generating {count} track(s)...")
 
-    # For standard generation (no song_dna), pre-compute diverse params per track
-    # so each track has a unique sub-genre, key, BPM, and progression.
-    # Without this, all N tracks call pick_params() independently and can collide.
+    # Pre-compute one param set per track: same sub-genre for the whole video,
+    # a different progression/key/tempo per track (see _build_diverse_params).
     if song_dna is None and count > 1:
         param_sets = _build_diverse_params(count, concept_hint, genre_hint)
         print(f"  [MUSIC] Track plan: {' → '.join(p['sub_genre'] for p in param_sets)}")

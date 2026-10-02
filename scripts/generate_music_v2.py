@@ -39,7 +39,8 @@ from scripts.composer import (  # noqa: E402
     _SUBGENRE_TEXTURE, _SUBGENRE_DRUM_KITS, _DEFAULT_DRUM_KIT_POOL,
     _SONG_FORMS, _FORM_BY_SUBGENRE, _SCALE_MODAL_LIFT, generate_song_form,
     maybe_sub_chord, _tension, _apply_tension_to_drums, _chord_pcs_at_bar,
-    pick_params, _build_diverse_params,
+    pick_params, _build_diverse_params, fix_melodic_clashes, fit_form_length,
+    full_beat_spans, _AUDIO_RETRIES,
     _save_melody_pitch_classes, _append_recipe_log, _append_audio_quality_log,
     midi_to_wav, _pick_soundfont, MUSIC_DIR,
     GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_BASS, GM_STRINGS, GM_WARM_PAD,
@@ -727,7 +728,7 @@ def build_melody_v2(
     var_idx   = 0
     events    = []
     bar       = start_bar
-    rest_min  = 2 if density == 'sparse' else 1
+    rest_min  = 1 if density == 'sparse' else 0   # bars of rest after a phrase
 
     while bar < start_bar + num_bars:
         if random.random() < 0.72:
@@ -735,17 +736,19 @@ def build_melody_v2(
             var_idx += 1
             phrase_len   = len(phrase_pitches)
             phrase_start = bar * 16 + random.randint(0, 5)
+            phrase_last_g = phrase_start
 
             prev_note: int | None = None
             for i, note in enumerate(phrase_pitches):
                 g = phrase_start + i * random.randint(2, 5)
                 if g >= (start_bar + num_bars) * 16:
                     break
+                phrase_last_g = g
 
-                # Chord-aware note selection
+                # Chord-aware note selection, against the chord under this note
                 chord_pcs: set[int] = set()
                 if progression and prog_bars:
-                    chord_pcs = _chord_pcs_at_bar(progression, bar, prog_bars)
+                    chord_pcs = _chord_pcs_at_bar(progression, g // 16, prog_bars)
 
                 note = _pick_melody_note(notes_scale, chord_pcs, prev_note, markov_nodes)
 
@@ -782,9 +785,12 @@ def build_melody_v2(
                     dur = int(dur * 1.5)
                 events.append((t, note, _gauss_velocity(70 + vel_bonus + vel_arc, 13), dur))
 
-            bar += phrase_len + random.randint(rest_min, rest_min + 3)
+            # Advance by the phrase's real length in bars (it used to add the
+            # phrase's note count as bars, leaving most bars empty).
+            phrase_bars = max(1, -(-(phrase_last_g + 4 - phrase_start) // 16))
+            bar += phrase_bars + random.randint(rest_min, rest_min + 1)
         else:
-            bar += random.randint(2, 5)
+            bar += random.randint(1, 2)
 
     return events
 
@@ -1071,7 +1077,9 @@ def build_midi_v2(params: dict, output_path: str) -> str:
             form_name = 'generative'
         except Exception as e:
             print(f"  [form] Generative form grammar failed ({e}) — using '{form_name}'")
+    form      = fit_form_length(form, prog_bars, bpm)
     TOTAL     = sum(prog_bars * n for _, n in form)
+    params['full_beat_spans'] = full_beat_spans(form, prog_bars, bpm)
     fill_bars: set[int] = set()
     c = 0
     for _sec, _n in form:
@@ -1127,8 +1135,10 @@ def build_midi_v2(params: dict, output_path: str) -> str:
                 piano_ev   += build_chords_v2(prog, sec_start, n_loops, swing, bpm, ga_flag, optimizer_log)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
+                # Enter a couple of bars in, in sync with the chords (see composer.py).
                 bass_s = sec_start + min(2, prog_bars - 1)
-                bass_ev += build_bass_v2(prog, bass_s, 1, swing, bpm, False)
+                bass_ev += [e for e in build_bass_v2(prog, sec_start, n_loops, swing, bpm, False)
+                            if bass_s * BAR - S16 <= e[0] < (sec_start + sec_bars) * BAR]
                 hat_s = sec_start + min(2, prog_bars - 1)
                 hat_b = sec_bars - (hat_s - sec_start)
                 if hat_b > 0:
@@ -1221,6 +1231,9 @@ def build_midi_v2(params: dict, output_path: str) -> str:
               f"(failures: {best_failures}) — using best attempt, not blocking upload")
 
     piano_ev, bass_ev, drum_ev, mel_ev, pad_ev, cmelo_ev, texture_ev, sustain_ev = best_events
+    mel_ev, _ = fix_melodic_clashes(mel_ev, piano_ev)
+    cmelo_ev, _ = fix_melodic_clashes(cmelo_ev, piano_ev)
+    texture_ev, _ = fix_melodic_clashes(texture_ev, piano_ev)
 
     drum_ev = _apply_tension_to_drums(drum_ev, TOTAL, energy_mult)
 
@@ -1266,21 +1279,8 @@ def build_midi_v2(params: dict, output_path: str) -> str:
 
 # ── 8. Entry points (same interface as v1) ──────────────────────────────────────
 
-def generate_track(
-    index: int = 0,
-    concept_hint: str | None = None,
-    genre_hint: str | None = None,
-    song_dna: dict | None = None,
-) -> str:
-    print(f"\n[Track {index+1}] Picking parameters (v2)...")
-    if song_dna is not None:
-        params = dict(song_dna)
-        params['drum_pattern_b'] = (params.get('drum_pattern_b', 3) + index) % len(DRUM_PATTERNS)
-        params['swing'] = round(min(0.70, max(0.58, params.get('swing', 0.62) + random.uniform(-0.03, 0.03))), 2)
-        print(f"  [DNA] bpm={params.get('bpm')} key={params.get('key')} sub={params.get('sub_genre')}")
-    else:
-        params = pick_params(concept_hint=concept_hint, genre_hint=genre_hint)
-
+def _render_track_v2(index: int, params: dict, attempt: int = 0):
+    """Build MIDI, render, run the FX chain and drum layer. Returns (wav_path, audio_score)."""
     with tempfile.TemporaryDirectory() as tmp:
         midi_path = os.path.join(tmp, 'track.mid')
         raw_wav   = os.path.join(tmp, 'raw.wav')
@@ -1292,7 +1292,7 @@ def generate_track(
         midi_to_wav(midi_path, raw_wav, soundfont=chosen_sf)
         print(f"  [FX] Lo-fi chain ({params.get('sub_genre', '?')})...")
         ts  = int(time.time())
-        out = os.path.join(MUSIC_DIR, f'track_{ts}_{index:02d}.wav')
+        out = os.path.join(MUSIC_DIR, f'track_{ts}_{index:02d}_{attempt}.wav')
         from scripts.lofi_fx import apply_lofi_fx as _lofi_fx
         _lofi_fx(raw_wav, out,
                  sub_genre=params.get('sub_genre'),
@@ -1306,7 +1306,8 @@ def generate_track(
                          bpm=params.get('bpm', 80),
                          sub_genre=params.get('sub_genre', 'chillhop'),
                          volume=0.22,
-                         swing=float(params.get('swing', 0.62)))
+                         swing=float(params.get('swing', 0.62)),
+                         spans=params.get('full_beat_spans'))
         except Exception as _de:
             print(f"  [DRUMS] Skipped ({_de})")
 
@@ -1322,11 +1323,47 @@ def generate_track(
             _append_audio_quality_log(out, _audio_score, _audio_failures)
         except Exception as _aqe:
             print(f"  [audio-quality] Scoring skipped ({_aqe})")
+            _audio_score = None
 
     # music_engine hardcoded "v2" — this is the v2 generator's own sidecar
     # write (does not reuse composer.generate_track()). See the
     # matching block there for the "v1" counterpart and why bpm/music_engine
     # are stashed here (run.py's meta-alignment -> analytics feedback loop).
+    return out, _audio_score
+
+
+def generate_track(
+    index: int = 0,
+    concept_hint: str | None = None,
+    genre_hint: str | None = None,
+    song_dna: dict | None = None,
+) -> str:
+    print(f"\n[Track {index+1}] Picking parameters (v2)...")
+    if song_dna is not None:
+        params = dict(song_dna)
+        print(f"  [DNA] bpm={params.get('bpm')} key={params.get('key')} sub={params.get('sub_genre')}")
+    else:
+        params = pick_params(concept_hint=concept_hint, genre_hint=genre_hint)
+
+    from scripts.track_quality import AUDIO_MIN_QUALITY_SCORE
+    best_out, best_score = None, None
+    for attempt in range(1 + _AUDIO_RETRIES):
+        out, score = _render_track_v2(index, params, attempt)
+        if score is None or score >= AUDIO_MIN_QUALITY_SCORE:
+            if best_out and best_out != out:
+                os.remove(best_out)
+            best_out, best_score = out, score
+            break
+        print(f"  [audio-quality] {score:.2f} is below {AUDIO_MIN_QUALITY_SCORE:.2f} -- "
+              f"re-rendering ({attempt + 1}/{_AUDIO_RETRIES + 1})")
+        if best_score is None or score > best_score:
+            if best_out:
+                os.remove(best_out)
+            best_out, best_score = out, score
+        else:
+            os.remove(out)
+    out = best_out
+
     with open(out + '.meta.json', 'w', encoding='utf-8') as _mf:
         json.dump({'title': params.get('mood', 'lofi dreams'),
                    'genre': params.get('sub_genre', 'lo-fi hip hop'),
