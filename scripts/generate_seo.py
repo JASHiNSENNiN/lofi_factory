@@ -322,10 +322,10 @@ CROSS_GENRE_POOL = [
      "four on the floor. but quieter. but warmer.",
      ["lofi house music", "house beats study", "deep house lofi", "4/4 lofi", "house lofi"]),
     ("bedroom pop lofi",
-     "recorded in a bedroom. heard like a memory.",
+     "small, close, a little out of focus. heard like a memory.",
      ["bedroom pop lofi", "indie lofi", "guitar lofi", "diy study music", "bedroom lofi"]),
     ("lofi rnb",
-     "al green at midnight. muffled through the walls.",
+     "old soul records at midnight. muffled through the walls.",
      ["lofi rnb", "soul lofi", "rnb study music", "r&b lofi beats", "neo soul lofi"]),
 ]
 
@@ -370,7 +370,7 @@ TITLE_PATTERNS_TEMPORAL = {
         "lofi hip hop · {genre}, it's {time} and you're still awake — {duration}",
         "study music · {time}, the deadline blinked first — {duration} 📚",
         "lofi · {genre}, {time}, headphones in, world out — {duration} 🎵",
-        "lofi hip hop, {time}, still {activity}, {duration}",
+        "lofi hip hop, {time}, still on {activity}, {duration}",
     ],
     "benefit_list": [
         "lofi hip hop · {genre} · {time} · {benefits} — {duration}",
@@ -411,7 +411,7 @@ TITLE_PATTERNS_EMOTIONAL = {
     "statement": [
         "lofi hip hop · {genre}, {emotional_state} but the cursor is moving again — {duration}",
         "study music · for the {emotional_state} ones still at their desk — {duration} 🌙",
-        "lofi · {genre}, {emotional_state} and somehow still {activity} — {duration}",
+        "lofi · {genre}, {emotional_state} and somehow still on {activity} — {duration}",
         "lofi hip hop · {duration} · {emotional_state}. working anyway.",
     ],
     "benefit_list": [
@@ -465,7 +465,7 @@ TITLE_PATTERNS_CROSSGENRE = {
     "spec_led": [
         "{duration} of {genre} lofi for {activity}",
         "{duration} · {genre} · lofi hip hop",
-        "{duration} straight lofi · {genre}, no loop",
+        "{duration} straight lofi · {genre}, one long set",
         "{genre} lofi · {duration} · {activity}",
     ],
 }
@@ -633,7 +633,6 @@ TAGS_LONGTAIL = [
     "calm music for anxiety and stress",
     "lo fi hip hop beats",
     "music to help you focus",
-    "lofi beats no copyright",
     "lofi music for work from home",
     "best lofi music 2026",
     "lofi playlist for studying 2026",
@@ -752,11 +751,11 @@ DESCRIPTION_HOOKS = [
     "{mood_line}",
     "{city_phrase}.",
     "you found this for a reason.",
-    "no ads. no interruptions. just {duration} of lofi frequencies.",
+    "just {duration} of lofi, start to finish.",
     "{time_phrase}. {mood_line}.",
     "close the other tabs. this one stays.",
     "for the {activity} sessions that go longer than planned.",
-    "{duration} of uninterrupted beats. that's the promise.",
+    "{duration} of beats, start to finish.",
     "signal found. tuning in.",
     "ambient transmission from somewhere soft.",
     "the frequency is always on.",
@@ -766,7 +765,7 @@ DESCRIPTION_HOOKS = [
 ]
 
 DESCRIPTION_BODY = """
-{genre_label} · {duration} for {activity} · no ads, no interruptions.
+{genre_label} · {duration} for {activity}.
 
 {mood_hook}
 
@@ -810,7 +809,7 @@ def _build_setting_story(concept: dict) -> str:
             f"Imagine: a {setting} in {city}, {time_}. {m} Just you, your {act}, and this.",
             f"It's {time_} somewhere in {city}. The {setting} is quiet. This is your background.",
             f"{city}, {time_}. The {setting} hums. You've got {act} to finish. This stays on.",
-            f"A {setting} in {city} at {time_}. {m} {dur} of uninterrupted focus.",
+            f"A {setting} in {city} at {time_}. {m} {dur} of steady focus.",
             f"You're in a {setting} in {city}. It's {time_}. Nothing else matters right now.",
             f"{city} has a specific energy at {time_}. This was made for that exact moment.",
             f"The {setting} in {city} at {time_} — that's the vibe. {m}",
@@ -1137,6 +1136,30 @@ def _benefit_tail(trends: dict | None = None) -> str:
     return ", ".join(random.sample(_BENEFIT_KEYWORDS, random.choice([2, 3])))
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower().replace("lo-fi", "lofi").replace("lo fi", "lofi")).strip()
+
+
+def tidy_title(title: str) -> str:
+    """Remove the repetition the pattern templates produce: a " · " segment
+    already contained in another segment ("lofi hip hop · lo-fi hip hop, ...")
+    and the same word twice in a row ("lofi lofi")."""
+    segments = [seg for seg in title.split(" · ") if seg.strip()]
+    kept: list[str] = []
+    for i, seg in enumerate(segments):
+        n = _norm(seg)
+        others = [_norm(o) for j, o in enumerate(segments) if j != i]
+        dup_later = any(n == o for o in others[i:])
+        contained = n and any(n != o and re.search(rf"\b{re.escape(n)}\b", o) for o in others)
+        if not dup_later and not contained:
+            kept.append(seg)
+    title = " · ".join(kept) if kept else title
+    # "lofi lofi", "lo-fi lofi": drop the second of two equal adjacent words
+    words = title.split(" ")
+    out = [w for k, w in enumerate(words) if k == 0 or _norm(w) == "" or _norm(w) != _norm(words[k - 1])]
+    return " ".join(out)
+
+
 def build_title(concept: dict, duration: str, strategy: str | None = None,
                  trends: dict | None = None) -> str:
     """Build one title from the concept's pillar pattern set.
@@ -1197,7 +1220,7 @@ def build_title(concept: dict, duration: str, strategy: str | None = None,
         # (preserves the old flat-random-across-all-10 behavior).
         candidates = [p for plist in patterns_by_strategy.values() for p in plist]
     pattern = random.choice(candidates)
-    title = pattern.format(**format_kwargs)
+    title = tidy_title(pattern.format(**format_kwargs))
 
     # Trim to 100 chars (YouTube hard limit) at a word boundary
     if len(title) > 100:

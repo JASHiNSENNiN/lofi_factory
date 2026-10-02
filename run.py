@@ -188,32 +188,10 @@ def main():
     print(f"  Concept:  {concept_hint or '(random)'}")
     print("=" * 60)
 
-    # ── STEP 1: Visual ─────────────────────────────────────────
-    # Derive short now-playing title + genre from the concept for the UI panel
-    np_title = concept.get("mood_line") or concept.get("concept") or "lofi dreams"
-    np_genre = concept.get("genre_label", "lo-fi hip hop")
-
-    if not args.skip_visual:
-        vis_secs = 60
-        print("\n[1/5] Generating lo-fi visual (radio interface)...")
-        from scripts.visual_v2 import generate_visual
-        visual_path, theme = generate_visual(
-            theme_name=theme, duration_secs=vis_secs,
-            visual_seed=args.visual_seed,
-            track_title=np_title, genre=np_genre,
-        )
-    else:
-        print("\n[1/5] Skipping visual generation (using existing)")
-        import glob
-        visuals = glob.glob(os.path.join(ROOT, "visuals", "bg_*.mp4"))
-        visual_path = max(visuals, key=os.path.getmtime) if visuals else None
-        if not visual_path:
-            print("  WARNING: No visual found. Assembler will generate a gradient fallback.")
-
-    # ── STEP 2: Music ──────────────────────────────────────────
+    # ── STEP 1: Music ──────────────────────────────────────────
     generated_tracks = []
     if not args.skip_music:
-        print("\n[2/5] Generating music...")
+        print("\n[1/5] Generating music...")
         if args.music_v2 is None:
             # No explicit --music-v2/--no-music-v2 on the CLI — let the
             # engagement-analytics engine bandit choose (neutral 50/50
@@ -239,7 +217,7 @@ def main():
             from scripts.composer import generate_tracks
         generated_tracks = generate_tracks(count=music_count, concept_hint=concept_hint, genre_hint=genre_hint)
     else:
-        print("\n[2/5] Skipping music generation (using existing files)")
+        print("\n[1/5] Skipping music generation (using existing files)")
 
     # Align concept genre_label + mood_line with what was actually generated.
     # pick_concept() guesses the genre up-front; the algorithm may pick a different
@@ -275,6 +253,30 @@ def main():
                 print(f"  [SEO] Aligned to music: genre={concept['genre_label']!r} mood={concept['mood_line']!r}")
             except Exception as _e:
                 print(f"  [SEO] Alignment skipped ({_e})")
+
+    # ── STEP 2b: Visual ────────────────────────────────────────
+    # Rendered after the music so its genre badge names the genre that
+    # actually plays (every track in a video shares one sub-genre).
+    # Derive short now-playing title + genre from the concept for the UI panel
+    np_title = concept.get("mood_line") or concept.get("concept") or "lofi dreams"
+    np_genre = concept.get("genre_label", "lo-fi hip hop")
+
+    if not args.skip_visual:
+        vis_secs = 60
+        print("\n[2/5] Generating lo-fi visual (radio interface)...")
+        from scripts.visual_v2 import generate_visual
+        visual_path, theme = generate_visual(
+            theme_name=theme, duration_secs=vis_secs,
+            visual_seed=args.visual_seed,
+            track_title=np_title, genre=np_genre,
+        )
+    else:
+        print("\n[2/5] Skipping visual generation (using existing)")
+        import glob
+        visuals = glob.glob(os.path.join(ROOT, "visuals", "bg_*.mp4"))
+        visual_path = max(visuals, key=os.path.getmtime) if visuals else None
+        if not visual_path:
+            print("  WARNING: No visual found. Assembler will generate a gradient fallback.")
 
     # ── STEP 3: SEO ────────────────────────────────────────────
     print("\n[3/5] Generating SEO metadata...")

@@ -17,7 +17,6 @@ def _snapshot(fetched_at: str, videos: list[dict]) -> dict:
         "trending_tags": [],
         "trending_duration": {},
         "yt_videos": videos,
-        "yt_dlp_videos": [],
         "season": "summer",
         "seasonal_keywords": [],
         "fetched_at": fetched_at,
@@ -126,7 +125,6 @@ def test_compute_trend_deltas_zero_prev_views_delta_pct_none():
 # ── get_trend_snapshot: append-only history ─────────────────────────────────
 def _patch_fetchers(monkeypatch, videos):
     monkeypatch.setattr(tr, "fetch_yt_trending", lambda max_results=20: videos)
-    monkeypatch.setattr(tr, "fetch_yt_dlp_trending", lambda max_results=15: [])
 
 
 def test_get_trend_snapshot_appends_new_snapshot_on_force_refresh(tmp_path, monkeypatch):

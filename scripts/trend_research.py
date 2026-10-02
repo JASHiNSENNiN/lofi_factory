@@ -248,50 +248,6 @@ def _parse_duration(iso_dur: str) -> str:
     return f"{mins} min"
 
 
-# ── Source 1b: yt-dlp scraping ───────────────────────────────────────────────
-
-def fetch_yt_dlp_trending(max_results: int = 15) -> list[dict]:
-    """
-    Scrape metadata from YouTube search using yt-dlp (no download).
-    Returns list of {title, channel, views, duration, thumbnail_url, description_snippet}.
-    Falls back to [] on any failure.
-    """
-    try:
-        import yt_dlp  # noqa: F401
-    except ImportError:
-        return []
-
-    try:
-        from scripts.ytdlp_util import flat_search_opts
-
-        # extract_flat=True: pulls search-result metadata without resolving each
-        # video's player API, which dodges YouTube's "confirm you're not a bot"
-        # gate on server IPs. We only need title/channel/views here anyway.
-        ydl_opts = flat_search_opts()
-        results = []
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(
-                f"ytsearch{max_results}:lofi hip hop study music",
-                download=False,
-            )
-            entries = (info or {}).get("entries") or []
-            for entry in entries:
-                if not entry:
-                    continue
-                results.append({
-                    "title":               entry.get("title", ""),
-                    "channel":             entry.get("channel") or entry.get("uploader", ""),
-                    "views":               entry.get("view_count") or 0,
-                    "duration":            entry.get("duration_string") or entry.get("duration") or "",
-                    "thumbnail_url":       entry.get("thumbnail", ""),
-                    "description_snippet": (entry.get("description") or "")[:200],
-                })
-        return results
-    except Exception as ex:
-        print(f"  [Trends/yt-dlp] fetch failed: {ex}")
-        return []
-
-
 # ── Thumbnail theme suggestion ────────────────────────────────────────────────
 
 _VALID_THEMES = [
@@ -446,14 +402,6 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
     yt_videos = fetch_yt_trending(max_results=20)
     trending_titles = [v["title"] for v in yt_videos]
 
-    # yt-dlp supplemental scrape — deduplicate against API titles
-    yt_dlp_videos = fetch_yt_dlp_trending(max_results=15)
-    _existing_titles_lower = {t.lower() for t in trending_titles}
-    for v in yt_dlp_videos:
-        if v["title"].lower() not in _existing_titles_lower:
-            trending_titles.append(v["title"])
-            _existing_titles_lower.add(v["title"].lower())
-
     # Aggregate tags from trending videos — lofi-relevant terms only
     _LOFI_TAG_ALLOW = {
         "lofi", "lo-fi", "lo fi", "chill", "study", "focus", "ambient",
@@ -480,7 +428,6 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
         "trending_tags":      trending_tags,
         "trending_duration":  dur_dist,
         "yt_videos":          yt_videos,      # full rows incl. view counts -- see compute_trend_deltas()
-        "yt_dlp_videos":      yt_dlp_videos,
         "season":             season,
         "seasonal_keywords":  seasonal_kw,
         "fetched_at":         _now_iso(),

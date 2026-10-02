@@ -47,10 +47,11 @@ def make_gradient_bg(theme: str, seed: int = 11) -> np.ndarray:
     pattern. See reaction_diffusion.py.
     """
     c = THEMES[theme]
-    if random.random() < 0.12:
+    rng = random.Random(seed)   # seeded, so --visual-seed reproduces the choice
+    if rng.random() < 0.12:
         try:
             from .reaction_diffusion import gray_scott_bg, PRESETS
-            preset = random.choice(list(PRESETS.keys()))
+            preset = rng.choice(list(PRESETS.keys()))
             result = gray_scott_bg(c, W, H, preset=preset, seed=seed)
             _log_bg_choice(theme, 'gray_scott', preset)
             return result

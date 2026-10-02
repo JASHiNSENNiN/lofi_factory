@@ -29,31 +29,33 @@ def test_too_short_result_falls_back():
 
 
 def test_strips_leading_genre_tag_and_trailing_em_dash_duration():
-    # Word-boundary-trimmed to _SHORT_TITLE_MAX_CHARS (20, tightened
-    # 2026-08-16 to match researched YouTube-thumbnail CTR guidance --
-    # shorter, higher-impact phrases read better at thumbnail-grid size).
-    title = "lofi hip hop · the deadline blinked first — 3 hours"
-    assert _derive_short_title(title) == "the deadline blinked"
+    title = "lofi hip hop · the quiet hour — 3 hours"
+    assert _derive_short_title(title) == "the quiet hour"
 
 
 def test_strips_leading_tag_and_trailing_parenthetical_duration():
-    title = "lofi hip hop · you said five more minutes (10 minutes ago)"
-    assert _derive_short_title(title) == "you said five more"
+    title = "lofi hip hop · after the storm (10 minutes ago)"
+    assert _derive_short_title(title) == "after the storm"
+
+
+def test_never_cuts_a_clause_into_a_half_phrase():
+    # Cutting "you said five more minutes" to fit gave "you said five more";
+    # with no whole clause short enough, it falls back to the theme phrases.
+    assert _derive_short_title("lofi hip hop · you said five more minutes — 1 hour") is None
+    assert _derive_short_title("lofi · made for tired but focused nights") is None
 
 
 def test_result_never_exceeds_max_chars():
     title = ("lofi hip hop · a genuinely extremely long descriptive clause "
               "that goes way past the thumbnail budget — 2 hours")
     result = _derive_short_title(title)
-    assert result is not None
-    assert len(result) <= _SHORT_TITLE_MAX_CHARS
+    assert result is None or len(result) <= _SHORT_TITLE_MAX_CHARS
 
 
 def test_truncation_never_leaves_a_dangling_open_paren():
     title = "lofi hip hop · purple dusk focus (the deep work kind) — 2 hours"
     result = _derive_short_title(title)
-    assert result is not None
-    assert result.count("(") <= result.count(")")
+    assert result is None or result.count("(") <= result.count(")")
 
 
 def test_handles_title_with_no_genre_tag_separator():

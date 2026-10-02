@@ -69,7 +69,6 @@ only matter once you're actually uploading or streaming.
 |---|---|---|
 | `YT_STREAM_KEY` | live streaming | YouTube RTMP stream key (fallback path — see `scripts/youtube_live_manager.py` for the API-managed alternative) |
 | `YT_CHANNEL_ID` | upload/analytics | |
-| `YTDLP_COOKIES` | trending-topic scraping | Optional, path to a cookies file |
 | `LOFI_STREAM_ALERT_WEBHOOK` | live streaming | Optional Slack/Discord-compatible webhook, pinged after repeated stream reconnect failures |
 | `WEBUI_PASSWORD` | web control panel | **Mandatory** if you run `webui.py` — it's exposed publicly via the Cloudflare tunnel in `deploy/setup.sh` |
 | `WEBUI_SECRET` | web control panel | Session-cookie signing key; auto-generated per boot (logs everyone out on restart) if unset |

@@ -176,43 +176,61 @@ _TRAILING_DURATION_RE = re.compile(r"\s*(?:—\s*.*|\([^()]*\))\s*$")
 _SHORT_TITLE_MAX_CHARS = 20
 
 
+_DANGLING = {"of", "for", "to", "and", "the", "a", "an", "in", "on", "at", "with",
+             "but", "or", "your", "my", "still", "straight", "no", "from", "by"}
+# Words that only say "what genre / how long"; a clause made of nothing else
+# describes no scene and is useless on a thumbnail.
+_TAG_WORDS = {"lofi", "lo-fi", "hip", "hop", "study", "music", "beats", "chill",
+              "mix", "of", "straight", "hour", "hours", "min", "minutes", "jazz",
+              "soul", "neo", "city", "pop", "house", "rnb", "bossa", "nova",
+              "ambient", "vaporwave", "chillhop", "phonk", "synthwave", "garage",
+              "classical", "piano", "funk", "drill", "dark", "bedroom", "anime"}
+
+
+_NOT_A_SCENE = re.compile(r"\b\d+\s*(hour|hours|min)\b|^no\b|\bone long set\b|\bcheck back\b")
+
+
+def _is_tag_only(clause: str) -> bool:
+    """True for clauses that describe no scene: only genre/duration words,
+    a duration ("1 hour to sleep"), or a disclaimer ("no commentary")."""
+    words = [w.strip(",.").lower() for w in clause.split()]
+    return (all(w in _TAG_WORDS or w.isdigit() for w in words)
+            or bool(_NOT_A_SCENE.search(clause.lower())))
+
+
+def _clean_end(text: str) -> str:
+    """Strip trailing punctuation, numbers and words that can't end a phrase."""
+    words = text.strip(" ,·—-").split()
+    while words and (words[-1].lower().strip(",.") in _DANGLING or words[-1].strip(",.").isdigit()):
+        words.pop()
+    return " ".join(words).strip(" ,·—-")
+
+
 def _derive_short_title(full_title: str) -> str | None:
     """
-    Derive a short, thumbnail-card-sized phrase from the actual generated SEO
-    title (e.g. "lofi hip hop · it's midnight and you're still awake — 2
-    hours" -> "it's midnight and you're still awake"), so the thumbnail and
-    the video title agree on what the video is about instead of the
-    thumbnail drawing an unrelated phrase from a small static per-theme pool.
-    Returns None if the derived phrase isn't usable (too short/long after
-    trimming), so the caller can fall back to the theme's template pool.
+    Short, thumbnail-sized phrase from the real SEO title, so thumbnail and
+    title describe the same video. Picks the most descriptive whole clause
+    that fits (clauses are separated by " · ", "," and " — "), skipping
+    clauses that are only genre/duration tags, and never ends on a dangling
+    word. Returns None when nothing usable is left, so the caller falls back
+    to the theme's template phrases.
     """
     if not full_title:
         return None
     text = _EMOJI_RE.sub("", full_title).strip()
-    # Drop the leading "lofi hip hop · " / "study music · " / "lofi · " tag.
-    if " · " in text:
-        text = text.split(" · ", 1)[1]
-    # Drop a trailing " — <duration>" or "(<duration>)" clause.
     text = _TRAILING_DURATION_RE.sub("", text).strip(" -—·")
-    if len(text) > _SHORT_TITLE_MAX_CHARS:
-        # Trim to the last full word that fits, rather than rejecting
-        # outright -- most generated clauses run a little over budget, and a
-        # clean word-boundary cut still reads better than falling back to an
-        # unrelated static template phrase.
-        words, trimmed = text.split(), ""
-        for word in words:
-            candidate = f"{trimmed} {word}".strip()
-            if len(candidate) > _SHORT_TITLE_MAX_CHARS:
-                break
-            trimmed = candidate
-        text = trimmed
-        if text.count("(") > text.count(")"):
-            # Truncation landed inside an unclosed parenthetical -- cut
-            # before it rather than leaving a dangling "(" on the card.
-            text = text.rsplit("(", 1)[0].strip()
-    if len(text) < 4:
+    clauses = [c.strip() for c in re.split(r"\s+·\s+|,\s+|\s+—\s+", text) if c.strip()]
+    # Only whole clauses: cutting a longer clause short gives half-phrases
+    # like "made for tired", so if nothing fits, use the theme's own phrases.
+    fitting = [_clean_end(c) for c in clauses
+               if len(c) <= _SHORT_TITLE_MAX_CHARS and not _is_tag_only(c)]
+    fitting = [c for c in fitting if len(c.split()) >= 2 and not _is_tag_only(c)]
+    if not fitting:
         return None
-    return text.lower()
+    best = max(fitting, key=len)
+    if len(best) < 4 or len(best.split()) < 2:
+        return None
+    return best.lower()
 
 
 # ── Font management ────────────────────────────────────────────────────────────
@@ -619,7 +637,9 @@ def _scene_colors(theme: str) -> tuple[tuple[int, int, int, int], tuple[int, int
         max(0, c["bg_top"][2] // 3),
         235,
     )
-    rim = (*c["accent"], 100)
+    # Bright enough to outline the shape: without a rim light a near-black
+    # silhouette disappears into the night-sky backgrounds.
+    rim = (*c["accent"], 170)
     return fill, rim
 
 
@@ -629,15 +649,15 @@ def _silhouette_listener(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, flo
     head_r = scale * 0.17
     head_cy = cy - scale * 0.18
     shoulder_w = scale * 0.55
-    shoulder_top = head_cy + head_r * 0.7
+    shoulder_top = head_cy + head_r * 1.15   # small neck gap below the head
     shoulder_bot = cy + scale * 0.42
-    draw.polygon([
-        (cx - shoulder_w * 0.35, shoulder_top),
-        (cx + shoulder_w * 0.35, shoulder_top),
-        (cx + shoulder_w * 0.5, shoulder_bot),
-        (cx - shoulder_w * 0.5, shoulder_bot),
-    ], fill=fill)
-    draw.ellipse([cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r], fill=fill)
+    # Rounded shoulders (a straight-sided trapezoid read as a tombstone),
+    # rim-lit so the shape reads against a dark background.
+    draw.rounded_rectangle(
+        [cx - shoulder_w * 0.5, shoulder_top, cx + shoulder_w * 0.5, shoulder_bot],
+        radius=int(shoulder_w * 0.32), fill=fill, outline=rim, width=2)
+    draw.ellipse([cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r],
+                 fill=fill, outline=rim, width=2)
     band_r = head_r * 1.25
     draw.arc(
         [cx - band_r, head_cy - band_r * 1.1, cx + band_r, head_cy + band_r * 0.9],
@@ -893,8 +913,10 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
 
     # Mixed case title — much more elegant than ALL CAPS
     title_text = short_title.title()
-    sub_text   = f"lofi  ·  {duration}"
-    deco_text  = "*"
+    # The duration is already on the corner badge; don't print it twice.
+    sub_text   = "lofi beats"
+    # No deco mark: the intended ✦ isn't in the title font and rendered as "*".
+    deco_text  = ""
 
     pad_x    = 44
     pad_top  = 18
@@ -907,12 +929,18 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
     deco_font  = _load_font(font_path, 26)
 
     tw_s, th_s = _text_size(draw, sub_text,  sub_font)
-    tw_d, th_d = _text_size(draw, deco_text, deco_font)
+    tw_d, th_d = (0, 0) if not deco_text else _text_size(draw, deco_text, deco_font)
+    # Glyph boxes start below the draw origin (the font's top bearing), so
+    # the title's real bottom edge is its box bottom, not its box height.
+    th_t = draw.textbbox((0, 0), title_text, font=title_font,
+                         stroke_width=max(3, title_font.size // 16))[3]
+    th_s = draw.textbbox((0, 0), sub_text, font=sub_font)[3]
 
     # Card dimensions: pad around the widest element
     inner_w  = max(tw_t, tw_s, tw_d)
     card_w   = min(inner_w + pad_x * 2, max_card_w)
-    card_h   = pad_top + th_d + 10 + th_t + rule_gap + 2 + rule_gap + th_s + pad_bot
+    deco_h   = th_d + 10 if deco_text else 0
+    card_h   = pad_top + deco_h + th_t + rule_gap + 2 + rule_gap + th_s + pad_bot
 
     card_x, card_y = _card_position(layout, side, card_w, card_h)
 
@@ -978,9 +1006,10 @@ def _draw_text_card(
 
     # ── Deco mark ✦ ──
     cur_y = card_y + pad_top
-    dx    = card_x + (card_w - tw_d) // 2
-    draw.text((dx, cur_y), deco_text, font=deco_font, fill=(*c["accent"], 210))
-    cur_y += th_d + 10
+    if deco_text:
+        dx = card_x + (card_w - tw_d) // 2
+        draw.text((dx, cur_y), deco_text, font=deco_font, fill=(*c["accent"], 210))
+        cur_y += th_d + 10
 
     # ── Title ──
     # Real stroke_width outline (native since Pillow 6.2, not a hand-rolled
@@ -1133,7 +1162,9 @@ def _draw_watermark(img: Image.Image) -> Image.Image:
                 radius=1, fill=(210, 210, 210, 130),
             )
 
-        text = "lofi factory"
+        # Same channel name the video frame shows (one brand, not two).
+        from scripts.visual_v2.config import CHANNEL_NAME
+        text = CHANNEL_NAME.lower()
         x, y = gx + len(heights) * (bar_w + 3) + 6, TH - 38
         d.text((x + 1, y + 1), text, fill=(0, 0, 0, 80), font=font)
         d.text((x, y),         text, fill=(210, 210, 210, 100), font=font)
@@ -1173,7 +1204,7 @@ def generate_thumbnail(
         choices     = TITLE_TEMPLATES.get(theme_name, TITLE_TEMPLATES["cozy_rain"])
         short_title = choices[variant % len(choices)]
 
-    seed = abs(variant * 137 + hash(theme_name) % 10000)
+    seed = abs(variant * 137 + _stable_int(theme_name) % 10000)   # hash() is salted per process
     rng  = np.random.default_rng(seed)
 
     # Deterministic per-track composition: same (theme, variant) always

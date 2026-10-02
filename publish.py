@@ -782,8 +782,11 @@ def cmd_upload(args):
         seo["title"] = args.title
     if args.privacy:
         seo["privacy"] = args.privacy
-    seo.setdefault("title", "lo-fi beats to study/relax to 🌙")
-    seo.setdefault("description", "Cozy lo-fi music. No copyright. Free to use.")
+    if not seo.get("title"):
+        print("[ERROR] No SEO file found for this video and no --title given; "
+              "refusing to upload with placeholder metadata.")
+        sys.exit(1)
+    seo.setdefault("description", "Lo-fi beats.")
     seo.setdefault("tags", ["lofi", "chillhop", "study music"])
 
     # Scheduled publish: --schedule-at sets privacyStatus=private + publishAt

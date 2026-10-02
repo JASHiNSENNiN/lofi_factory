@@ -13,8 +13,6 @@ pedalboard>=0.9
 librosa>=0.10
 isobar>=0.1
 
-# yt-dlp: trending scrape (keep current; YouTube changes often)
-yt-dlp>=2026.3
 
 # Web control panel (webui.py)
 nicegui>=3.0

@@ -170,21 +170,21 @@ def get_video_duration(path: str) -> float:
 
 def build_vertical_clip(video_path: str, out_path: str, start_sec: float, end_sec: float) -> None:
     """
-    Trim [start_sec, end_sec) from `video_path` and crop/scale to a 9:16
-    vertical frame (1080x1920), YouTube Shorts' expected aspect ratio.
-    `force_original_aspect_ratio=increase` scales so BOTH dimensions cover
-    the target size regardless of the source's own aspect ratio, then the
-    crop trims the overflow off the centered frame -- works for a typical
-    16:9 lofi background without hardcoding an assumption about its exact
-    source resolution.
+    Trim [start_sec, end_sec) from `video_path` into a 1080x1920 vertical clip:
+    the whole 16:9 frame scaled to the full width, centred over a blurred,
+    zoomed copy of itself filling the rest. (A centre crop kept only the
+    middle ~30% of the frame and cut the on-screen title panel in half.)
     """
     duration = max(0.1, end_sec - start_sec)
-    vf = (f"scale=w={SHORTS_WIDTH}:h={SHORTS_HEIGHT}:force_original_aspect_ratio=increase,"
-          f"crop={SHORTS_WIDTH}:{SHORTS_HEIGHT}")
+    vf = (f"split=2[bgsrc][fgsrc];"
+          f"[bgsrc]scale=w={SHORTS_WIDTH}:h={SHORTS_HEIGHT}:force_original_aspect_ratio=increase,"
+          f"crop={SHORTS_WIDTH}:{SHORTS_HEIGHT},boxblur=20:2,eq=brightness=-0.08[bg];"
+          f"[fgsrc]scale={SHORTS_WIDTH}:-2[fg];"
+          f"[bg][fg]overlay=(W-w)/2:(H-h)/2")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     subprocess.run(
         ["ffmpeg", "-y", "-ss", f"{start_sec:.2f}", "-i", video_path, "-t", f"{duration:.2f}",
-         "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+         "-filter_complex", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
          "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out_path],
         check=True, capture_output=True,
     )
@@ -207,7 +207,7 @@ def build_shorts_metadata(seo: dict, title_override: str | None = None) -> dict:
     suffix = " #Shorts"
     title = f"{base_title[:100 - len(suffix)].rstrip()}{suffix}"[:100]
 
-    description = (seo.get("description") or "Cozy lo-fi music. No copyright. Free to use.").strip()
+    description = (seo.get("description") or "Lo-fi beats.").strip()
     if "#shorts" not in description.lower():
         description = f"{description}\n\n#Shorts #lofi #shorts"
     description = description[:4900]
