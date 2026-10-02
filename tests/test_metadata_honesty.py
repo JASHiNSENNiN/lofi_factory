@@ -124,3 +124,60 @@ def test_jobs_get_their_own_scope_only_under_systemd(monkeypatch):
     prefix = jobs._scope_prefix()
     assert prefix[:3] == ["systemd-run", "--user", "--scope"]
     assert f"MemoryMax={jobs.JOB_MEMORY_MAX}" in prefix and prefix[-1] == "--"
+
+
+def test_description_opens_with_what_people_search():
+    line = g._search_line("chillhop", "1 hour", "reading")
+    assert line == "1 hour of chillhop lofi beats for reading, studying and working."
+    assert g._search_line("lofi jazz", "30 min", "studying").startswith("30 min of lofi jazz beats")
+
+
+def test_tags_carry_the_genres_search_phrasings():
+    tags = g.build_tags({"genre_label": "chillhop", "activity": "reading"}, "1 hour")
+    assert {"chillhop", "chillhop lofi mix", "chillhop lofi 1 hour",
+            "chillhop lofi for reading"} <= set(tags)
+
+
+class _FakeYT:
+    def __init__(self, existing=()):
+        self.existing = list(existing)
+        self.created = []
+
+    def playlists(self):
+        return self
+
+    def list(self, **kw):
+        items = [{"id": i, "snippet": {"title": t}} for i, t in self.existing]
+        return _Exec({"items": items})
+
+    def insert(self, part, body):
+        self.created.append(body["snippet"]["title"])
+        return _Exec({"id": "PLnew", "snippet": body["snippet"]})
+
+
+class _Exec:
+    def __init__(self, r):
+        self.r = r
+
+    def execute(self):
+        return self.r
+
+
+def test_genre_playlists_are_opt_in(tmp_path):
+    from scripts import playlist_curation as pc
+    yt = _FakeYT()
+    assert pc.genre_playlist_id(yt, "chillhop lofi", env={}, cache_path=str(tmp_path / "c.json")) is None
+    assert yt.created == []
+
+
+def test_genre_playlist_is_reused_then_created_once(tmp_path):
+    from scripts import playlist_curation as pc
+    env = {"YT_GENRE_PLAYLISTS": "1"}
+    cache = str(tmp_path / "c.json")
+    yt = _FakeYT(existing=[("PLold", pc.genre_playlist_title("chillhop lofi"))])
+    assert pc.genre_playlist_id(yt, "chillhop lofi", env=env, cache_path=cache) == "PLold"
+    assert yt.created == []
+    yt2 = _FakeYT()
+    assert pc.genre_playlist_id(yt2, "lofi jazz", env=env, cache_path=cache) == "PLnew"
+    assert pc.genre_playlist_id(yt2, "lofi jazz", env=env, cache_path=cache) == "PLnew"
+    assert len(yt2.created) == 1          # second call came from the cache

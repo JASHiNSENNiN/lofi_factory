@@ -20,7 +20,7 @@ from nicegui import app
 from . import config
 
 # Paths reachable without a session. Everything else redirects to /login.
-UNRESTRICTED = {"/login"}
+UNRESTRICTED = {"/login", "/robots.txt"}
 
 # Local screenshot/dev escape hatch — NEVER set this in production.
 DEV_OPEN = os.environ.get("WEBUI_DEV_OPEN") == "1"
@@ -134,8 +134,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 and path not in UNRESTRICTED
             ):
                 app.storage.user["referrer_path"] = path
-                return RedirectResponse("/login")
-        return await call_next(request)
+                response = RedirectResponse("/login")
+                response.headers["X-Robots-Tag"] = "noindex, nofollow"
+                return response
+        response = await call_next(request)
+        # A private control panel behind a public tunnel: never in search results.
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
 
 
 def install(app_) -> None:

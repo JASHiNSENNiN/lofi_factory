@@ -335,7 +335,7 @@ def test_build_description_still_shows_default_when_genre_is_generic():
     concept = _concept_for_pillar("temporal")
     concept["genre_label"] = "lo-fi hip hop"
     desc = build_description(concept, "1 hour")
-    assert desc.lstrip().startswith("lo-fi hip hop")
+    assert desc.startswith("1 hour of lo-fi hip hop beats")
 
 
 def test_build_title_forwards_trends_into_benefit_tail(monkeypatch):

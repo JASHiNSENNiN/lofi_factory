@@ -104,3 +104,56 @@ def create_playlist_if_confirmed(youtube, title: str, *, description: str = "",
         },
     ).execute()
     return {"id": resp["id"], "title": resp["snippet"]["title"]}
+
+
+# ── Genre playlists (opt-in) ────────────────────────────────────────────────
+# Viewers search "chillhop playlist" or "lofi jazz mix", not by the internal
+# pillars above, and playlists show up in search on their own. With
+# YT_GENRE_PLAYLISTS=1 in .env, every upload is also added to one public
+# playlist per genre, found by title or created the first time. Setting the
+# variable is the explicit opt-in that create_playlist_if_confirmed asks for.
+GENRE_PLAYLISTS_ENV = "YT_GENRE_PLAYLISTS"
+_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "assets", "genre_playlists.json")
+
+
+def genre_playlist_title(genre_phrase: str) -> str:
+    return f"{genre_phrase} mix · beats to study and relax to"
+
+
+def genre_playlist_id(youtube, genre_phrase: str, env: dict | None = None,
+                      cache_path: str = _CACHE) -> str | None:
+    env = os.environ if env is None else env
+    if (env.get(GENRE_PLAYLISTS_ENV) or "").strip() != "1" or not genre_phrase:
+        return None
+    import json
+    from scripts.fileutil import atomic_write_json
+    try:
+        with open(cache_path, encoding="utf-8") as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        cache = {}
+    if cache.get(genre_phrase):
+        return cache[genre_phrase]
+
+    title = genre_playlist_title(genre_phrase)
+    pid = None
+    page = None
+    while pid is None:                       # 1 quota unit per page
+        resp = youtube.playlists().list(part="snippet", mine=True, maxResults=50,
+                                        pageToken=page).execute()
+        pid = next((p["id"] for p in resp.get("items", [])
+                    if p["snippet"]["title"] == title), None)
+        page = resp.get("nextPageToken")
+        if not page:
+            break
+    if pid is None:                          # 50 quota units, once per genre
+        created = create_playlist_if_confirmed(
+            youtube, title, confirm=True,
+            description=(f"Every {genre_phrase} mix on this channel. Original music "
+                         "written by the channel's own composing software."))
+        pid = created["id"] if created else None
+    if pid:
+        cache[genre_phrase] = pid
+        atomic_write_json(cache_path, cache)
+    return pid

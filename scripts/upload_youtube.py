@@ -244,26 +244,30 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None)
 
 
 def _add_to_playlist(youtube, video_id: str, seo: dict):
-    """Add video to a pillar-curated playlist. Assignment is data-driven by
-    SEO pillar (temporal/activity/emotional/aesthetic/cross_genre), with the
-    old duration-based mapping kept only as a fallback during migration --
-    see scripts/playlist_curation.py for the full pillar->env-var table and
-    migration notes."""
-    from scripts.playlist_curation import resolve_playlist_id
-    playlist_id = resolve_playlist_id(seo)
-    if not playlist_id:
-        return
+    """Add the video to its genre playlist (opt-in, YT_GENRE_PLAYLISTS=1) and
+    to the playlist configured for its pillar, if any. See
+    scripts/playlist_curation.py."""
+    from scripts.generate_seo import search_phrase
+    from scripts.playlist_curation import genre_playlist_id, resolve_playlist_id
+    targets = []
     try:
-        youtube.playlistItems().insert(
-            part="snippet",
-            body={"snippet": {
-                "playlistId": playlist_id,
-                "resourceId": {"kind": "youtube#video", "videoId": video_id},
-            }},
-        ).execute()
-        print(f"  Added to playlist (pillar={seo.get('pillar', '?')}): {playlist_id}")
+        if seo.get("genre_label"):
+            targets.append(genre_playlist_id(youtube, search_phrase(seo["genre_label"])))
     except Exception as e:
-        print(f"  [WARN] Playlist add failed: {e}")
+        print(f"  [WARN] Genre playlist lookup failed: {e}")
+    targets.append(resolve_playlist_id(seo))
+    for playlist_id in dict.fromkeys(t for t in targets if t):
+        try:
+            youtube.playlistItems().insert(
+                part="snippet",
+                body={"snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                }},
+            ).execute()
+            print(f"  Added to playlist {playlist_id}")
+        except Exception as e:
+            print(f"  [WARN] Playlist add failed: {e}")
 
 
 def find_latest(directory, pattern):

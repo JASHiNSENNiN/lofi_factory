@@ -19,7 +19,7 @@ import time
 from urllib.parse import quote
 
 from fastapi import Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from nicegui import app, ui
 from nicegui.timer import Timer
@@ -3281,6 +3281,11 @@ def login_page(request: Request) -> None:
                 ui.notify("Wrong password", type="negative")
 
         ui.button("Enter studio", on_click=do_login).props("color=primary").classes("w-full mt-1")
+
+
+@app.get("/robots.txt")
+def robots_txt():
+    return PlainTextResponse("User-agent: *\nDisallow: /\n")
 
 
 # ── OAuth routes ──────────────────────────────────────────────────────────────

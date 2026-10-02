@@ -57,3 +57,9 @@ def test_changing_the_password_ends_existing_sessions(monkeypatch):
     monkeypatch.setattr(config, "WEBUI_PASSWORD", "new")
     assert not auth._session_valid(session)
     assert not auth._session_valid({"authenticated": True})   # sessions from before this check
+
+
+def test_panel_is_never_indexed():
+    from webui import auth, theme
+    assert "/robots.txt" in auth.UNRESTRICTED
+    assert 'name="robots" content="noindex' in theme._HEAD

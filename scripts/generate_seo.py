@@ -522,7 +522,7 @@ TAGS_GENERIC = [
     "lofi", "lofi beats", "study music", "focus music", "chill music",
     "background music", "lofi for studying", "instrumental",
 ]
-_MAX_TAGS = 15
+_MAX_TAGS = 18
 
 TAGS_DURATION = {
     "30 min":    ["lofi 30 minutes", "30 minute study session", "quick focus lofi", "short lofi mix"],
@@ -578,9 +578,14 @@ def build_tags(concept: dict, duration: str, theme_name: str | None = None) -> l
     genre = (concept.get("genre_label") or "").strip()
     candidates: list[str] = []
     if genre:
-        candidates.append(genre)
-        if genre.lower() == "lo-fi hip hop":
-            candidates.append("lofi hip hop")
+        g = search_phrase(genre)
+        if g.lower() == "lo-fi hip hop":
+            g = "lofi hip hop"   # the spelling people search
+        dur = DURATION_DISPLAY.get(duration, duration)
+        # How people actually search for a genre: mix, beats, playlist, length.
+        candidates += [genre, g, f"{g} mix", f"{g} beats", f"{g} {dur}", f"{g} playlist"]
+        if concept.get("activity"):
+            candidates.append(f"{g} for {concept['activity']}")
     candidates += [_clean_tag(t) for t in concept.get("tags_extra", []) if t.strip("#")]
     candidates += TAGS_DURATION.get(duration, [])[:2]
     candidates += _THEME_GEO_TAGS.get(theme_name or "", [])
@@ -612,7 +617,7 @@ DESCRIPTION_HOOKS = [
 
 # The tracklist (real chapters, one per track) is added once the video is
 # assembled and the order is known; see with_tracklist().
-DESCRIPTION_BODY = """{genre_label} · {duration} for {activity}.
+DESCRIPTION_BODY = """{search_line}
 
 {mood_hook}
 
@@ -1060,6 +1065,24 @@ def build_title(concept: dict, duration: str, strategy: str | None = None,
 #  DESCRIPTION BUILDER
 # ──────────────────────────────────────────────────────────────────────────────
 
+def search_phrase(genre: str) -> str:
+    """The genre as people type it into search: always with "lofi" in it."""
+    genre = (genre or "lofi").strip()
+    return genre if re.search(r"lo-?fi", genre, re.I) else f"{genre} lofi"
+
+
+def _search_line(genre: str, duration: str, activity: str) -> str:
+    """The first line YouTube shows under the title in search results: what
+    the video is, how long, and what it's for, in the words people search."""
+    uses = []
+    for u in (activity, "studying", "working", "relaxing"):
+        if u and u.lower() not in uses:
+            uses.append(u.lower())
+    uses = uses[:3]
+    use_text = f"{', '.join(uses[:-1])} and {uses[-1]}" if len(uses) > 1 else uses[0]
+    return _sentence(f"{duration} of {search_phrase(genre)} beats for {use_text}")
+
+
 def build_description(concept: dict, duration: str) -> str:
     activity = concept.get("activity", "work")
     genre    = concept.get("genre_label", "lo-fi hip hop")
@@ -1084,9 +1107,7 @@ def build_description(concept: dict, duration: str) -> str:
             hashtags.append(f"#{h}")
 
     desc = DESCRIPTION_BODY.format(
-        duration=DURATION_DISPLAY.get(duration, duration),
-        genre_label=genre,
-        activity=activity,
+        search_line=_search_line(genre, DURATION_DISPLAY.get(duration, duration), activity),
         mood_hook=mood_hook,
         setting_story=setting_story,
         hashtags=" ".join(hashtags[:4]),
@@ -1180,6 +1201,7 @@ def generate_seo(theme_name: str = None, duration: str = None,
         "mood":             concept.get("mood_line", ""),
         "city":             concept.get("city"),
         "activity":         concept.get("activity", ""),
+        "genre_label":      concept.get("genre_label", ""),
         "generated_at":     _now_utc.isoformat(),
         "ref_id":           ref_id,
         "title_variants":           title_variants,

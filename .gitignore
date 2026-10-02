@@ -57,3 +57,4 @@ music/stream/
 backups/
 output/tmp_*/
 assets/ir/procedural_*.wav
+assets/genre_playlists.json
