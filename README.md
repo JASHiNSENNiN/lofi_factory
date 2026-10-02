@@ -40,7 +40,7 @@ sudo apt install python3-venv python3-dev build-essential ffmpeg fluidsynth libs
 ## Running it
 
 ```bash
-python run.py                          # full pipeline, random theme, 2hr video
+python run.py                          # full pipeline, random theme, 1-hour video
 python run.py --theme winter_snow      # specific theme
 python run.py --duration "1 hour"      # specific duration
 python run.py --skip-upload            # generate only, don't upload

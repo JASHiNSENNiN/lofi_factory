@@ -226,12 +226,12 @@ def _sleep_until_next_loop(tag: str, interval_secs: float):
 # no more manual re-tuning of a constant every time reality changes.
 AUTO_FALLBACK_DURATION = "30 min"   # forced tier after repeated failures, below
 AUTO_FALLBACK_AFTER_FAILURES = 2
-# Reserve for everything in a run that ISN'T the final encode: music/visual/
-# SEO/thumbnail generation (~25-30min observed) plus upload time plus a
-# margin of error. Deliberately generous -- better to undershoot the
-# possible duration than blow the timeout again.
-_AUTO_NON_ENCODE_OVERHEAD_SECS = 2400
-_AUTO_SAFETY_FACTOR = 0.75   # extra margin below the raw computed budget
+# Time for everything except the final encode: the visual loop, SEO,
+# thumbnail and upload (fixed), plus music generation, which grows with the
+# number of tracks a duration needs (assemble_video.tracks_for_duration).
+_AUTO_BASE_OVERHEAD_SECS = 1500
+_AUTO_SECS_PER_TRACK = 60      # wall time per track with 3 parallel workers
+_AUTO_SAFETY_FACTOR = 0.75     # use at most this share of the systemd timeout
 
 _AUTO_STATE_FILE = os.path.join(ROOT, "assets", ".auto_run_state.json")
 
@@ -283,19 +283,25 @@ def _dynamic_max_safe_duration() -> str:
     """The biggest duration tier this box can actually finish encoding
     within the live systemd timeout, given its own real recently-measured
     encode speed -- see the module comment above AUTO_FALLBACK_DURATION."""
-    from scripts.assemble_video import DURATION_MAP, estimated_encode_speed, _vaapi_available
+    from scripts.assemble_video import (DURATION_MAP, estimated_encode_speed,
+                                        _vaapi_available, tracks_for_duration)
     speed = estimated_encode_speed(used_vaapi=_vaapi_available())
-    budget_secs = (_live_timeout_start_secs() - _AUTO_NON_ENCODE_OVERHEAD_SECS) * _AUTO_SAFETY_FACTOR
-    max_safe_target_secs = max(budget_secs, 0) * speed
+    budget = _live_timeout_start_secs() * _AUTO_SAFETY_FACTOR
+
+    def needed(secs: int) -> float:
+        return (_AUTO_BASE_OVERHEAD_SECS
+                + tracks_for_duration(secs) * _AUTO_SECS_PER_TRACK
+                + secs / max(speed, 0.01))
+
     tiers = sorted(
         ((label, secs) for label, secs in DURATION_MAP.items()
          if label != "all night"),
         key=lambda kv: kv[1],
     )
-    fitting = [label for label, secs in tiers if secs <= max_safe_target_secs]
+    fitting = [label for label, secs in tiers if needed(secs) <= budget]
     chosen = fitting[-1] if fitting else tiers[0][0]  # smallest tier as last resort
     print(f"[AUTO] Dynamic duration: measured speed {speed:.2f}x, "
-          f"safe budget {max_safe_target_secs / 60:.0f}min → picked {chosen!r}")
+          f"budget {budget / 60:.0f}min → picked {chosen!r}")
     return chosen
 
 

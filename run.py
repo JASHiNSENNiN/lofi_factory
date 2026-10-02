@@ -10,7 +10,7 @@ Runs the full pipeline:
   6. Upload to YouTube (optional)
 
 Usage:
-  python run.py                          # Full pipeline, random theme, 2hr video
+  python run.py                          # Full pipeline, random theme, 1hr video
   python run.py --theme winter_snow      # Specific theme
   python run.py --duration "1 hour"      # Specific duration
   python run.py --skip-visual            # Skip visual gen (use existing)
@@ -120,17 +120,6 @@ def main():
 
     parser.add_argument("--theme", choices=ALL_THEMES,
                         default=None, help="Visual theme (default: random)")
-    ALL_DURATIONS  = ["30 min", "45 min", "1 hour", "90 min", "2 hours", "3 hours", "4 hours", "8 hours", "10 hours"]
-    # Weighted for MAXIMUM WATCH TIME (= ad revenue + YPP progress):
-    # 8h/10h catch overnight sleepers/studiers — single view = 8-10h watch time
-    # 2-4h sweet spot for study sessions
-    # Short durations de-prioritised (low watch time per view)
-    DURATION_WEIGHTS = [1, 2, 8, 4, 18, 18, 16, 20, 13]
-    # Auto-scale track count so each duration has enough variety (~5 min/track)
-    DURATION_MUSIC_COUNT = {
-        "30 min": 2, "45 min": 3, "1 hour": 4, "90 min": 6,
-        "2 hours": 8, "3 hours": 12, "4 hours": 15, "5 hours": 18, "8 hours": 25, "10 hours": 30, "all night": 25,
-    }
     parser.add_argument("--duration", default=None,
                         choices=["30 min", "45 min", "1 hour", "90 min",
                                  "2 hours", "3 hours", "4 hours", "5 hours",
@@ -147,7 +136,7 @@ def main():
                              "Omit to let the engagement-analytics bandit pick v1/v2 automatically; "
                              "--no-music-v2 forces v1.")
     parser.add_argument("--music-count", type=int, default=None,
-                        help="Number of tracks to generate (default: auto-scaled to duration)")
+                        help="Number of tracks to generate (default: enough to fill the duration without repeats)")
     parser.add_argument("--skip-visual", action="store_true",
                         help="Skip visual generation (use existing visual)")
     parser.add_argument("--skip-music", action="store_true",
@@ -198,22 +187,14 @@ def main():
         "synthwave lofi":  "vaporwave",    # 80s neon retro palette is the closest existing visual match
     }
 
+    # Default matches what the unattended run can actually render in time
+    # (see publish._dynamic_max_safe_duration).
     duration_was_set = args.duration is not None
-    if duration_was_set:
-        duration = args.duration
-    else:
-        # Combine the hand-tuned strategic prior (DURATION_WEIGHTS) with a
-        # performance-informed multiplier from real watch-time data, same
-        # 0.5x-2.0x/needs-5-samples pattern generate_seo.py's pillar weighting
-        # already uses -- nudges toward durations that actually retain viewers
-        # rather than replacing the strategic prior outright.
-        from scripts.assemble_video import DURATION_MAP
-        from scripts.analytics import duration_weights as _duration_weights
-        _dw = _duration_weights(DURATION_MAP)
-        combined_weights = [w * _dw.get(d, 1.0) for d, w in zip(ALL_DURATIONS, DURATION_WEIGHTS)]
-        duration = random.choices(ALL_DURATIONS, weights=combined_weights, k=1)[0]
-    args.duration    = duration
-    music_count      = args.music_count if args.music_count is not None else DURATION_MUSIC_COUNT.get(duration, 6)
+    duration = args.duration or "1 hour"
+    args.duration = duration
+    from scripts.assemble_video import DURATION_MAP, tracks_for_duration
+    music_count = (args.music_count if args.music_count is not None
+                   else tracks_for_duration(DURATION_MAP[duration]))
 
     # ── TREND RESEARCH (feeds concept + title + tags) ──────────
     print("\n  Fetching trend data...")
@@ -247,7 +228,7 @@ def main():
     print("=" * 60)
     print("  LO-FI FACTORY")
     print(f"  Theme:    {theme}")
-    print(f"  Duration: {duration}{'' if duration_was_set else ' (random)'}")
+    print(f"  Duration: {duration}{'' if duration_was_set else ' (default)'}")
     print(f"  Genre:    {genre_hint or 'lo-fi hip hop'}")
     print(f"  Concept:  {concept_hint or '(random)'}")
     print("=" * 60)
@@ -270,7 +251,7 @@ def main():
         print("\n[1/5] Skipping visual generation (using existing)")
         import glob
         visuals = glob.glob(os.path.join(ROOT, "visuals", "bg_*.mp4"))
-        visual_path = visuals[0] if visuals else None
+        visual_path = max(visuals, key=os.path.getmtime) if visuals else None
         if not visual_path:
             print("  WARNING: No visual found. Assembler will generate a gradient fallback.")
 

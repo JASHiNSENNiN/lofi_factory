@@ -68,7 +68,9 @@ if os.path.exists(_env):
         load_dotenv(_env, override=False)
     except ImportError:
         pass
-MUSIC_DIR   = os.path.join(ROOT, "music")
+# The stream keeps its own library, separate from the tracks each video
+# render generates in music/ (which the render pipeline prunes).
+MUSIC_DIR   = os.path.join(ROOT, "music", "stream")
 VISUALS_DIR = os.path.join(ROOT, "visuals")
 OUTPUT_DIR  = os.path.join(ROOT, "output")
 
@@ -233,27 +235,31 @@ def build_visual_list(tmp_dir, theme_name):
     return list_path
 
 
-def build_music_list(tmp_dir):
-    """Write an ffmpeg concat list from all music files in music/, shuffled.
-    Returns (list_path, ordered_tracks) — tracks list is used by monitor thread."""
-    exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
+def _library_tracks():
+    """Every audio file in the stream's own library folder."""
     files = []
-    for ext in exts:
-        # Exclude sidecar files
-        files.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                     if not f.endswith(".meta.json"))
+    for ext in ("*.mp3", "*.wav", "*.flac", "*.ogg"):
+        files.extend(glob.glob(os.path.join(MUSIC_DIR, ext)))
+    return files
+
+
+def build_music_list(tmp_dir):
+    """Write an ffmpeg concat list from the stream library, shuffled.
+    Returns (list_path, ordered_tracks); the order is what ffmpeg will play,
+    looping, and what the now-playing monitor follows."""
+    files = _library_tracks()
     if not files:
         raise FileNotFoundError(
             f"No music files found in {MUSIC_DIR}\n"
-            "Generate tracks first: python run.py --skip-upload --skip-visual\n"
-            "Or drop .mp3/.wav files into the music/ folder."
+            "Start the stream without --no-warmup to generate a library first."
         )
     random.shuffle(files)
     list_path = os.path.join(tmp_dir, "stream_playlist.txt")
     with open(list_path, "w") as f:
         for p in files:
-            f.write(f"file '{os.path.abspath(p)}'\n")
-    print(f"  Playlist: {len(files)} track(s) (looping forever)")
+            escaped = os.path.abspath(p).replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
+    print(f"  Playlist: {len(files)} track(s) (looping until the next reconnect)")
     return list_path, files
 
 
@@ -284,17 +290,17 @@ def _get_track_duration(path):
 
 
 def _start_track_monitor(tracks, stop_event, on_track_change=None):
-    """Background thread: cycles through tracks indefinitely, updating now-playing files.
-    Reloads the track list from MUSIC_DIR after each full pass so newly generated
-    tracks appear in the title rotation without restarting the stream.
-    on_track_change(title, genre) is called each time a new track starts."""
+    """Background thread: follows the same track order ffmpeg plays (the
+    concat list, looped), updating now-playing as each track starts.
+    Restarted by stream_once() whenever ffmpeg restarts, so the two stay
+    aligned. on_track_change(title, genre) is called on each track change."""
     def _run():
-        current = list(tracks)
+        order = list(tracks)
+        if not order:
+            return
+        durations = {p: _get_track_duration(p) for p in order}
         while not stop_event.is_set():
-            if not current:
-                time.sleep(5)
-                continue
-            for track_path in current:
+            for track_path in order:
                 if stop_event.is_set():
                     return
                 meta = parse_track_meta(track_path)
@@ -302,149 +308,90 @@ def _start_track_monitor(tracks, stop_event, on_track_change=None):
                 if on_track_change:
                     try:
                         on_track_change(meta["title"], meta["genre"])
-                    except Exception:
-                        pass
-                dur = _get_track_duration(track_path)
-                elapsed = 0.0
-                while elapsed < dur and not stop_event.is_set():
-                    time.sleep(0.5)
-                    elapsed += 0.5
-            # Reload from disk after each full pass — picks up new bg-gen tracks
-            exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-            fresh = []
-            for ext in exts:
-                fresh.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                             if not f.endswith(".meta.json"))
-            if fresh:
-                random.shuffle(fresh)
-                current = fresh
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    return t
-
-
-def _start_playlist_refresher(playlist_path, stop_event):
-    """Background thread: rewrites the concat playlist every 60s to include newly generated tracks.
-    ffmpeg's -reload 1 on the concat demuxer picks up the updated file at the next EOF."""
-    def _run():
-        while not stop_event.is_set():
-            for _ in range(60):
-                if stop_event.is_set():
+                    except Exception as e:
+                        print(f"  [now playing] title update failed: {e}")
+                if stop_event.wait(durations[track_path]):
                     return
-                time.sleep(1)
-            exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-            files = []
-            for ext in exts:
-                files.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                             if not f.endswith(".meta.json"))
-            if files:
-                random.shuffle(files)
-                try:
-                    with open(playlist_path, "w") as fh:
-                        for p in files:
-                            fh.write(f"file '{os.path.abspath(p)}'\n")
-                    print(f"\n  [playlist] Refreshed: {len(files)} track(s)")
-                except Exception as e:
-                    print(f"\n  [playlist] Refresh error: {e}")
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return t
 
 
-_BG_GEN_MAX_TRACKS  = 150  # prune oldest beyond this many to prevent disk fill
+_BG_GEN_MAX_TRACKS  = 60   # ~3.5 h of unique music; ~2.4 GB of WAVs
 _RADIO_MIN_TRACKS   = 10   # minimum tracks before stream starts — ensures variety on day 1
 
 
 def _prune_old_tracks():
-    """Delete oldest tracks beyond _BG_GEN_MAX_TRACKS — called after each generation."""
-    exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-    files = []
-    for ext in exts:
-        files.extend(f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                     if not f.endswith(".meta.json"))
+    """Delete the oldest library tracks beyond _BG_GEN_MAX_TRACKS. Only called
+    before ffmpeg starts: deleting while streaming would remove files the
+    running concat list still points at."""
+    files = _library_tracks()
     if len(files) <= _BG_GEN_MAX_TRACKS:
         return
     files.sort(key=os.path.getmtime)  # oldest first
     to_delete = files[:len(files) - _BG_GEN_MAX_TRACKS]
     for path in to_delete:
-        try:
-            os.remove(path)
-            meta = path + ".meta.json"
-            if os.path.exists(meta):
-                os.remove(meta)
-        except Exception:
-            pass
-    print(f"\n  [bg-gen] Pruned {len(to_delete)} old track(s) (keeping newest {_BG_GEN_MAX_TRACKS})")
+        for victim in (path, path + ".meta.json"):
+            try:
+                os.remove(victim)
+            except FileNotFoundError:
+                pass
+    print(f"\n  [library] Pruned {len(to_delete)} old track(s) (keeping newest {_BG_GEN_MAX_TRACKS})")
 
 
 def _warmup_music_library(concept_hint=None):
     """
-    Block until music/ has at least _RADIO_MIN_TRACKS files.
-    Generates tracks inline (not in a thread) so the stream only starts
-    once there's real variety — like a radio station spinning up its library.
+    Block until the library has at least _RADIO_MIN_TRACKS tracks, generating
+    them inline so the stream starts with real variety. Gives up after a
+    bounded number of failures instead of looping forever.
     """
-    exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-
-    def _count():
-        n = 0
-        for ext in exts:
-            n += len([f for f in glob.glob(os.path.join(MUSIC_DIR, ext))
-                      if not f.endswith(".meta.json")])
-        return n
-
-    current = _count()
+    os.makedirs(MUSIC_DIR, exist_ok=True)
+    current = len(_library_tracks())
     if current >= _RADIO_MIN_TRACKS:
         return
 
     print(f"\n  [radio] Library has {current} track(s) — warming up to {_RADIO_MIN_TRACKS} before stream starts...")
-    try:
-        sys.path.insert(0, ROOT)
-        from scripts.composer import generate_track
-    except ImportError:
-        print("  [radio] Cannot import composer — skipping warm-up")
-        return
+    sys.path.insert(0, ROOT)
+    from scripts.composer import generate_track
 
+    failures, max_failures = 0, _RADIO_MIN_TRACKS
     idx = 0
-    while _count() < _RADIO_MIN_TRACKS:
+    while len(_library_tracks()) < _RADIO_MIN_TRACKS:
         try:
             print(f"  [radio] Generating warm-up track {idx + 1}/{_RADIO_MIN_TRACKS}...")
-            generate_track(idx, concept_hint=concept_hint)
+            generate_track(idx, concept_hint=concept_hint, out_dir=MUSIC_DIR)
         except Exception as e:
-            print(f"  [radio] Warm-up track {idx} failed: {e}")
+            failures += 1
+            print(f"  [radio] Warm-up track {idx} failed ({failures}/{max_failures}): {e}")
+            if failures >= max_failures:
+                raise RuntimeError("Music generation keeps failing; not starting the stream.") from e
         idx += 1
 
-    print(f"  [radio] Library ready: {_count()} track(s) — starting stream\n")
+    print(f"  [radio] Library ready: {len(_library_tracks())} track(s) — starting stream\n")
 
 
 def _start_bg_music_gen(stop_event, concept_hint=None):
-    """Background thread: continuously generates new tracks while stream runs.
-    Prunes oldest tracks beyond _BG_GEN_MAX_TRACKS to prevent disk fill on long runs."""
+    """Background thread: tops the library up to _BG_GEN_MAX_TRACKS while the
+    stream runs, at low CPU priority so the real-time encode isn't starved.
+    New tracks join the playlist at the next reconnect. Never deletes."""
     def _run():
-        try:
-            sys.path.insert(0, ROOT)
-            from scripts.composer import generate_track
-        except ImportError:
-            print("  [bg-gen] Could not import composer — skipping background generation")
-            return
+        sys.path.insert(0, ROOT)
+        from scripts.composer import generate_track
 
-        idx = 10  # start at index 10 to avoid overwriting pre-generated 00-04
+        idx = 0
         while not stop_event.is_set():
+            if len(_library_tracks()) >= _BG_GEN_MAX_TRACKS:
+                if stop_event.wait(600):
+                    return
+                continue
             try:
                 print(f"\n  [bg-gen] Generating track {idx:02d}...")
-                # low_priority: this runs concurrently with the real-time
-                # ffmpeg encode driving the actual stream -- yield CPU/IO
-                # priority to it rather than compete (see midi_to_wav).
-                generate_track(idx, concept_hint=concept_hint, low_priority=True)
+                generate_track(idx, concept_hint=concept_hint, low_priority=True, out_dir=MUSIC_DIR)
                 idx += 1
-                _prune_old_tracks()
-                # Generation itself takes 1-3 min — no artificial pause needed
             except Exception as e:
                 print(f"  [bg-gen] Error generating track {idx}: {e}")
-                # Wait before retry
-                for _ in range(60):
-                    if stop_event.is_set():
-                        return
-                    time.sleep(1)
+                if stop_event.wait(60):
+                    return
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     return t
@@ -582,7 +529,6 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
     on_track_change = title_updater.set_track if title_updater else None
     if tracks:
         _start_track_monitor(tracks, monitor_stop, on_track_change=on_track_change)
-    _start_playlist_refresher(playlist_path, monitor_stop)
 
     cmd = [
         "ffmpeg",
@@ -625,7 +571,7 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
         "-sc_threshold", "0",           # no scene-cut keyframes — consistent GOP
         # nal-hrd=cbr: pads NAL stream to enforce CBR
         # force-cfr=1: constant frame rate
-        # threads=2: libx264 ignores ffmpeg's -threads; 2 threads on i3-7100U
+        # threads=4: libx264 ignores ffmpeg's -threads, so set it here
         "-x264-params", "nal-hrd=cbr:force-cfr=1:threads=4",
         # ── Audio encode ──────────────────────────────────────────────────────
         "-c:a",  "aac",
@@ -780,6 +726,7 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
 
     try:
         while not _user_interrupted:
+            run_started = time.monotonic()
             exit_code = stream_once(
                 current_visual, current_playlist, current_rtmp,
                 theme_name, test_secs, tracks=current_tracks,
@@ -823,6 +770,7 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
             if session_tmp:
                 shutil.rmtree(session_tmp, ignore_errors=True)
             session_tmp = tempfile.mkdtemp(prefix="lofi_stream_")
+            _prune_old_tracks()          # safe here: ffmpeg isn't running
             current_playlist, current_tracks = build_music_list(session_tmp)
             if not visual_playlist:
                 # Single-visual fallback: rotate to a different file on reconnect
@@ -830,7 +778,10 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
                 if new_visual:
                     current_visual = new_visual
                     print(f"  [stream] New visual: {os.path.basename(current_visual)}")
-            attempt = 0
+            # Only a run that stayed up for a while counts as a recovery; an
+            # immediate failure keeps the backoff growing and the alert armed.
+            if time.monotonic() - run_started >= 120:
+                attempt = 0
     finally:
         bg_gen_stop.set()
         shutil.rmtree(vis_tmp, ignore_errors=True)
@@ -923,6 +874,7 @@ def main():
     if not args.test:
         _warmup_music_library()
 
+    _prune_old_tracks()
     tmp_dir = tempfile.mkdtemp(prefix="lofi_stream_")
     try:
         playlist_path, tracks = build_music_list(tmp_dir)

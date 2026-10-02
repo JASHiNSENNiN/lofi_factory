@@ -55,8 +55,18 @@ DURATION_MAP = {
     "all night": 28800,
 }
 
+# Generated tracks run 2-4 minutes (composer.fit_form_length); planning on
+# ~3:20 average gives enough music to fill a video without repeating.
+AVG_TRACK_SECS = 200
+
+
+def tracks_for_duration(target_secs: float) -> int:
+    """How many tracks to generate so a video of target_secs needs no repeats."""
+    return max(1, -(-int(target_secs) // AVG_TRACK_SECS))
+
 
 def get_audio_duration(path):
+    """Duration in seconds, or 0.0 if ffprobe can't read the file."""
     result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=noprint_wrappers=1:nokey=1", path],
@@ -64,125 +74,111 @@ def get_audio_duration(path):
     )
     try:
         return float(result.stdout.strip())
-    except Exception:
-        return 0
+    except ValueError:
+        return 0.0
+
+
+MIN_TRACK_SECS = 10
+
+
+def _valid_tracks(paths):
+    """[(path, duration)] for readable tracks at least MIN_TRACK_SECS long."""
+    valid = []
+    for path in paths:
+        dur = get_audio_duration(path)
+        if dur >= MIN_TRACK_SECS:
+            valid.append((path, dur))
+        else:
+            print(f"  WARNING: skipping unreadable or too-short track ({dur:.1f}s): {path}")
+    return valid
 
 
 def pick_music_files(target_duration_secs, force_files=None):
-    """Pick and concatenate music files to fill target duration."""
-    if force_files:
-        files = [f for f in force_files if os.path.exists(f)]
-        if not files:
-             print("  WARNING: Provided music_files not found. Falling back to folder scan.")
-             files = []
+    """Order tracks to fill target_duration_secs. Returns [(path, duration)].
+
+    With `force_files` (the tracks generated for this video) only those are
+    used -- never whatever else happens to be in music/, which may be old
+    uploads' tracks or the live stream's library. Tracks repeat only when
+    there isn't enough music, reshuffled each pass, with a warning saying
+    how much of the video is repeated.
+    """
+    if force_files is not None:
+        tracks = _valid_tracks([f for f in force_files if os.path.exists(f)])
+        if not tracks:
+            raise FileNotFoundError("None of the generated tracks for this video are usable.")
     else:
         files = []
-
-    if not files:
-        exts = ("*.mp3", "*.wav", "*.flac", "*.ogg")
-        for ext in exts:
+        for ext in ("*.mp3", "*.wav", "*.flac", "*.ogg"):
             files.extend(glob.glob(os.path.join(MUSIC_DIR, ext)))
+        tracks = _valid_tracks(files)
+        if not tracks:
+            raise FileNotFoundError(
+                f"No usable music files found in {MUSIC_DIR}\n"
+                "Generate tracks first (python run.py --skip-upload) or drop "
+                ".wav/.mp3 files into the music/ folder."
+            )
 
-    if not files:
-        raise FileNotFoundError(
-            f"No music files found in {MUSIC_DIR}\n"
-            "Run: python scripts/generate_music.py --mode mock\n"
-            "Or drop your .mp3/.wav files into the music/ folder."
-        )
-
-    random.shuffle(files)
-
-    # Build playlist until we exceed target duration
-    playlist = []
-    total = 0
+    unique_secs = sum(d for _, d in tracks)
+    playlist, total = [], 0.0
     while total < target_duration_secs:
-        prev_total = total
-        for f in files:
-            dur = get_audio_duration(f)
-            playlist.append(f)
-            total += dur
+        batch = tracks[:]
+        random.shuffle(batch)
+        if playlist and len(batch) > 1 and batch[0][0] == playlist[-1][0]:
+            batch.append(batch.pop(0))     # no track twice in a row across passes
+        for item in batch:
+            playlist.append(item)
+            total += item[1]
             if total >= target_duration_secs:
                 break
-        if total == prev_total:   # no progress — all durations 0 (corrupt files)
-            break
-
+    if unique_secs < target_duration_secs:
+        print(f"  WARNING: only {unique_secs / 60:.0f} min of unique music for a "
+              f"{target_duration_secs / 60:.0f} min video -- tracks will repeat.")
     return playlist
 
 
 def concat_audio(playlist, target_secs, tmp_dir):
-    """Concatenate audio files via ffmpeg concat demuxer."""
-
-    # Pre-validate each track with ffprobe; skip corrupt or too-short files.
-    valid_playlist = []
-    for track in playlist:
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "csv=p=0", track],
-            capture_output=True, text=True
-        )
-        if probe.returncode != 0 or not probe.stdout.strip():
-            print(f"  WARNING: skipping unreadable track (ffprobe error): {track}")
-            continue
-        try:
-            dur = float(probe.stdout.strip())
-        except ValueError:
-            print(f"  WARNING: skipping track with unparseable duration: {track}")
-            continue
-        if dur < 10:
-            print(f"  WARNING: skipping track shorter than 10 s ({dur:.1f} s): {track}")
-            continue
-        valid_playlist.append(track)
-
-    if not valid_playlist:
-        raise RuntimeError("[ASSEMBLE] No valid audio tracks remain after pre-validation.")
+    """Join the playlist into one lossless FLAC of exactly target_secs (or the
+    music's length, if shorter), with a 2 s fade in and a 5 s fade out at the
+    real end. Tracks are already mastered to a common loudness, so no further
+    loudness processing is applied: every video length is treated the same,
+    and the only lossy encode is the final one."""
+    if not playlist:
+        raise RuntimeError("[ASSEMBLE] Empty playlist.")
+    total = sum(d for _, d in playlist)
+    out_secs = min(float(target_secs), total)
 
     list_path = os.path.join(tmp_dir, "audio_list.txt")
     with open(list_path, "w") as f:
-        for p in valid_playlist:
-            f.write(f"file '{os.path.abspath(p)}'\n")
+        for path, _ in playlist:
+            escaped = os.path.abspath(path).replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
 
-    concat_path = os.path.join(tmp_dir, "audio_concat.mp3")
+    concat_path = os.path.join(tmp_dir, "audio_concat.flac")
+    fade_out_start = max(0.0, out_secs - 5)
+    audio_filter = (f"aresample=44100,aformat=sample_fmts=s16:channel_layouts=stereo,"
+                    f"afade=t=in:st=0:d=2,afade=t=out:st={fade_out_start:.2f}:d=5")
 
-    # loudnorm requires a full two-pass analysis — unusably slow for long videos.
-    # dynaudnorm is single-pass but adds buffered processing overhead that compounds
-    # badly at >1 hour scale. Tracks are already normalised at generation time, so
-    # for >1 hour sessions just apply the fade; skip dynaudnorm entirely.
-    if target_secs > 3600:
-        audio_filter = f"afade=t=out:st={target_secs - 5}:d=5"
-    elif target_secs > 1800:
-        audio_filter = (
-            f"afade=t=out:st={target_secs - 5}:d=5,"
-            "dynaudnorm=f=150:g=15:p=0.95"
-        )
-    else:
-        audio_filter = (
-            f"afade=t=out:st={target_secs - 5}:d=5,"
-            "loudnorm=I=-14:LRA=11:TP=-1"
-        )
-
-    est_mins = target_secs // 60
-    print(f"  Mixing audio ({est_mins} min) — this may take a few minutes...")
-
+    print(f"  Joining audio ({out_secs / 60:.0f} min)...")
     log_path = os.path.join(tmp_dir, "audio_concat.log")
-    timeout_secs = target_secs * 6
+    timeout_secs = int(target_secs * 2) + 300
     try:
         with open(log_path, "w") as log_fh:
             subprocess.run([
                 "ffmpeg", "-y",
                 "-f", "concat", "-safe", "0",
                 "-i", list_path,
-                "-t", str(target_secs),
+                "-t", f"{out_secs:.2f}",
                 "-af", audio_filter,
-                "-c:a", "libmp3lame", "-b:a", "192k",
+                "-c:a", "flac",
                 "-stats",
                 concat_path
             ], check=True, stdout=log_fh, stderr=log_fh,
                timeout=timeout_secs)
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         try:
             with open(log_path) as lf:
                 tail = lf.read().splitlines()[-15:]
-        except Exception:
+        except OSError:
             tail = []
         print("[ASSEMBLE] Audio concat failed:")
         for line in tail:
@@ -194,7 +190,7 @@ def concat_audio(playlist, target_secs, tmp_dir):
             "a music file may be corrupt or unreadable."
         )
     print(f"  Audio ready: {concat_path}")
-    return concat_path
+    return concat_path, out_secs
 
 
 def pick_visual(theme_name=None, prefer_path=None):
@@ -576,13 +572,12 @@ def _vaapi_available() -> bool:
     return _vaapi_checked
 
 
-def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
+def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None, audio_path=None):
     """
     Overlay audio-reactive EQ bars + progress bar on a pre-graded visual.
 
     Static VHS grade (hqdn3d/colorbalance/eq/vignette) is already baked into the
     input_video — only dynamic elements are applied here:
-      noise    — temporal film grain (seed varies with t, no loop artifact)
       showfreqs pipeline — audio-reactive EQ bars with gradient + glow
       drawbox/drawtext — progress bar and timestamps
     """
@@ -607,12 +602,15 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
     PW  = PX1 - PX0
     ph_y = PY + PH // 2 - 7
 
+    # Music: the separate lossless track when given, else the input video's own audio.
+    music_in = "[2:a]" if audio_path else "[0:a]"
+
     filter_stages = [
         # 1. Temporal film grain only (static grade already baked into input)
-        "[0:v]noise=c0s=8:c0f=t+u[vgraded]",
+        "[0:v]null[vgraded]",
 
         # 2. Split audio
-        "[0:a]asplit=2[a_eq][a_mix]",
+        f"{music_in}asplit=2[a_eq][a_mix]",
         (f"[a_eq]showfreqs=s={_EQ_W}x{_EQ_H}:mode=bar:fscale=log:ascale=sqrt"
          f":win_func=hann:averaging=1:colors=ffffff[eq_raw]"),
 
@@ -668,7 +666,7 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
         device_args = ["-vaapi_device", _VAAPI_DEVICE]
         video_args = [
             "-c:v", "h264_vaapi",
-            "-b:v", "8000k", "-maxrate", "10000k", "-bufsize", "20000k",
+            "-b:v", "5000k", "-maxrate", "6000k", "-bufsize", "12000k",
         ]
     else:
         video_args = [
@@ -688,7 +686,7 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
             # Fixed 8 Mbps target — predictable file size, meets YouTube's
             # recommended 1080p bitrate. CRF 18 + ultrafast was producing
             # 30-40 Mbps (huge files, slow).
-            "-b:v", "8000k", "-maxrate", "10000k", "-bufsize", "20000k",
+            "-b:v", "5000k", "-maxrate", "6000k", "-bufsize", "12000k",
             "-preset", "ultrafast",
             "-pix_fmt", "yuv420p",
         ]
@@ -699,6 +697,7 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
                 "ffmpeg", "-y",
                 "-i", input_video,
                 "-f", "lavfi", "-i", f"anoisesrc=d={target_secs}:c={a_color}:a={a_amp}",
+                *(["-i", audio_path] if audio_path else []),
                 *device_args,
                 "-filter_complex", filtergraph,
                 "-map", video_map, "-map", "[aout]",
@@ -753,8 +752,10 @@ def apply_vhs_grade(input_video, output_video, target_secs, theme_name=None):
 
 
 def assemble(theme_name=None, duration_label="2 hours", output_name=None, visual_path=None, music_files=None):
-    target_secs = DURATION_MAP.get(duration_label, 7200)
-    ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    if duration_label not in DURATION_MAP:
+        raise ValueError(f"Unknown duration {duration_label!r}; expected one of {sorted(DURATION_MAP)}")
+    target_secs = DURATION_MAP[duration_label]
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_name = output_name or f"lofi_{ts}.mp4"
     out_path = os.path.join(OUTPUT_DIR, output_name)
     tmp_dir = os.path.join(OUTPUT_DIR, f"tmp_{ts}")
@@ -767,9 +768,8 @@ def assemble(theme_name=None, duration_label="2 hours", output_name=None, visual
         # 1. Build audio track
         print("  Building audio track...")
         playlist = pick_music_files(target_secs, force_files=music_files)
-        print(f"  Using {len(playlist)} track(s): {[os.path.basename(p) for p in playlist]}")
-        audio_path = concat_audio(playlist, target_secs, tmp_dir)
-
+        print(f"  Using {len(playlist)} track(s): {[os.path.basename(p) for p, _ in playlist]}")
+        audio_path, audio_secs = concat_audio(playlist, target_secs, tmp_dir)
 
         # 2. Get visual
         visual_path = pick_visual(theme_name, prefer_path=visual_path)
@@ -779,8 +779,8 @@ def assemble(theme_name=None, duration_label="2 hours", output_name=None, visual
             subprocess.run([
                 "ffmpeg", "-y",
                 "-f", "lavfi",
-                "-i", f"color=c=0x0A0020:size=1280x720:rate=24",
-                "-t", str(target_secs),
+                "-i", "color=c=0x0A0020:size=1280x720:rate=24",
+                "-t", "60",
                 "-c:v", "libx264", "-crf", "28",
                 visual_path
             ], check=True, capture_output=True)
@@ -790,29 +790,32 @@ def assemble(theme_name=None, duration_label="2 hours", output_name=None, visual
         # 3. Pre-bake static VHS grade onto the visual loop (once, ~seconds not hours)
         graded_visual = _pre_grade_visual(visual_path, tmp_dir)
 
-        # 4. Merge pre-graded visual + audio (loop visual to fill duration)
-        merged_path = os.path.join(tmp_dir, "merged.mp4")
-        print("  Merging audio + video...")
+        # 4. Loop the graded visual to the audio's length (stream copy, no re-encode)
+        looped_path = os.path.join(tmp_dir, "looped.mp4")
+        print("  Looping visual to length...")
         subprocess.run([
             "ffmpeg", "-y",
             "-stream_loop", "-1", "-i", graded_visual,
-            "-i", audio_path,
-            "-map", "0:v", "-map", "1:a",
+            "-map", "0:v", "-an",
             "-c:v", "copy",
-            "-c:a", "copy",
-            "-t", str(target_secs),
-            "-shortest",
-            merged_path
+            "-t", f"{audio_secs:.2f}",
+            looped_path
         ], check=True, capture_output=True)
 
-        # 4. Apply VHS color grade + equalizer overlay + final encode
+        # 5. EQ overlay + progress bar + final (only lossy audio) encode
         print("  Applying VHS color grade + EQ overlay...")
-        apply_vhs_grade(merged_path, out_path, target_secs, theme_name=theme_name)
+        apply_vhs_grade(looped_path, out_path, int(round(audio_secs)),
+                        theme_name=theme_name, audio_path=audio_path)
 
-        # Clean up only on success — on failure, leave tmp dir for inspection
         shutil.rmtree(tmp_dir, ignore_errors=True)
     except Exception:
-        print(f"  [ASSEMBLE] Temp files left in: {tmp_dir}")
+        # Keep the logs for inspection, but not the multi-GB intermediates.
+        for big in glob.glob(os.path.join(tmp_dir, "*.mp4")) + glob.glob(os.path.join(tmp_dir, "*.flac")):
+            try:
+                os.remove(big)
+            except OSError:
+                pass
+        print(f"  [ASSEMBLE] Logs left in: {tmp_dir}")
         raise
 
     size_mb = os.path.getsize(out_path) / 1024 / 1024

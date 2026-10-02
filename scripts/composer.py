@@ -4136,7 +4136,8 @@ def midi_to_wav(midi_path: str, wav_path: str, soundfont: str | None = None,
 _AUDIO_RETRIES = 2   # re-renders allowed when the audio quality gate fails
 
 
-def _render_track(index: int, params: dict, low_priority: bool, attempt: int = 0):
+def _render_track(index: int, params: dict, low_priority: bool, attempt: int = 0,
+                  out_dir: str = MUSIC_DIR):
     """Build MIDI, render, run the FX chain and drum layer. Returns (wav_path, audio_score)."""
     with tempfile.TemporaryDirectory() as tmp:
         midi_path = os.path.join(tmp, 'track.mid')
@@ -4149,7 +4150,8 @@ def _render_track(index: int, params: dict, low_priority: bool, attempt: int = 0
         midi_to_wav(midi_path, raw_wav, soundfont=chosen_sf, low_priority=low_priority)
         print(f"  [FX] Lo-fi chain ({params.get('sub_genre', '?')})...")
         ts = int(time.time())
-        out = os.path.join(MUSIC_DIR, f'track_{ts}_{index:02d}_{attempt}.wav')
+        os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, f'track_{ts}_{index:02d}_{attempt}.wav')
         from scripts.lofi_fx import apply_lofi_fx as _lofi_fx
 
         _lofi_fx(raw_wav, out,
@@ -4192,7 +4194,7 @@ def _render_track(index: int, params: dict, low_priority: bool, attempt: int = 0
 
 
 def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, song_dna: dict = None,
-                    low_priority: bool = False):
+                    low_priority: bool = False, out_dir: str = MUSIC_DIR):
     print(f"\n[Track {index+1}] Picking parameters...")
     if song_dna is not None:
         # Pre-computed params (from generate_tracks' per-track diversity pass)
@@ -4204,7 +4206,7 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
     from scripts.track_quality import AUDIO_MIN_QUALITY_SCORE
     best_out, best_score = None, None
     for attempt in range(1 + _AUDIO_RETRIES):
-        out, score = _render_track(index, params, low_priority, attempt)
+        out, score = _render_track(index, params, low_priority, attempt, out_dir)
         if score is None or score >= AUDIO_MIN_QUALITY_SCORE:
             if best_out and best_out != out:
                 os.remove(best_out)
