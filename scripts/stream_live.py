@@ -567,6 +567,9 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
         "ffmpeg",
         # ── Global options — MUST come before all inputs ───────────────────────
         "-hide_banner",
+        # Never read the terminal: a stray key ('q') would end a live stream,
+        # and an overwrite prompt would quietly abort the test (exit code 0).
+        "-nostdin",
         "-loglevel",      "warning",   # suppress info spam
         "-stats",                       # show progress (fps/speed) even at warning level
         "-filter_threads", "4",         # filtergraph thread pool — more cores for EQ+drawtext
@@ -616,7 +619,8 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
     if test_secs:
         cmd += ["-t", str(test_secs)]
         output = os.path.join(OUTPUT_DIR, "stream_test.mp4")
-        cmd += ["-f", "mp4", output]
+        cmd += ["-f", "mp4", "-y", output]
+        test_started = time.time()
         print(f"\n[STREAM TEST] Writing {test_secs}s to {output}")
     else:
         cmd += ["-f", "flv", rtmp_url]
@@ -676,8 +680,15 @@ def stream_once(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs
 
     print()  # newline after in-place progress line
 
-    if test_secs and proc.returncode == 0:
-        print(f"[STREAM TEST] Done: {output}")
+    if test_secs:
+        # ffmpeg exits 0 even when it never opened the file, so check the file.
+        written = (os.path.exists(output) and os.path.getmtime(output) >= test_started
+                   and os.path.getsize(output) > 0)
+        if proc.returncode == 0 and written:
+            print(f"[STREAM TEST] Done: {output}")
+        else:
+            print(f"[STREAM TEST] FAILED: {output} was not written (ffmpeg exit {proc.returncode})")
+            return proc.returncode or 1
 
     return proc.returncode
 
@@ -796,6 +807,7 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
     vis_tmp = tempfile.mkdtemp(prefix="lofi_vis_")
     visual_playlist = build_visual_list(vis_tmp, theme_name)
 
+    exit_code = 0
     try:
         while not _user_interrupted:
             run_started = time.monotonic()
@@ -868,6 +880,7 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
 
     if _user_interrupted:
         print("[STREAM] Stopped by user.")
+    return exit_code
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -955,7 +968,7 @@ def main():
     tmp_dir = tempfile.mkdtemp(prefix="lofi_stream_")
     try:
         playlist_path, tracks = build_music_list(tmp_dir)
-        stream(
+        rc = stream(
             visual_path=visual_path,
             playlist_path=playlist_path,
             rtmp_url=fallback_rtmp,
@@ -966,6 +979,8 @@ def main():
         )
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+    if args.test and rc:
+        sys.exit(rc)      # a failed test must not look like a pass
 
 
 if __name__ == "__main__":
