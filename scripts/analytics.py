@@ -26,10 +26,7 @@ from scripts.bandit import ThompsonSamplingBandit
 
 ROOT          = os.path.join(os.path.dirname(__file__), "..")
 
-_ANALYTICS_SCOPES = [
-    "https://www.googleapis.com/auth/yt-analytics.readonly",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-]
+from scripts.upload_youtube import SCOPES as _ANALYTICS_SCOPES  # noqa: E402
 _YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 UPLOAD_LOG    = os.path.join(ROOT, "upload_log.json")
 ANALYTICS_LOG = os.path.join(ROOT, "assets", "analytics_log.json")

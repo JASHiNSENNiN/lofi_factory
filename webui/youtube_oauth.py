@@ -119,7 +119,9 @@ def authorization_url() -> str:
 def handle_callback(code: str, state: str | None) -> None:
     """Exchange the auth code for tokens and persist token.json."""
     global _pending_state, _pending_code_verifier
-    if _pending_state and state and state != _pending_state:
+    # The state must be present and match the login this server started;
+    # otherwise anyone could get a logged-in admin to link their account.
+    if not _pending_state or state != _pending_state:
         raise ValueError("OAuth state mismatch — please retry the login.")
     flow = _flow()
     # Reuse the code_verifier from the Flow that built the authorization URL --
@@ -177,6 +179,7 @@ def disconnect() -> None:
 # a second explicit authorization_url()/consent round-trip, which is exactly
 # what a truly opt-in second flow should look like anyway).
 _pending_state_monetary: str | None = None
+_pending_code_verifier_monetary: str | None = None
 
 
 def monetary_status() -> dict:
@@ -209,26 +212,32 @@ def _monetary_flow():
 
 def monetary_authorization_url() -> str:
     """Build the Google consent URL for the monetary-scope opt-in and stash CSRF state."""
-    global _pending_state_monetary
+    global _pending_state_monetary, _pending_code_verifier_monetary
     flow = _monetary_flow()
+    # No include_granted_scopes: this token must hold only MONETARY_SCOPES,
+    # not inherit the main login's upload/manage rights.
     url, state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
         prompt="consent",
     )
     _pending_state_monetary = state
+    _pending_code_verifier_monetary = flow.code_verifier
     return url
 
 
 def monetary_handle_callback(code: str, state: str | None) -> None:
     """Exchange the auth code for tokens and persist token_monetary.json (never token.json)."""
-    global _pending_state_monetary
-    if _pending_state_monetary and state and state != _pending_state_monetary:
+    global _pending_state_monetary, _pending_code_verifier_monetary
+    if not _pending_state_monetary or state != _pending_state_monetary:
         raise ValueError("OAuth state mismatch — please retry the login.")
     flow = _monetary_flow()
+    # Same PKCE fix as handle_callback(): reuse the verifier from the flow that
+    # built the consent URL, or Google rejects the exchange.
+    flow.code_verifier = _pending_code_verifier_monetary
     flow.fetch_token(code=code)
     _write_token_monetary(flow.credentials)
     _pending_state_monetary = None
+    _pending_code_verifier_monetary = None
 
 
 def _write_token_monetary(creds) -> None:

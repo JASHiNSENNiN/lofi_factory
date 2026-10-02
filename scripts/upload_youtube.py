@@ -43,18 +43,13 @@ SCOPES = [
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
-# Revenue/RPM tracking (webui Settings -> "Connect monetary analytics") needs
-# yt-analytics-monetary.readonly on top of the scopes above. Deliberately a
-# SEPARATE constant, not merged into SCOPES: every existing user's next
-# unrelated login (or lofi-auto's unattended token refresh) must NOT be hit
-# with a surprise new consent screen just because this module got imported.
-# Only the explicit, clearly-labeled opt-in flow in webui/youtube_oauth.py
-# (monetary_authorization_url() / monetary_handle_callback()) requests this,
-# and it stores its token separately (token_monetary.json, see
-# webui/config.py's TOKEN_FILE_MONETARY) rather than overwriting token.json.
-# tests/test_upload_youtube_scopes.py asserts SCOPES never accidentally grows
-# to include this.
-MONETARY_SCOPES = SCOPES + [
+# Revenue/RPM tracking (webui Settings -> "Connect monetary analytics") is a
+# separate opt-in token (token_monetary.json) that can only READ analytics:
+# no upload, edit or delete rights, so a leak of that file can't touch the
+# channel. Never merged into SCOPES, so normal logins and the unattended
+# token refresh never see an extra consent screen.
+MONETARY_SCOPES = [
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
     "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
 ]
 

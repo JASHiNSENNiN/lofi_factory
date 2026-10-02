@@ -25,16 +25,16 @@ import threading
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-    "https://www.googleapis.com/auth/youtube.upload",
-]
+from scripts.upload_youtube import SCOPES  # noqa: E402  (one definition project-wide)
 CLIENT_SECRET = os.path.join(ROOT, "client_secret.json")
 TOKEN_FILE    = os.path.join(ROOT, "token.json")
 
 _POLL_INTERVAL      = 5    # seconds between stream-health polls
 _TRANSITION_TIMEOUT = 120  # give up transitioning after 2 min
-_TITLE_COOLDOWN     = 120  # 2 min — max 720/day × 50 units = 36,000 but live streams rarely run 24h straight
+# Each title update costs ~51 quota units (a 1-unit read plus a 50-unit
+# update) out of a default 10,000/day that the daily upload, thumbnails and
+# analytics also need. Every 30 min is at most 48 updates = ~2,450 units/day.
+_TITLE_COOLDOWN     = 1800
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -176,7 +176,7 @@ def _create_broadcast_and_stream(youtube, title, theme_name=None):
             "cdn": {
                 "ingestionType": "rtmp",
                 "resolution": "720p",
-                "frameRate": "15fps",
+                "frameRate": "variable",   # documented values: 30fps, 60fps, variable
             },
         }
     ).execute()
@@ -378,13 +378,22 @@ class LiveTitleUpdater:
 
             if pending:
                 try:
+                    # update(part="snippet") replaces the whole snippet: any
+                    # field left out (the description) is erased. Read the
+                    # current snippet and change only the title.
+                    resp = self._yt.liveBroadcasts().list(part="snippet", id=self._bid).execute()
+                    items = resp.get("items") or []
+                    if not items:
+                        raise RuntimeError("broadcast not found")
+                    current = items[0]["snippet"]
                     self._yt.liveBroadcasts().update(
                         part="snippet",
                         body={
                             "id": self._bid,
                             "snippet": {
                                 "title": pending[:100],
-                                "scheduledStartTime": self._sched,
+                                "description": current.get("description", ""),
+                                "scheduledStartTime": current.get("scheduledStartTime", self._sched),
                             },
                         }
                     ).execute()

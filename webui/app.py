@@ -3247,7 +3247,7 @@ def index(request: Request) -> None:
 
 
 @ui.page("/login")
-def login_page() -> None:
+def login_page(request: Request) -> None:
     theme.apply()
     if auth.is_authenticated():
         ui.navigate.to("/")
@@ -3262,11 +3262,20 @@ def login_page() -> None:
         pw = ui.input("Password", password=True, password_toggle_button=True)\
             .classes("w-full").on("keydown.enter", lambda: do_login())
 
+        client = auth.client_id(request)
+
         def do_login() -> None:
+            wait = auth.lockout_remaining(client)
+            if wait:
+                ui.notify(f"Too many failed attempts. Try again in {int(wait // 60) + 1} min.",
+                          type="negative")
+                return
             if auth.check_password(pw.value or ""):
+                auth.record_success(client)
                 auth.login()
                 ui.navigate.to(app.storage.user.get("referrer_path", "/"))
             else:
+                auth.record_failure(client)
                 ui.notify("Wrong password", type="negative")
 
         ui.button("Enter studio", on_click=do_login).props("color=primary").classes("w-full mt-1")

@@ -38,22 +38,8 @@ if not os.path.exists(PYTHON):  # fall back to whatever runs us
 
     PYTHON = sys.executable
 
-# Same scopes publish.py uses — token.json must satisfy both.
-SCOPES = [
-    "https://www.googleapis.com/auth/youtube",
-    "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-    "https://www.googleapis.com/auth/yt-analytics.readonly",
-]
-
-# Opt-in only (Settings -> "Connect monetary analytics"). Mirrors
-# scripts/upload_youtube.py's MONETARY_SCOPES -- see that module for why this
-# is a separate constant rather than folded into SCOPES. Used only by
-# youtube_oauth.py's monetary_* functions, which write to TOKEN_FILE_MONETARY,
-# never TOKEN_FILE.
-MONETARY_SCOPES = SCOPES + [
-    "https://www.googleapis.com/auth/yt-analytics-monetary.readonly",
-]
+# One definition of the OAuth scopes for the whole project (see there).
+from scripts.upload_youtube import MONETARY_SCOPES, SCOPES  # noqa: E402
 
 
 def _env(name: str, default: str = "") -> str:
