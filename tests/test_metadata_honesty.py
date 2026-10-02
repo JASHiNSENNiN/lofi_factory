@@ -195,3 +195,31 @@ def test_live_titles_name_the_streams_own_genre_and_scene(monkeypatch):
     title = publish._live_title(concept)
     assert "bossa" not in title and "24/7 live" in title
     assert titles.EMOJI["neon_tokyo"] in title
+
+
+def test_upload_declares_audience_with_the_writable_field(monkeypatch):
+    from scripts import upload_youtube as up
+    sent = {}
+
+    class _Req:
+        def next_chunk(self):
+            return None, {"id": "vid"}
+
+    class _Videos:
+        def insert(self, part, body, media_body):
+            sent.update(body)
+            return _Req()
+
+    class _YT:
+        def videos(self):
+            return _Videos()
+
+    monkeypatch.setattr("googleapiclient.http.MediaFileUpload", lambda *a, **k: None)
+    try:
+        up.upload_video(_YT(), "/dev/null", {"title": "t", "tags": []})
+    except Exception:
+        pass   # later steps (thumbnail, playlist) need a real client
+    st = sent["status"]
+    assert st["selfDeclaredMadeForKids"] is False and "madeForKids" not in st
+    assert st["containsSyntheticMedia"] is False
+    assert "defaultAudioLanguage" not in sent["snippet"]

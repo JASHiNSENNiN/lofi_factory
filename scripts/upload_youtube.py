@@ -153,12 +153,19 @@ def upload_video(youtube, video_path, seo, thumbnail_path=None, publish_at=None)
             "description": description[:4900],   # YouTube hard limit is 5000 chars
             "tags": tags,
             "categoryId": seo.get("category_id", "10"),
+            # Title/description language. No defaultAudioLanguage: the music
+            # is instrumental, and "en" claimed English vocals.
             "defaultLanguage": "en",
-            "defaultAudioLanguage": "en",
         },
         "status": {
             "privacyStatus": privacy,
-            "madeForKids": made_for_kids,
+            # status.madeForKids is read-only (YouTube's verdict); the
+            # writable declaration is selfDeclaredMadeForKids. Sending the
+            # read-only field left every upload without a declaration.
+            "selfDeclaredMadeForKids": made_for_kids,
+            # Procedurally composed music over drawn visuals: no realistic
+            # altered or synthetic people, places or events to disclose.
+            "containsSyntheticMedia": False,
             **({"publishAt": publish_at} if publish_at else {}),
         },
     }

@@ -1135,18 +1135,23 @@ def cmd_live(args):
     print(f"  Quality: {args.quality}")
     print(f"  Privacy: {privacy}")
 
-    # 1. Create broadcast
-    broadcast_id, broadcast_title = _create_broadcast(
-        youtube, title, description, scheduled_start, privacy)
-    print(f"  Broadcast created: {broadcast_id}")
-
-    # 2. Create stream
-    stream_id, stream_key = _create_stream(youtube, f"lofi_stream_{broadcast_id[:8]}")
-    print(f"  Stream created:    {stream_id}")
-
-    # 3. Bind
-    _bind_broadcast(youtube, broadcast_id, stream_id)
-    print("  Bound broadcast ↔ stream")
+    # 1-3. Use the broadcast `publish.py schedule` prepared, if there is one
+    # (its viewers were promised this stream); otherwise create and bind one.
+    pending = load_live_state() or {}
+    if (pending.get("scheduled_at") and not pending.get("ffmpeg_pid")
+            and pending.get("broadcast_id") and pending.get("stream_key")):
+        broadcast_id = pending["broadcast_id"]
+        stream_id, stream_key = pending.get("stream_id"), pending["stream_key"]
+        title = pending.get("title") or title
+        print(f"  Using the scheduled broadcast: {broadcast_id}")
+    else:
+        broadcast_id, broadcast_title = _create_broadcast(
+            youtube, title, description, scheduled_start, privacy)
+        print(f"  Broadcast created: {broadcast_id}")
+        stream_id, stream_key = _create_stream(youtube, f"lofi_stream_{broadcast_id[:8]}")
+        print(f"  Stream created:    {stream_id}")
+        _bind_broadcast(youtube, broadcast_id, stream_id)
+        print("  Bound broadcast ↔ stream")
 
     # 4. Start ffmpeg
     ffmpeg_proc = _start_ffmpeg_stream(video_path, stream_key, preset)
@@ -1464,8 +1469,11 @@ def cmd_schedule(args):
 
     # Parse scheduled time
     if args.at:
-        # Expect ISO format like "2026-03-22T20:00:00" (local → UTC assumed)
-        scheduled_start = args.at + ".000Z"
+        # ISO time; "Z" or an offset is honoured, a bare time is UTC.
+        scheduled_start = _to_rfc3339_utc(args.at)
+        if not scheduled_start:
+            print(f"[ERROR] --at {args.at!r} is not an ISO time like 2026-03-22T20:00:00Z")
+            sys.exit(1)
     else:
         # Default: 1 hour from now
         future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
