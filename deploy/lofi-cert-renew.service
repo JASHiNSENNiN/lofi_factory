@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/jashin/lofi_factory
-ExecStart=/home/jashin/lofi_factory/deploy/lofi-cert-renew.sh
+WorkingDirectory=@ROOT@
+EnvironmentFile=-@ROOT@/.env
+ExecStart=@ROOT@/deploy/lofi-cert-renew.sh
 TimeoutStartSec=120

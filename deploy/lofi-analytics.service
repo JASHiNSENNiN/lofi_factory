@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/jashin/lofi_factory
-ExecStart=/home/jashin/lofi_factory/venv/bin/python scripts/analytics.py --report --swap-thumbs
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/venv/bin/python scripts/analytics.py --report --swap-thumbs
 # Lightweight: a handful of YouTube Analytics API calls + small JSON read/write.
 # No ffmpeg/audio processing, so no memory backstop needed like lofi-auto.service.
 TimeoutStartSec=300

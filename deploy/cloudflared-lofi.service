@@ -7,7 +7,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 # Runs the named tunnel defined in ~/.cloudflared/config.yml
-ExecStart=%h/.local/bin/cloudflared tunnel run lofi
+ExecStart=@CLOUDFLARED@ tunnel run lofi
 Restart=always
 RestartSec=5
 

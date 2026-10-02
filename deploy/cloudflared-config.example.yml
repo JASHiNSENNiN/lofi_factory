@@ -4,7 +4,7 @@
 # Replace <TUNNEL_UUID> and the hostname with your own values.
 
 tunnel: <TUNNEL_UUID>
-credentials-file: /home/jashin/.cloudflared/<TUNNEL_UUID>.json
+credentials-file: /home/<user>/.cloudflared/<TUNNEL_UUID>.json
 
 ingress:
   # Public hostname → local web UI. This hostname must match PUBLIC_BASE_URL

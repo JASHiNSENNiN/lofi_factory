@@ -6,8 +6,11 @@
 # it's a no-op. Safe to run on a schedule indefinitely.
 set -euo pipefail
 
-DOMAIN="akashic.warthog-pythagorean.ts.net"
-CERT_DIR="/home/jashin/lofi_factory/certs"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# This machine's MagicDNS name: TAILSCALE_CERT_DOMAIN if set, otherwise asked
+# from tailscale itself. (Never hard-code a personal tailnet hostname here.)
+DOMAIN="${TAILSCALE_CERT_DOMAIN:-$(tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')}"
+CERT_DIR="$ROOT/certs"
 CERT_FILE="$CERT_DIR/$DOMAIN.crt"
 
 mkdir -p "$CERT_DIR"

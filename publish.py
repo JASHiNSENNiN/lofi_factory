@@ -6,7 +6,7 @@ run.py — use this after the pipeline has produced a video.
 
 SUBCOMMANDS
   upload          Upload the latest (or specified) video as a regular upload
-  live            Stream ONE existing video for a fixed duration (dashboard-
+  live            Stream ONE existing video for a fixed duration (panel-
                   controlled, no auto-reconnect). For an indefinite 24/7
                   auto-reconnecting radio stream instead, use
                   `python run.py --stream` (scripts/stream_live.py).
@@ -470,65 +470,6 @@ def cmd_auto_service(args):
 
 
 # ── DASHBOARD ───────────────────────────────────────────────────────────────
-
-def cmd_dashboard(args):
-    """Launch the Textual TUI dashboard (run via ./lofi for SSH resilience)."""
-    dash = os.path.join(ROOT, "dashboard.py")
-    if not os.path.exists(dash):
-        print("[ERROR] dashboard.py not found in project root.")
-        sys.exit(1)
-    os.execv(sys.executable, [sys.executable, dash])
-
-
-# ── CRON INSTALLER (non-systemd fallback) ───────────────────────────────────
-# The deployed scheduling mechanism is the systemd user timer (deploy/lofi-auto.timer
-# + deploy/lofi-auto.service, controlled via `publish.py auto-service` / auto_service.py).
-# This crontab-based installer exists only as a fallback for hosts without systemd —
-# prefer `auto-service install` when systemd is available.
-
-def cmd_cron(args):
-    """Install/remove/show a daily crontab entry that auto-generates and uploads a video.
-    Non-systemd fallback — see module note above. Prefer `publish.py auto-service` normally."""
-    import subprocess as _sp
-    script   = os.path.abspath(__file__)
-    venv_py  = os.path.join(ROOT, "venv", "bin", "python")
-    python   = venv_py if os.path.exists(venv_py) else sys.executable
-    log_file = os.path.join(ROOT, "cron_auto.log")
-
-    # The cron command: daily at the chosen hour, run publish.py auto, append log
-    hour  = getattr(args, "hour", 9)
-    entry = f"0 {hour} * * * cd {ROOT} && {python} {script} auto >> {log_file} 2>&1"
-    marker = "# lofi_factory auto-upload"
-    tagged = f"{entry}  {marker}"
-
-    # Read current crontab
-    result = _sp.run(["crontab", "-l"], capture_output=True, text=True)
-    current = result.stdout if result.returncode == 0 else ""
-    lines   = [l for l in current.splitlines() if marker not in l]
-
-    if args.cron_cmd == "install":
-        lines.append(tagged)
-        new_crontab = "\n".join(lines) + "\n"
-        _sp.run(["crontab", "-"], input=new_crontab, text=True, check=True)
-        print(f"[CRON] Installed: daily at {hour:02d}:00 UTC")
-        print(f"       Log: {log_file}")
-        print(f"       Entry: {entry}")
-
-    elif args.cron_cmd == "remove":
-        new_crontab = "\n".join(lines) + "\n"
-        _sp.run(["crontab", "-"], input=new_crontab, text=True, check=True)
-        print("[CRON] Removed auto-upload cron entry.")
-
-    elif args.cron_cmd == "status":
-        if any(marker in l for l in current.splitlines()):
-            matches = [l for l in current.splitlines() if marker in l]
-            print("[CRON] Auto-upload is ACTIVE:")
-            for m in matches:
-                print(f"  {m}")
-        else:
-            print("[CRON] No auto-upload cron entry found.")
-            print("  Install with: python publish.py cron install")
-
 
 # ── SHORTS (repurpose a long-form video into a vertical Short) ──────────────
 
@@ -1124,7 +1065,7 @@ def cmd_live(args):
     """
     Stream ONE existing finished video, looped, for a fixed --duration via the
     YouTube Broadcast API. Owns its own broadcast lifecycle and live_state.json
-    schema (including ffmpeg_pid) that `publish.py end` and the dashboard/webui
+    schema (including ffmpeg_pid) that `publish.py end` and the web panel
     directly depend on to monitor/kill the stream — this is intentionally NOT
     delegated to scripts/stream_live.py, which is a different tool: an
     indefinite, auto-reconnecting 24/7 stream that continuously generates new
@@ -1582,7 +1523,7 @@ def main():
 
     # ── live ─────────────────────────────────────────────────────
     p_live = sub.add_parser("live", help="Stream ONE existing finished video for a fixed "
-                             "duration via the YouTube Broadcast API, dashboard-controlled "
+                             "duration via the YouTube Broadcast API, web-panel-controlled "
                              "(no auto-reconnect on dropout). For an indefinite, "
                              "auto-reconnecting 24/7 radio stream with continuous background "
                              "music generation, use 'python run.py --stream' or "
@@ -1636,8 +1577,6 @@ def main():
     p_anl.add_argument("--swap-thumbs", dest="swap_thumbs", action="store_true",
                        help="Swap thumbnails for videos with CTR below 70%% of channel average")
 
-    # ── dashboard ────────────────────────────────────────────────
-    sub.add_parser("dashboard", help="Open the TUI dashboard (use ./lofi for SSH resilience)")
 
     # ── shorts ───────────────────────────────────────────────────
     p_shorts = sub.add_parser(
@@ -1696,17 +1635,6 @@ def main():
     p_asvc.add_argument("--no-follow", action="store_true",
                         help="For 'logs': print history and exit instead of following")
 
-    # ── cron ─────────────────────────────────────────────────────
-    p_cron = sub.add_parser("cron", help="[non-systemd fallback] Install/remove/show a daily "
-                             "auto-upload cron job. Prefer 'auto-service install' when systemd "
-                             "is available (the actually-deployed mechanism, see deploy/).")
-    cron_sub = p_cron.add_subparsers(dest="cron_cmd", metavar="ACTION")
-    p_ci = cron_sub.add_parser("install", help="Install daily auto-upload cron")
-    p_ci.add_argument("--hour", type=int, default=9,
-                      help="UTC hour to run (default: 9 = 9AM UTC)")
-    cron_sub.add_parser("remove", help="Remove auto-upload cron entry")
-    cron_sub.add_parser("status", help="Show whether cron is installed")
-
     args = parser.parse_args()
 
     if args.auth:
@@ -1731,8 +1659,6 @@ def main():
         "log":           cmd_log,
         "stats":         cmd_stats,
         "analytics":     cmd_analytics,
-        "cron":          cmd_cron,
-        "dashboard":     cmd_dashboard,
         "playlist":      cmd_playlist,
         "shorts":        cmd_shorts,
     }
