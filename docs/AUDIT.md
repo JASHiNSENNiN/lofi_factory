@@ -1163,3 +1163,28 @@ completed: 9 tracks, 30:00.0 exactly, 720p24, −17.9 LUFS, LRA 2.4 LU.
 Still not fixable in code: the General MIDI soundfont's sound ceiling, the
 YouTube repetitious-content policy, and testing uploads and streams against
 a real account.
+
+## Round 7: thumbnails and titles
+
+- Titles (`scripts/titles.py`): three forms, each in the lofi convention
+  "scene emoji [genre · length]": a hand-written scene tied to the video's
+  visual theme ("rain on the window 🌧️ [lofi hip hop · 1 hour]"), a
+  moment ("coding after midnight"), or the radio form ("lofi hip hop 🍂
+  autumn beats to study & relax to"). 40–62 characters, keyword early,
+  season-filtered (no "first snow" in July). Trends only reweight these
+  phrases; they never add a word that doesn't describe the video. The old
+  pattern templates (which produced "Lofi For Coding Lofi Beats To Focus")
+  and the benefit-keyword extraction were removed.
+- The title's scene is also the thumbnail text, so title, thumbnail and
+  video loop show the same place.
+- Thumbnails (`scripts/thumbnail_scene.py`): rendered at 2× and downscaled.
+  One scene per image: a listener seen from behind with headphones (the
+  genre's visual convention) in front of a lit window showing the theme's
+  view, a desk lamp's warm pool against the cool window light, a few props,
+  an optional cat on the sill, fairy lights; then bloom and split-tone
+  grading (cool shadows, warm highlights). The window sits opposite the
+  text card. Sources: `research/thumbnails-titles.md`.
+
+Not done on purpose: randomising upload times to get around the
+repetitious-content policy. That policy judges the videos, not the
+schedule, and evading enforcement isn't something this project should do.

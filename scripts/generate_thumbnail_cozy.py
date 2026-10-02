@@ -309,75 +309,6 @@ def _text_size(draw: ImageDraw.ImageDraw, text: str, font) -> tuple[int, int]:
 
 # ── Background builder ─────────────────────────────────────────────────────────
 
-def _build_bg(theme: str, seed: int) -> Image.Image:
-    """Atmospheric programmatic background: gradient + dual glow + stars + bokeh."""
-    rng = np.random.default_rng(seed)
-    c   = THEMES[theme]
-
-    # 1. Smooth gradient (smoothstep curve for more interesting sky feel)
-    top = np.array(c["bg_top"], dtype=np.float32)
-    bot = np.array(c["bg_bot"], dtype=np.float32)
-    arr = np.zeros((TH, TW, 3), dtype=np.float32)
-    for y in range(TH):
-        t = y / TH
-        t_s = t * t * (3 - 2 * t)   # smoothstep
-        arr[y] = top * (1 - t_s) + bot * t_s
-
-    ys_g = np.arange(TH)[:, None].astype(np.float32)
-    xs_g = np.arange(TW)[None, :].astype(np.float32)
-
-    # 2. Primary glow orb — accent color, upper-right area
-    accent = np.array(c["accent"], dtype=np.float32)
-    gx = int(TW * 0.68);  gy = int(TH * 0.28)
-    dist  = np.sqrt((xs_g - gx)**2 + (ys_g - gy)**2)
-    glow  = np.clip(1.0 - dist / 340, 0, 1) ** 2.0
-    for ch in range(3):
-        arr[:, :, ch] = np.clip(arr[:, :, ch] + accent[ch] * glow * 0.30, 0, 255)
-
-    # 3. Secondary warm glow — lower-left, warmer tint (depth/lamp feel)
-    g2x = int(TW * 0.16);  g2y = int(TH * 0.74)
-    dist2 = np.sqrt((xs_g - g2x)**2 + (ys_g - g2y)**2)
-    glow2 = np.clip(1.0 - dist2 / 230, 0, 1) ** 3.0
-    warm  = np.array([
-        min(255, c["bg_top"][0] + 55),
-        min(255, c["bg_top"][1] + 18),
-        max(0,   c["bg_top"][2] - 18),
-    ], dtype=np.float32)
-    for ch in range(3):
-        arr[:, :, ch] = np.clip(arr[:, :, ch] + warm[ch] * glow2 * 0.20, 0, 255)
-
-    img  = Image.fromarray(arr.astype(np.uint8))
-    draw = ImageDraw.Draw(img, "RGBA")
-
-    # 4. Stars — upper 55% of frame only
-    n_stars = int(rng.integers(60, 95))
-    for _ in range(n_stars):
-        sx     = int(rng.uniform(30, TW - 30))
-        sy     = int(rng.uniform(12, TH * 0.54))
-        bright = int(rng.uniform(125, 215))
-        # Weighted towards tiny stars
-        sz     = int(rng.choice([1, 1, 2], p=[0.65, 0.25, 0.10]))
-        sc     = (bright, bright, min(255, bright + 22), 255)
-        if sz == 1:
-            draw.point((sx, sy), fill=sc)
-        else:
-            draw.ellipse([sx-1, sy-1, sx+1, sy+1], fill=sc)
-
-    # 5. Bokeh — soft semi-transparent accent blobs (depth of field feel)
-    n_bokeh = int(rng.integers(7, 14))
-    for _ in range(n_bokeh):
-        bx  = int(rng.uniform(0, TW))
-        by  = int(rng.uniform(0, TH))
-        br  = int(rng.uniform(20, 70))
-        bla = int(rng.uniform(8, 32))
-        bc  = (min(255, int(accent[0] * 0.88)),
-               min(255, int(accent[1] * 0.88)),
-               min(255, int(accent[2] * 0.88)),
-               bla)
-        draw.ellipse([bx - br, by - br, bx + br, by + br], fill=bc)
-
-    return img
-
 
 # ── Bloom ──────────────────────────────────────────────────────────────────────
 
@@ -535,9 +466,9 @@ def _card_position(layout: str, side: str, card_w: int, card_h: int) -> tuple[in
         card_x = margin if side == "left" else TW - margin - card_w
         card_x = max(40, min(TW - 40 - card_w, card_x))
         card_y = TH - card_h - 64             # low band hugging the bottom edge
-    else:  # centered
+    else:  # centered: low, over the desk, so the window and the listener stay visible
         card_x = (TW - card_w) // 2
-        card_y = int(TH * 0.52) - card_h // 2   # slightly below centre
+        card_y = TH - card_h - 40
     return card_x, card_y
 
 
@@ -931,6 +862,7 @@ def generate_thumbnail(
     duration:   str = "2 hours",
     title:      str = None,
     variant:    int = 0,
+    text:       str | None = None,
 ) -> tuple[str, str]:
     if theme_name not in THEMES:
         theme_name = "cozy_rain"
@@ -943,7 +875,9 @@ def generate_thumbnail(
     # thumbnail and video title never disagree about what the video is
     # about; fall back to the theme's static template pool when the real
     # title isn't usable as thumbnail text (too long, no title passed, etc).
-    short_title = _derive_short_title(title)
+    # `text` is the scene phrase the title was built from (scripts/titles.py),
+    # so thumbnail and title name the same scene.
+    short_title = (text or "").strip() or _derive_short_title(title)
     if short_title is None:
         choices     = TITLE_TEMPLATES.get(theme_name, TITLE_TEMPLATES["cozy_rain"])
         short_title = choices[variant % len(choices)]
@@ -980,13 +914,13 @@ def generate_thumbnail(
 
     print(f"[THUMB] {theme_name} | '{short_title}' | {duration} | layout={layout}/{side}")
 
-    base_img = _build_bg(theme_name, seed)
-    # The room (window with the theme's view, lamp-lit desk) goes in before
-    # bloom so the lamp, moon and city lights get a real glow.
-    from scripts.thumbnail_scene import draw_room, window_side_for
-    base_img = draw_room(base_img, THEMES[theme_name], theme_name,
+    # The room (wall, window with the theme's view, lamp-lit desk, someone
+    # listening) goes in before bloom so the lamp, moon and lights glow.
+    from scripts.thumbnail_scene import draw_room, split_tone, window_side_for
+    base_img = draw_room(Image.new("RGB", (TW, TH)), THEMES[theme_name], theme_name,
                          window_side_for(layout, side), rng)
     base_img = _apply_bloom(base_img)
+    base_img = split_tone(base_img, THEMES[theme_name])
     base_img = _apply_vignette(base_img, strength=0.44)
     base_img = _apply_film_grain(base_img, seed)
     base_img = _draw_duration_badge(base_img, theme_name, duration)

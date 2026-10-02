@@ -623,7 +623,7 @@ def pillar_bandit_posteriors(pillars: list[str] | None = None, analytics: dict |
 def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, float]]:
     """
     Per-pillar weights for title HOOK STRATEGIES (see generate_seo.py's
-    HOOK_STRATEGIES: "statement", "benefit_list", "spec_led"), same
+    HOOK_STRATEGIES: "scene", "moment", "radio"), same
     0.5x-2.0x/>=5-samples pattern, bandit-backed (see _bandit_weights())
     using composite_engagement_score() (falls back to CTR-only when that's
     all a logged entry has, which is the common case for older rows).
@@ -640,12 +640,9 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
     1.0 for any strategy not present in the returned per-pillar dict (no
     performance data yet).
 
-    Backward compatibility: analytics rows logged before
-    title_chosen_strategy existed only carry the older title_chosen_idx.
-    Since generate_title_variants() assigns strategy =
-    HOOK_STRATEGIES[i % len(HOOK_STRATEGIES)] to slot i, that same mapping
-    is used as a best-effort strategy label for those older rows instead of
-    silently discarding them.
+    Rows from retired title forms (strategy names no longer in
+    HOOK_STRATEGIES, or old rows with only title_chosen_idx) are skipped:
+    they measured titles the current forms don't produce.
     """
     if analytics is None:
         analytics = load_analytics()
@@ -661,18 +658,11 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
         if not pillar:
             continue
 
+        # Only the current title forms. Rows from retired forms (or old rows
+        # with just an index) describe titles these forms never produce.
         strategy = entry.get("title_chosen_strategy")
-        if strategy is None:
-            idx = entry.get("title_chosen_idx")
-            if idx is None:
-                continue
-            try:
-                idx = int(idx)
-            except (TypeError, ValueError):
-                continue
-            if not (0 <= idx < len(HOOK_STRATEGIES)):
-                continue
-            strategy = HOOK_STRATEGIES[idx]
+        if strategy not in HOOK_STRATEGIES:
+            continue
 
         score = composite_engagement_score(entry)
         if score is None:

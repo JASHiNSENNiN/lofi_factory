@@ -13,17 +13,17 @@ def test_title_variant_weights_empty():
 
 def test_title_variant_weights_prefers_higher_ctr_variant():
     # Keyed by hook-strategy identity (not raw slot index) -- see
-    # generate_seo.py's HOOK_STRATEGIES. "statement" (idx 0) outperforms
-    # "benefit_list" (idx 1) here, so its weight should end up higher.
+    # generate_seo.py's HOOK_STRATEGIES. "scene" (idx 0) outperforms
+    # "moment" (idx 1) here, so its weight should end up higher.
     fake = {}
     for i in range(6):
-        fake[f"t0_{i}"] = {"pillar": "temporal", "title_chosen_idx": 0,
+        fake[f"t0_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "scene",
                             "videoThumbnailImpressionsClickRate": 0.06}
     for i in range(6):
-        fake[f"t1_{i}"] = {"pillar": "temporal", "title_chosen_idx": 1,
+        fake[f"t1_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "moment",
                             "videoThumbnailImpressionsClickRate": 0.02}
     result = title_variant_weights(fake)
-    assert result["temporal"]["statement"] > result["temporal"]["benefit_list"]
+    assert result["temporal"]["scene"] > result["temporal"]["moment"]
 
 
 def test_title_variant_weights_keys_by_explicit_strategy_when_present():
@@ -31,17 +31,17 @@ def test_title_variant_weights_keys_by_explicit_strategy_when_present():
     # takes priority over the title_chosen_idx fallback mapping.
     fake = {}
     for i in range(6):
-        fake[f"s0_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "spec_led",
+        fake[f"s0_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "radio",
                             "videoThumbnailImpressionsClickRate": 0.08}
     for i in range(6):
-        fake[f"s1_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "statement",
+        fake[f"s1_{i}"] = {"pillar": "temporal", "title_chosen_strategy": "scene",
                             "videoThumbnailImpressionsClickRate": 0.01}
     result = title_variant_weights(fake)
-    assert result["temporal"]["spec_led"] > result["temporal"]["statement"]
+    assert result["temporal"]["radio"] > result["temporal"]["scene"]
 
 
 def test_title_variant_weights_skips_pillars_below_threshold():
-    fake = {f"v{i}": {"pillar": "aesthetic", "title_chosen_idx": 0,
+    fake = {f"v{i}": {"pillar": "aesthetic", "title_chosen_strategy": "scene",
                        "videoThumbnailImpressionsClickRate": 0.05} for i in range(3)}
     assert title_variant_weights(fake) == {}
 
@@ -61,13 +61,13 @@ def test_title_variant_weights_is_deterministic_and_keyed_by_hook_strategy():
 
     fake = {}
     for i, v in enumerate(spec_led_ctrs):
-        fake[f"a{i}"] = {"pillar": "activity", "title_chosen_strategy": "spec_led",
+        fake[f"a{i}"] = {"pillar": "activity", "title_chosen_strategy": "radio",
                           "videoThumbnailImpressionsClickRate": v}
     for i, v in enumerate(benefit_list_ctrs):
-        fake[f"b{i}"] = {"pillar": "activity", "title_chosen_strategy": "benefit_list",
+        fake[f"b{i}"] = {"pillar": "activity", "title_chosen_strategy": "moment",
                           "videoThumbnailImpressionsClickRate": v}
     for i, v in enumerate(statement_ctrs):
-        fake[f"c{i}"] = {"pillar": "activity", "title_chosen_strategy": "statement",
+        fake[f"c{i}"] = {"pillar": "activity", "title_chosen_strategy": "scene",
                           "videoThumbnailImpressionsClickRate": v}
 
     result_1 = title_variant_weights(fake)
@@ -75,27 +75,9 @@ def test_title_variant_weights_is_deterministic_and_keyed_by_hook_strategy():
     assert result_1 == result_2  # deterministic
 
     weights = result_1["activity"]
-    assert set(weights.keys()) <= {"statement", "benefit_list", "spec_led"}
+    assert set(weights.keys()) <= {"scene", "moment", "radio"}
     assert all(isinstance(k, str) for k in weights)  # keyed by strategy name, not int
-    assert weights["spec_led"] > weights["statement"] > weights["benefit_list"]
-
-
-def test_title_variant_weights_falls_back_to_idx_mapped_strategy_for_old_rows():
-    # Rows logged before title_chosen_strategy existed only have
-    # title_chosen_idx. HOOK_STRATEGIES[idx] is used as a best-effort label
-    # so that old data still contributes instead of being silently dropped.
-    from scripts.generate_seo import HOOK_STRATEGIES
-    fake = {}
-    for i in range(6):
-        fake[f"t0_{i}"] = {"pillar": "temporal", "title_chosen_idx": 0,
-                            "videoThumbnailImpressionsClickRate": 0.07}
-    for i in range(6):
-        fake[f"t1_{i}"] = {"pillar": "temporal", "title_chosen_idx": 1,
-                            "videoThumbnailImpressionsClickRate": 0.02}
-    result = title_variant_weights(fake)
-    assert HOOK_STRATEGIES[0] in result["temporal"]
-    assert HOOK_STRATEGIES[1] in result["temporal"]
-    assert result["temporal"][HOOK_STRATEGIES[0]] > result["temporal"][HOOK_STRATEGIES[1]]
+    assert weights["radio"] > weights["scene"] > weights["moment"]
 
 
 # ── title_features() / title_feature_weights() ──────────────────────────────
@@ -242,3 +224,11 @@ def test_swap_thumbnails_skips_video_with_no_alt_file(tmp_path, monkeypatch, cap
 
     out = capsys.readouterr().out
     assert "noAltVideoId" not in out  # skipped cleanly, no attempted API call
+
+
+def test_title_variant_weights_ignores_retired_title_forms():
+    fake = {f"o{i}": {"pillar": "temporal", "title_chosen_strategy": "benefit_list",
+                      "ctr": 0.05, "impressions": 1000} for i in range(10)}
+    fake.update({f"x{i}": {"pillar": "temporal", "title_chosen_idx": 0,
+                           "ctr": 0.05, "impressions": 1000} for i in range(10)})
+    assert title_variant_weights(fake) == {}

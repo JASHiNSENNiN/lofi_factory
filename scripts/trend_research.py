@@ -236,24 +236,6 @@ def suggest_thumbnail_theme(snapshot: dict) -> str:
 _TITLE_BENEFIT_VOCAB = ["study", "focus", "relax", "sleep", "chill", "unwind"]
 
 
-def extract_title_benefit_signals(snapshot: dict, top_k: int = 3) -> list[str]:
-    """Rank the benefit-keyword vocabulary (study/focus/relax/sleep/chill/
-    unwind) by frequency in this week's real scraped competitor titles
-    (snapshot['trending_titles']), so generated titles can lean toward
-    whichever benefit words are actually resonating right now instead of a
-    static uniform sample. Falls back to the static vocabulary order if no
-    trend data exists yet or none of the vocabulary appears in it.
-    """
-    text = " ".join(snapshot.get("trending_titles", [])).lower()
-    if not text:
-        return _TITLE_BENEFIT_VOCAB[:top_k]
-    counts = {w: text.count(w) for w in _TITLE_BENEFIT_VOCAB}
-    if not any(counts.values()):
-        return _TITLE_BENEFIT_VOCAB[:top_k]
-    ranked = sorted(_TITLE_BENEFIT_VOCAB, key=lambda w: -counts[w])
-    return ranked[:top_k]
-
-
 # ── Music style hints ─────────────────────────────────────────────────────────
 
 _MOOD_FROM_SEASON: dict[str, str] = {

@@ -9,6 +9,8 @@ empty at thumbnail size. Everything is drawn with PIL; no image assets.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
@@ -176,82 +178,193 @@ def _lamp(img: Image.Image, x: int, desk_y: int, s: float, flip: bool) -> None:
     d.ellipse([hx - sh * 0.35, hy + sh * 0.45, hx + sh * 0.35, hy + sh * 0.75], fill=(255, 236, 190, 255))
 
 
+SUPERSAMPLE = 2   # draw at 2x and downscale: PIL shapes have no anti-aliasing
+
+
+def _wall(c: dict, W: int, H: int, rng) -> Image.Image:
+    """A plain painted interior wall: a soft vertical gradient a little lighter
+    than the night sky colours, with faint wallpaper stripes. (The old
+    background put stars and bokeh blobs on the wall.)"""
+    top = np.array([min(255, v * 1.35 + 8) for v in c["bg_top"]], np.float32)
+    bot = np.array([min(255, v * 1.2 + 6) for v in c["bg_bot"]], np.float32)
+    ys = np.linspace(0, 1, H)[:, None, None]
+    arr = np.repeat(top * (1 - ys) + bot * ys, W, axis=1)
+    stripes = (np.sin(np.arange(W) / W * math.pi * 2 * 26) > 0.92).astype(np.float32) * 5
+    arr = arr + stripes[None, :, None]
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+
+
+def _spill(img: Image.Image, box, color, strength: float) -> None:
+    """Soft light from the window falling on the wall around it."""
+    W, H = img.size
+    x0, y0, x1, y1 = box
+    arr = np.asarray(img, dtype=np.float32)
+    ys, xs = np.mgrid[0:H, 0:W]
+    dx = np.maximum(0, np.maximum(x0 - xs, xs - x1))
+    dy = np.maximum(0, np.maximum(y0 - ys, ys - y1))
+    d = np.sqrt(dx ** 2 + dy ** 2)
+    g = np.clip(1 - d / (H * 0.35), 0, 1) ** 2.5
+    arr = np.clip(arr + np.array(color, np.float32) * g[..., None] * strength, 0, 255)
+    img.paste(Image.fromarray(arr.astype(np.uint8)))
+
+
+def _fairy_lights(d, x0, x1, y, sag, n, rng, s) -> None:
+    pts = [(x0 + (x1 - x0) * i / (n - 1), y + sag * math.sin(math.pi * i / (n - 1)))
+           for i in range(n)]
+    d.line(pts, fill=(40, 30, 26, 255), width=max(2, int(s * 0.6)))
+    for (px, py) in pts[1:-1]:
+        col = (255, 214, 140) if rng.random() < 0.8 else (255, 170, 190)
+        for k, a in ((3.2, 30), (2.0, 60)):
+            r = s * k
+            d.ellipse([px - r, py - r, px + r, py + r], fill=(*col, a))
+        r = s * 0.9
+        d.ellipse([px - r, py - r, px + r, py + r], fill=(*col, 255))
+
+
+def _listener(d, cx, desk_y, H, rim, hair_style: int) -> None:
+    """Someone at the desk, seen from behind: hoodie, headphones, elbows on the
+    desk, silhouetted against the window. Lofi's familiar figure: present,
+    never looking at the viewer."""
+    dark, mid = (18, 14, 18, 255), (32, 25, 31, 255)
+    w = max(2, int(H * 0.004))
+    head_r = H * 0.06
+    head_cy = desk_y - H * 0.2
+    neck_y = head_cy + head_r * 0.85
+    sh_w = H * 0.37                       # shoulder width
+    sh_y = neck_y + H * 0.04              # shoulder line
+    # Hoodie body: sloped shoulders into a wide back, down past the frame.
+    body = [(cx - sh_w * 0.16, neck_y), (cx + sh_w * 0.16, neck_y),
+            (cx + sh_w * 0.44, sh_y), (cx + sh_w * 0.52, sh_y + H * 0.07),
+            (cx + sh_w * 0.56, H * 1.02), (cx - sh_w * 0.56, H * 1.02),
+            (cx - sh_w * 0.52, sh_y + H * 0.07), (cx - sh_w * 0.44, sh_y)]
+    d.polygon(body, fill=dark, outline=rim, width=w)
+    # Hood folded at the back of the neck, and a spine shadow.
+    d.chord([cx - sh_w * 0.24, neck_y - H * 0.02, cx + sh_w * 0.24, neck_y + H * 0.09],
+            0, 180, fill=mid)
+    d.line([(cx, neck_y + H * 0.09), (cx, H)], fill=(12, 10, 13, 255), width=max(2, int(H * 0.006)))
+    # Head, hair, headphones.
+    d.ellipse([cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r],
+              fill=dark, outline=rim, width=w)
+    if hair_style == 1:      # bun
+        r = head_r * 0.42
+        d.ellipse([cx - r, head_cy - head_r * 1.32 - r * 0.2, cx + r, head_cy - head_r * 1.32 + r * 1.6],
+                  fill=dark, outline=rim, width=w)
+    elif hair_style == 2:    # ponytail
+        d.line([(cx + head_r * 0.1, head_cy + head_r * 0.1),
+                (cx + head_r * 0.55, head_cy + head_r * 1.5)],
+               fill=dark, width=int(head_r * 0.5), joint="curve")
+    band = head_r * 1.16
+    d.arc([cx - band, head_cy - band * 1.08, cx + band, head_cy + band * 0.9], 190, 350,
+          fill=rim, width=max(3, int(H * 0.01)))
+    for side in (-1, 1):
+        ex = cx + side * head_r * 1.0
+        d.rounded_rectangle([ex - head_r * 0.25, head_cy - head_r * 0.34,
+                             ex + head_r * 0.25, head_cy + head_r * 0.38],
+                            radius=int(head_r * 0.16), fill=mid, outline=rim, width=w)
+
+
 def draw_room(img: Image.Image, c: dict, theme: str, window_side: str,
               rng: np.random.Generator) -> Image.Image:
-    """Paint the room into `img` (the wall gradient). `window_side` is where the
-    window goes: opposite the title, or "center" behind a centered title."""
+    """Return the room scene (same size as `img`). `window_side` is where the
+    window goes: opposite the title, or "center" behind a centered title.
+    Drawn at SUPERSAMPLE x and downscaled for smooth edges."""
     from scripts.generate_thumbnail_cozy import (
         _silhouette_cat, _silhouette_coffee_cup, _silhouette_plant,
     )
-    TW, TH = img.size
+    out_w, out_h = img.size
+    S = SUPERSAMPLE
+    TW, TH = out_w * S, out_h * S
+    canvas = _wall(c, TW, TH, rng)
     view = _VIEW.get(theme, "night_city")
     x0, y0, x1, y1 = _window_box(window_side, TW, TH)
     ww, wh = x1 - x0, y1 - y0
+    sky_top, sky_bot = _sky(view, c)
 
-    # The view, then the glass's faint reflection, then the frame and sill.
-    outside = _view_layer(view, c, ww, wh, rng)
+    # Window light on the wall, then the view through the glass.
+    _spill(canvas, (x0, y0, x1, y1), _mix(sky_bot, (255, 255, 255), 0.2), 0.28)
+    # The view is drawn at output size and scaled up: its fine details (rain,
+    # lit windows, stars) are sized in output pixels and would vanish otherwise.
+    outside = _view_layer(view, c, ww // S, wh // S, rng).resize((ww, wh), Image.LANCZOS)
     if view in ("rain_city", "rain_forest"):
-        outside = outside.filter(ImageFilter.GaussianBlur(0.6))
-    img.paste(outside, (x0, y0))
-    d = ImageDraw.Draw(img, "RGBA")
+        outside = outside.filter(ImageFilter.GaussianBlur(1.0))
+    canvas.paste(outside, (x0, y0))
+    d = ImageDraw.Draw(canvas, "RGBA")
     d.polygon([(x0 + ww * 0.08, y1), (x0 + ww * 0.3, y0), (x0 + ww * 0.42, y0),
-               (x0 + ww * 0.2, y1)], fill=(255, 255, 255, 12))
+               (x0 + ww * 0.2, y1)], fill=(255, 255, 255, 14))
     if view in ("rain_city", "rain_forest"):            # droplets on the glass
-        for _ in range(40):
-            dx, dy, r = rng.uniform(x0, x1), rng.uniform(y0, y1), rng.uniform(1.5, 3.5)
+        for _ in range(50):
+            dx, dy, r = rng.uniform(x0, x1), rng.uniform(y0, y1), rng.uniform(2.5, 6)
             d.ellipse([dx - r, dy - r, dx + r, dy + r], fill=(230, 240, 255, 70))
-    frame = tuple(max(0, int(v * 0.55)) for v in c["bg_bot"])
-    fw = max(10, int(TW * 0.011))
+    frame = tuple(max(0, int(v * 0.5)) for v in c["bg_bot"])
+    fw = max(18, int(TW * 0.011))
     d.rectangle([x0 - fw, y0 - fw, x1 + fw, y1 + fw], outline=(*frame, 255), width=fw)
-    d.line([((x0 + x1) / 2, y0), ((x0 + x1) / 2, y1)], fill=(*frame, 255), width=fw - 2)
-    d.line([(x0, y0 + wh * 0.45), (x1, y0 + wh * 0.45)], fill=(*frame, 255), width=fw - 2)
+    d.line([((x0 + x1) / 2, y0), ((x0 + x1) / 2, y1)], fill=(*frame, 255), width=fw - 4)
+    d.line([(x0, y0 + wh * 0.45), (x1, y0 + wh * 0.45)], fill=(*frame, 255), width=fw - 4)
     sill_c = tuple(min(255, int(v * 1.6) + 20) for v in frame)
     d.rectangle([x0 - fw * 2, y1 + fw, x1 + fw * 2, y1 + fw * 2.4], fill=(*sill_c, 255))
     if view == "snow":
-        d.rectangle([x0, y1 - 6, x1, y1], fill=(235, 242, 255, 230))
+        d.rectangle([x0, y1 - 10, x1, y1], fill=(235, 242, 255, 230))
+    if rng.random() < 0.6:
+        _fairy_lights(d, x0 - fw, x1 + fw, y0 - fw * 0.4, wh * 0.08, 13, rng, S * 2.2)
 
     # Desk.
     desk_y = int(TH * 0.80)
-    wood = _mix((78, 52, 36), c["bg_bot"], 0.3)
+    wood = _mix((86, 58, 40), c["bg_bot"], 0.28)
     d.rectangle([0, desk_y, TW, TH], fill=(*wood, 255))
-    d.line([(0, desk_y), (TW, desk_y)], fill=(*_mix(wood, _WARM, 0.35), 255), width=3)
+    d.line([(0, desk_y), (TW, desk_y)], fill=(*_mix(wood, _WARM, 0.45), 255), width=6)
 
     # Lamp at the window's outer edge, glowing over the desk.
     s = TH * 0.20
     if window_side == "center":
-        lamp_x, flip = int(TW * 0.12), False
+        lamp_x, flip = int(TW * 0.14), False
     elif window_side == "left":
-        lamp_x, flip = int(x0 + ww * 0.08), False
+        lamp_x, flip = int(x0 + ww * 0.06), False
     else:
-        lamp_x, flip = int(x1 - ww * 0.08), True
-    _lamp(img, lamp_x, desk_y, s, flip)
-    d = ImageDraw.Draw(img, "RGBA")
+        lamp_x, flip = int(x1 - ww * 0.06), True
+    _lamp(canvas, lamp_x, desk_y, s, flip)
+    d = ImageDraw.Draw(canvas, "RGBA")
 
-    # Things on the desk under the window, lit from the lamp side.
-    fill = (30, 22, 20, 245)
-    rim = (*_WARM, 190)
-    palette = [_mix(c["accent"], (60, 40, 30), 0.45), (122, 70, 52), (70, 88, 110)]
-    objs = ["mug", "plant", "books", "headphones"]
-    rng.shuffle(objs)
-    span = (x0 + ww * 0.22, x1 - ww * 0.22) if window_side != "center" else (TW * 0.3, TW * 0.7)
-    for i, name in enumerate(objs[:3]):
-        cx = span[0] + (span[1] - span[0]) * (i + 0.5) / 3
-        size = TH * 0.22
+    # Two things on the desk, either side of the listener.
+    fill, rim = (30, 22, 20, 245), (*_WARM, 200)
+    cx = (x0 + x1) / 2
+    size = TH * 0.20
+    left, right = cx - ww * 0.36, cx + ww * 0.36
+    prop_a = rng.choice(["mug", "books"])
+    prop_b = rng.choice(["plant", "headphones" if prop_a != "headphones" else "plant"])
+    for name, px in ((prop_a, left if not flip else right), (prop_b, right if not flip else left)):
         if name == "mug":
-            _silhouette_coffee_cup(d, cx, desk_y - size * 0.29, size, size, fill, rim, rng)
+            _silhouette_coffee_cup(d, px, desk_y - size * 0.29, size, size, fill, rim, rng)
         elif name == "plant":
-            _silhouette_plant(d, cx, desk_y - size * 0.34, size * 1.1, size * 1.1, fill, rim, rng)
+            _silhouette_plant(d, px, desk_y - size * 0.34, size * 1.1, size * 1.1, fill, rim, rng)
         elif name == "books":
-            _books(d, cx, desk_y, size, palette)
+            _books(d, px, desk_y, size, [_mix(c["accent"], (60, 40, 30), 0.45), (122, 70, 52), (70, 88, 110)])
         else:
-            _headphones(d, cx, desk_y, size * 0.8, fill, rim)
+            _headphones(d, px, desk_y, size * 0.8, fill, rim)
 
-    # Sometimes a cat on the sill.
-    if rng.random() < 0.45:
-        cs = TH * 0.13
-        catx = x0 + ww * (0.18 if window_side != "left" else 0.82)
-        _silhouette_cat(d, catx, y1 + fw - cs * 0.78, cs, cs, (18, 14, 16, 255), rim, rng)
-    return img
+    # Sometimes a cat on the sill, on the side away from the lamp.
+    if rng.random() < 0.4:
+        cs = TH * 0.11
+        catx = x0 + ww * (0.16 if flip else 0.84)
+        _silhouette_cat(d, catx, y1 + fw - cs * 0.78, cs, cs, (16, 12, 14, 255), rim, rng)
+
+    # The listener, back to us, facing the window.
+    rimlight = (*_mix(sky_bot, (255, 255, 255), 0.35), 210)
+    _listener(d, cx, desk_y, TH, rimlight, int(rng.integers(0, 3)))
+
+    return canvas.resize((out_w, out_h), Image.LANCZOS)
+
+
+def split_tone(img: Image.Image, c: dict, amount: float = 0.18) -> Image.Image:
+    """Cool shadows, warm highlights: the warm-lamp/cool-window contrast that
+    makes cozy interiors read (complementary orange/teal grading)."""
+    arr = np.asarray(img, dtype=np.float32)
+    luma = (arr @ np.array([0.299, 0.587, 0.114], np.float32))[..., None] / 255.0
+    cool = np.array(_mix(c["bg_bot"], (40, 70, 120), 0.5), np.float32)
+    warm = np.array(_WARM, np.float32)
+    shadow = (1 - luma) ** 2
+    high = luma ** 2
+    graded = arr + amount * (shadow * (cool - arr) * 0.6 + high * (warm - arr) * 0.35)
+    return Image.fromarray(np.clip(graded, 0, 255).astype(np.uint8))
 
 
 def window_side_for(layout: str, text_side: str) -> str:

@@ -195,7 +195,7 @@ def test_room_shows_the_themes_view_through_the_window():
 
     def window_mean(theme):
         img = Image.new("RGB", (gtc.TW, gtc.TH), gtc.THEMES[theme]["bg_top"])
-        draw_room(img, gtc.THEMES[theme], theme, "right", np.random.default_rng(1))
+        img = draw_room(img, gtc.THEMES[theme], theme, "right", np.random.default_rng(1))
         x0, y0, x1, y1 = _window_box("right", gtc.TW, gtc.TH)
         return np.asarray(img.crop((x0, y0, x1, y1)), dtype=float).mean(axis=(0, 1))
 

@@ -37,7 +37,6 @@ ASSETS_DIR = os.path.join(os.path.dirname(__file__), '..', 'assets')
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 #  CONCEPT POOLS
 #  Combinatorial design: temporal × activity × emotional gives thousands of
@@ -329,155 +328,12 @@ CROSS_GENRE_POOL = [
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  TITLE TEMPLATES  (100+ combinations guaranteed per concept)
+#  TITLES  -- the three title forms live in scripts/titles.py
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Title patterns — varied structure, duration placement, separators, and story-first hooks
-# Rule: "lofi", "lo-fi", or "study music" must appear within the first 35 characters.
-# Vary the skeleton: don't always use [keyword] · {duration} · [thing].
-#
-# HOOK STRATEGIES — each pillar's patterns are grouped into distinct rhetorical
-# families (not just reshuffled wording of the same idea):
-#   "statement"     — descriptive, straightforward. States the scene/mood
-#                      plainly and lets the concept carry the click.
-#   "benefit_list"  — keyword-first + a benefit/activity keyword list
-#                      (study/focus/relax/sleep), matching the verified
-#                      convention real lofi/ambient-radio channels use (e.g.
-#                      "lofi hip hop radio - beats to relax/study to").
-#                      Replaced the old "curiosity_gap" family, which
-#                      borrowed vlog-clickbait phrasing ("nobody tells you",
-#                      "turns out X actually helps") that doesn't match this
-#                      genre's search/browse-driven audience intent -- and
-#                      reads as templated/repetitive at scale (YouTube's
-#                      "inauthentic content" policy risk).
-#   "spec_led"      — leads with a concrete number/fact (usually the duration)
-#                      instead of mood language — a "specificity" hook that
-#                      trades atmosphere for a hard, scannable fact up front.
-#
-# generate_title_variants() draws exactly one title per strategy so the 3
-# variants it returns are genuinely different hooks, not 3 rolls of the same
-# skeleton family.
-HOOK_STRATEGIES = ("statement", "benefit_list", "spec_led")
+HOOK_STRATEGIES = ("scene", "moment", "radio")   # forms in scripts/titles.py
 
-# {genre} appears in 2 of each strategy's 4 templates below (the other 2 stay
-# genre-free for stylistic variety, so not every title is genre-stuffed) --
-# always paired with a literal "lofi"/"lo-fi"/"study music" token kept
-# separate from {genre} itself, never relying on {genre} alone to satisfy
-# that rule (some genre_label values, e.g. "chillhop", don't contain "lofi").
-TITLE_PATTERNS_TEMPORAL = {
-    "statement": [
-        "lofi hip hop · {genre}, it's {time} and you're still awake — {duration}",
-        "study music · {time}, the deadline blinked first — {duration} 📚",
-        "lofi · {genre}, {time}, headphones in, world out — {duration} 🎵",
-        "lofi hip hop, {time}, still on {activity}, {duration}",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {time} · {benefits} — {duration}",
-        "lofi · {time} focus mix — {benefits} · {duration}",
-        "study music · {genre} · {time}, {duration} to {benefits}",
-        "lofi · {time} beats for {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} lofi hip hop · {genre} · {time}, {activity}",
-        "{duration} of lofi for {time}, no filler",
-        "{duration} · study music · {genre} · {time} focus block",
-        "{duration} straight · lofi · {time}, {activity}",
-    ],
-}
 
-TITLE_PATTERNS_ACTIVITY = {
-    "statement": [
-        "lofi hip hop · {genre}, put this on, start {activity}, check back in {duration}",
-        "study music · {activity} until it clicks — {duration} 📚",
-        "lofi · {genre}, headphones on, {activity} open, timer set — {duration}",
-        "study lofi · {duration} of {activity}, no commentary",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {activity} · {benefits} — {duration}",
-        "lofi · beats for {activity} — {benefits} · {duration}",
-        "study music · {genre} · {activity} session, {duration} to {benefits}",
-        "lofi · {activity} beats for {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} lofi hip hop · {genre} · {activity} mix",
-        "{duration} · {activity} · lofi, zero interruptions",
-        "{duration} of lofi · {genre} · built for {activity}",
-        "{duration} · lofi · {activity} session, start to finish",
-    ],
-}
-
-TITLE_PATTERNS_EMOTIONAL = {
-    "statement": [
-        "lofi hip hop · {genre}, {emotional_state} but the cursor is moving again — {duration}",
-        "study music · for the {emotional_state} ones still at their desk — {duration} 🌙",
-        "lofi · {genre}, {emotional_state} and somehow still on {activity} — {duration}",
-        "lofi hip hop · {duration} · {emotional_state}. working anyway.",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} for the {emotional_state} — {benefits} · {duration}",
-        "lofi · {emotional_state} focus mix — {benefits} ({duration})",
-        "study music · {genre} · {emotional_state}, still working — {benefits} · {duration}",
-        "lofi · {emotional_state} beats to {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} lofi · {genre} for the {emotional_state}",
-        "{duration} · {emotional_state}, working anyway · lofi",
-        "{duration} of lofi · {genre} · made for {emotional_state} nights",
-        "{duration} · study music · {emotional_state} but productive",
-    ],
-}
-
-TITLE_PATTERNS_AESTHETIC = {
-    "statement": [
-        "lofi hip hop · {genre}, {aesthetic} light, {activity} open — {duration}",
-        "study music · {aesthetic} energy study block — {duration} 📚",
-        "lofi · {genre}, {aesthetic} room, see what happens — {duration}",
-        "lofi hip hop · {aesthetic} focus session ({duration}, no breaks)",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {aesthetic} · {benefits} — {duration}",
-        "lofi · {aesthetic} beats for {benefits} — {duration}",
-        "study music · {genre} · {aesthetic} focus session · {duration}",
-        "lofi · {aesthetic}, {duration} to {benefits}",
-    ],
-    "spec_led": [
-        "{duration} lofi · {genre} · {aesthetic} aesthetic, {activity}",
-        "{duration} of {aesthetic} lofi for {activity}",
-        "{duration} · {genre} · {aesthetic} · lofi hip hop",
-        "{duration} straight of {aesthetic} lofi",
-    ],
-}
-
-TITLE_PATTERNS_CROSSGENRE = {
-    "statement": [
-        "lofi hip hop · what if {genre} never left the library — {duration}",
-        "study music · {genre} roots, lofi filter, {activity} session — {duration} 🎵",
-        "lofi · {genre} but quieter, {duration} for {activity}",
-        "lofi hip hop · the {genre} {activity} playlist ({duration})",
-    ],
-    "benefit_list": [
-        "lofi hip hop · {genre} · {benefits} — {duration}",
-        "lofi · {genre} beats for {benefits} — {duration}",
-        "study music · {genre} roots, {duration} to {benefits}",
-        "lofi · {genre}, {benefits} — {duration}",
-    ],
-    "spec_led": [
-        "{duration} of {genre} lofi for {activity}",
-        "{duration} · {genre} · lofi hip hop",
-        "{duration} lofi · {genre}, one long set",
-        "{genre} lofi · {duration} · {activity}",
-    ],
-}
-
-_TITLE_PATTERNS_BY_PILLAR: dict[str, dict[str, list[str]]] = {
-    "temporal":    TITLE_PATTERNS_TEMPORAL,
-    "activity":    TITLE_PATTERNS_ACTIVITY,
-    "emotional":   TITLE_PATTERNS_EMOTIONAL,
-    "aesthetic":   TITLE_PATTERNS_AESTHETIC,
-    "cross_genre": TITLE_PATTERNS_CROSSGENRE,
-}
-
-# Duration display strings — shown in titles and descriptions
 DURATION_DISPLAY = {
     "test":      "10 sec",
     "30 min":    "30 min",
@@ -633,14 +489,6 @@ Original music, written and mixed by this channel's own composing software. Drum
 {hashtags}"""
 
 
-def _strip_leading_article(s: str) -> str:
-    """Remove a/an/the from start so templates can add their own article."""
-    for art in ("the ", "an ", "a "):
-        if s.lower().startswith(art):
-            return s[len(art):]
-    return s
-
-
 def _sentence(text: str) -> str:
     """Capitalise the first letter and end with exactly one full stop."""
     text = (text or "").strip()
@@ -723,7 +571,7 @@ def _pillar_weights() -> dict[str, float]:
 
 # Preferred title length band. Templates can't hit an exact length, so this
 # is a preference when picking among candidates, not a hard limit.
-_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 45, 70
+_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 40, 62   # research: 40-60 chars read fully on mobile
 
 
 def generate_title_variants(
@@ -956,115 +804,27 @@ def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concep
 #  TITLE BUILDER
 # ──────────────────────────────────────────────────────────────────────────────
 
-_BENEFIT_KEYWORDS = ["study", "focus", "relax", "sleep", "chill", "unwind"]
-
-
-def _benefit_tail(trends: dict | None = None) -> str:
-    """Comma-joined 2-3 word benefit-list tail for the "benefit_list" hook
-    strategy, matching the verified lofi/ambient-radio convention
-    (keyword-first + Study/Focus/Relax/Sleep list), e.g. real competitor
-    titles already scraped into assets/trend_cache.json: "lofi hip hop
-    radio - beats to relax/study to". Trend-aware when real competitor
-    titles are available (ranks the vocabulary by what's actually showing up
-    this week); falls back to a uniform-random sample otherwise.
-    """
-    if trends:
-        from scripts.trend_research import extract_title_benefit_signals
-        ranked = extract_title_benefit_signals(trends)
-        if ranked:
-            return ", ".join(ranked[:random.choice([2, 3])])
-    return ", ".join(random.sample(_BENEFIT_KEYWORDS, random.choice([2, 3])))
-
-
-def _norm(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower().replace("lo-fi", "lofi").replace("lo fi", "lofi")).strip()
-
-
-def tidy_title(title: str) -> str:
-    """Remove the repetition the pattern templates produce: a " · " segment
-    already contained in another segment ("lofi hip hop · lo-fi hip hop, ...")
-    and the same word twice in a row ("lofi lofi")."""
-    segments = [seg for seg in title.split(" · ") if seg.strip()]
-    kept: list[str] = []
-    for i, seg in enumerate(segments):
-        n = _norm(seg)
-        others = [_norm(o) for j, o in enumerate(segments) if j != i]
-        dup_later = any(n == o for o in others[i:])
-        contained = n and any(n != o and re.search(rf"\b{re.escape(n)}\b", o) for o in others)
-        if not dup_later and not contained:
-            kept.append(seg)
-    title = " · ".join(kept) if kept else title
-    # "lofi lofi", "lo-fi lofi": drop the second of two equal adjacent words
-    words = title.split(" ")
-    out = [w for k, w in enumerate(words) if k == 0 or _norm(w) == "" or _norm(w) != _norm(words[k - 1])]
-    return " ".join(out)
+_THUMB_TEXT: dict[str, str] = {}   # title -> the short phrase its thumbnail shows
 
 
 def build_title(concept: dict, duration: str, strategy: str | None = None,
                  trends: dict | None = None) -> str:
-    """Build one title from the concept's pillar pattern set.
-
-    `strategy` picks a specific hook-strategy family (one of HOOK_STRATEGIES:
-    "statement", "benefit_list", "spec_led"). If omitted (or unrecognized),
-    a pattern is drawn from the pooled union of all strategies for that
-    pillar — this preserves the old flat-random behavior for any caller that
-    doesn't care which hook family it gets.
-
-    `trends` (optional) ranks the "benefit_list" strategy's keyword tail by
-    real scraped competitor titles instead of a uniform-random sample -- see
-    _benefit_tail(). Unused by patterns that don't reference {benefits}.
-    """
-    dur_str  = DURATION_DISPLAY.get(duration, duration)
-    pillar   = concept.get("pillar", "temporal")
-    city     = concept.get("city") or "city"
-    setting  = concept.get("setting", "room")
-    time_l   = concept.get("time_label", "late night")
-    activity = concept.get("activity", "study")
-    mood      = concept.get("mood_line", "chill")
-    aesthetic = concept.get("aesthetic", "cozy")
-    genre     = concept.get("genre_label", "lo-fi hip hop")
-    # Derive a clean short adjective for emotional patterns.
-    # mood_line is often a poetic phrase — extract only the first 1-2 words
-    # and map common phrases to clean adjectives.
-    _EMO_MAP = [
-        ("overwhelm",  "overwhelmed"), ("anxious",    "anxious"),
-        ("burnt out",  "burnt out"),   ("burnout",    "burnt out"),
-        ("lonely",     "lonely"),      ("alone",      "alone"),
-        ("nostalgic",  "nostalgic"),   ("melancholy", "melancholy"),
-        ("stressed",   "stressed"),    ("numb",       "numb"),
-        ("hopeful",    "hopeful"),     ("motivated",  "motivated"),
-        ("exhaust",    "exhausted"),   ("tired",      "tired"),
-        ("sad",        "sad"),         ("lost",       "lost"),
-        ("calm",       "calm"),        ("focused",    "focused"),
-        ("grief",      "melancholy"),  ("weight",     "heavy-hearted"),
-        ("quiet",      "quietly wired"), ("silence",  "silent"),
-    ]
-    mood_lower = mood.lower()
-    emo = next((v for k, v in _EMO_MAP if k in mood_lower), "tired but focused")
-
-    # Compute benefits (may itself draw from random.choice/random.sample)
-    # BEFORE the pattern pick below, so the pattern-selection random.choice()
-    # call stays the last one made in this function -- tests spy on
-    # random.choice to verify which candidate pool a strategy drew from.
-    format_kwargs = {
-        "time": time_l, "activity": activity, "duration": dur_str,
-        "emotional_state": emo, "aesthetic": aesthetic, "genre": genre,
-        "benefits": _benefit_tail(trends),
-    }
-
-    patterns_by_strategy = _TITLE_PATTERNS_BY_PILLAR.get(pillar, TITLE_PATTERNS_TEMPORAL)
-    if strategy in patterns_by_strategy:
-        candidates = patterns_by_strategy[strategy]
-    else:
-        # Unknown/omitted strategy -- pool every strategy's patterns together
-        # (preserves the old flat-random-across-all-10 behavior).
-        candidates = [p for plist in patterns_by_strategy.values() for p in plist]
-    pattern = random.choice(candidates)
-    title = tidy_title(pattern.format(**format_kwargs))
-
-    # Trim to 100 chars (YouTube hard limit) at a word boundary
-    if len(title) > 100:
-        title = title[:100].rsplit(" ", 1)[0].rstrip(" ·—,-")
+    """One title in one of the HOOK_STRATEGIES forms (see scripts/titles.py):
+    "scene" ("rain on the window 🌧️ [lofi hip hop · 1 hour]"), "moment"
+    ("reading after midnight ☕ [lofi jazz · 1 hour]") or "radio" ("lofi hip
+    hop 🌧️ rainy beats to study & relax to"). An unknown strategy picks one."""
+    from scripts import titles
+    if strategy not in HOOK_STRATEGIES:
+        strategy = random.choice(HOOK_STRATEGIES)
+    title, thumb = titles.build(
+        strategy,
+        theme=concept.get("theme") or "cozy_rain",
+        genre=concept.get("genre_label") or "lo-fi hip hop",
+        activity=(concept.get("activity") or "studying").lower(),
+        duration=DURATION_DISPLAY.get(duration, duration),
+        trends=trends,
+    )
+    _THUMB_TEXT[title] = thumb
     return title
 
 
@@ -1157,6 +917,7 @@ def generate_seo(theme_name: str = None, duration: str = None,
     # target-length/emoji/benefit-list title win", mined from the same
     # already-logged title text). Both fall back to a neutral 1.0 for any
     # strategy/feature without >=5 samples of performance data yet.
+    concept = {**concept, "theme": theme_name or concept.get("theme") or "cozy_rain"}
     title_variants, variant_strategies = generate_title_variants(concept, duration, trends, n=3)
     from scripts.analytics import (
         title_variant_weights as _title_variant_weights,
@@ -1209,6 +970,7 @@ def generate_seo(theme_name: str = None, duration: str = None,
         "city":             concept.get("city"),
         "activity":         concept.get("activity", ""),
         "genre_label":      concept.get("genre_label", ""),
+        "thumb_text":       _THUMB_TEXT.get(title, ""),
         "generated_at":     _now_utc.isoformat(),
         "ref_id":           ref_id,
         "title_variants":           title_variants,

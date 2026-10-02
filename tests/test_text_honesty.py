@@ -35,13 +35,6 @@ def test_titles_do_not_repeat_the_genre_or_words():
         assert not re.search(r"\b(\w+) \1\b", low), t
 
 
-def test_tidy_title_drops_contained_segments():
-    assert seo.tidy_title("lofi hip hop · lo-fi hip hop, rainy window — 1 hour") == \
-        "lo-fi hip hop, rainy window — 1 hour"
-    assert seo.tidy_title("1 hour of neo soul lofi lofi for essay writing") == \
-        "1 hour of neo soul lofi for essay writing"
-
-
 def test_thumbnail_text_never_ends_mid_phrase():
     for t in _titles():
         short = thumb._derive_short_title(t)
