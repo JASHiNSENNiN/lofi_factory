@@ -46,7 +46,8 @@ def _sky(view: str, c: dict) -> tuple[tuple, tuple]:
 
 def _window_box(window_side: str, TW: int, TH: int) -> tuple[int, int, int, int]:
     if window_side == "center":
-        return int(TW * 0.27), int(TH * 0.07), int(TW * 0.73), int(TH * 0.62)
+        # Lowered under the centered layout's title band.
+        return int(TW * 0.25), int(TH * 0.33), int(TW * 0.75), int(TH * 0.72)
     if window_side == "left":
         return int(TW * 0.05), int(TH * 0.08), int(TW * 0.47), int(TH * 0.66)
     return int(TW * 0.53), int(TH * 0.08), int(TW * 0.95), int(TH * 0.66)
@@ -263,6 +264,121 @@ def _listener(d, cx, desk_y, H, rim, hair_style: int) -> None:
                             radius=int(head_r * 0.16), fill=mid, outline=rim, width=w)
 
 
+# ── Room variations: each thumbnail draws a few of these, so a daily
+# channel's thumbnails share a style without being the same picture. ──────
+
+WINDOW_STYLES = ("four_pane", "two_pane", "six_pane", "arched")
+
+
+def _arch_mask(size, box) -> Image.Image:
+    """Mask of the window's top corners outside a round arch."""
+    x0, y0, x1, y1 = box
+    m = Image.new("L", size, 0)
+    md = ImageDraw.Draw(m)
+    r = (x1 - x0) / 2
+    md.rectangle([x0, y0, x1, y0 + r], fill=255)
+    md.pieslice([x0, y0, x1, y0 + 2 * r], 180, 360, fill=0)
+    return m
+
+
+def _mullions(d, box, style, col, w) -> None:
+    x0, y0, x1, y1 = box
+    ww, wh = x1 - x0, y1 - y0
+    cols = {"two_pane": 1, "four_pane": 1, "six_pane": 2, "arched": 1}[style]
+    for k in range(1, cols + 1):
+        x = x0 + ww * k / (cols + 1)
+        d.line([(x, y0), (x, y1)], fill=col, width=w)
+    if style != "two_pane":
+        y = y0 + wh * (0.55 if style == "arched" else 0.45)
+        d.line([(x0, y), (x1, y)], fill=col, width=w)
+
+
+def _curtains(d, box, colour, fw) -> None:
+    """Two drapes on a rod, gathered at the sides of the window."""
+    x0, y0, x1, y1 = box
+    ww = x1 - x0
+    rod_y = y0 - fw * 2.6
+    d.line([(x0 - fw * 4, rod_y), (x1 + fw * 4, rod_y)], fill=(40, 30, 26, 255), width=max(4, fw // 2))
+    dark = _mix(colour, (0, 0, 0), 0.35)
+    for side in (-1, 1):
+        edge = x0 - fw * 3.5 if side < 0 else x1 + fw * 3.5
+        inner = x0 + ww * 0.13 if side < 0 else x1 - ww * 0.13
+        waist = x0 + ww * 0.02 if side < 0 else x1 - ww * 0.02
+        pts = [(edge, rod_y), (inner, rod_y), (waist, y0 + (y1 - y0) * 0.62),
+               (inner * 0.4 + edge * 0.6, y1 + fw * 3), (edge, y1 + fw * 3)]
+        d.polygon(pts, fill=(*colour, 255))
+        for t in (0.3, 0.6):                      # folds
+            fx = edge + (inner - edge) * t
+            d.line([(fx, rod_y + fw), (edge + (waist - edge) * t, y0 + (y1 - y0) * 0.62),
+                    (edge + (inner * 0.4 + edge * 0.6 - edge) * t, y1 + fw * 2)],
+                   fill=(*dark, 150), width=max(2, fw // 4))
+
+
+def _shelf(d, x, y, w, accent, rng) -> None:
+    """A floating wall shelf with a potted plant, books and a small frame."""
+    t = max(6, int(w * 0.035))
+    wood = (70, 50, 38)
+    d.rectangle([x, y, x + w, y + t], fill=(*wood, 255))
+    d.line([(x, y + t), (x + w, y + t)], fill=(*_mix(wood, _WARM, 0.4), 160), width=2)
+    items = ["plant", "books", "frame"]
+    rng.shuffle(items)
+    slot = w / 3
+    for i, name in enumerate(items):
+        cx = x + slot * (i + 0.5)
+        if name == "plant":
+            pw = slot * 0.36
+            d.polygon([(cx - pw, y - pw * 1.2), (cx + pw, y - pw * 1.2), (cx + pw * 0.75, y),
+                       (cx - pw * 0.75, y)], fill=(150, 92, 70, 255))
+            for k in range(5):
+                ang = math.pi * (0.15 + 0.7 * k / 4)
+                lx, ly = cx + math.cos(ang) * pw * 2.2, y - pw * 1.2 - math.sin(ang) * pw * 2.0
+                d.line([(cx, y - pw * 1.2), (lx, ly)], fill=(52, 104, 74, 255), width=max(3, t // 2))
+                d.ellipse([lx - pw * 0.35, ly - pw * 0.22, lx + pw * 0.35, ly + pw * 0.22],
+                          fill=(70, 140, 96, 255))
+        elif name == "books":
+            bx = cx - slot * 0.32
+            for k, col in enumerate([(122, 70, 52), _mix(accent, (60, 40, 30), 0.4), (70, 88, 110), (180, 150, 100)]):
+                bh = slot * (0.55 + 0.1 * ((k * 7) % 3))
+                bw = slot * 0.13
+                d.rectangle([bx, y - bh, bx + bw, y], fill=(*col, 255))
+                bx += bw + 2
+        else:
+            fs = slot * 0.5
+            d.rectangle([cx - fs * 0.5, y - fs * 1.1, cx + fs * 0.5, y], fill=(40, 30, 26, 255))
+            d.rectangle([cx - fs * 0.38, y - fs * 0.98, cx + fs * 0.38, y - fs * 0.12],
+                        fill=(*_mix(accent, (255, 230, 200), 0.4), 255))
+
+
+def _wall_print(d, x, y, w, accent, sky) -> None:
+    """A framed print: hills under a moon, in the theme's colours."""
+    h = w * 1.25
+    d.rectangle([x, y, x + w, y + h], fill=(36, 28, 24, 255))
+    m = w * 0.1
+    ix0, iy0, ix1, iy1 = x + m, y + m, x + w - m, y + h - m
+    d.rectangle([ix0, iy0, ix1, iy1], fill=(*_mix(sky, (240, 230, 215), 0.35), 255))
+    r = w * 0.12
+    d.ellipse([ix1 - r * 3, iy0 + r, ix1 - r, iy0 + r * 3], fill=(*_mix(accent, (255, 245, 220), 0.5), 255))
+    d.polygon([(ix0, iy1), (ix0, iy1 - (iy1 - iy0) * 0.3), (ix0 + (ix1 - ix0) * 0.45, iy1 - (iy1 - iy0) * 0.55),
+               (ix1, iy1 - (iy1 - iy0) * 0.25), (ix1, iy1)], fill=(*_mix(accent, (30, 30, 50), 0.6), 255))
+
+
+def _laptop_glow(img: Image.Image, cx: float, desk_y: int, H: int, colour) -> None:
+    """A laptop in front of the listener: its screen light rims their
+    shoulders (the screen itself is hidden by their back)."""
+    W = img.size[0]
+    arr = np.asarray(img, dtype=np.float32)
+    ys, xs = np.mgrid[0:img.size[1], 0:W]
+    gy = desk_y - H * 0.09
+    dist = np.sqrt(((xs - cx) / (H * 0.36)) ** 2 + ((ys - gy) / (H * 0.2)) ** 2)
+    glow = np.clip(1 - dist, 0, 1) ** 2
+    arr = np.clip(arr + np.array(colour, np.float32) * glow[..., None] * 0.45, 0, 255)
+    img.paste(Image.fromarray(arr.astype(np.uint8)))
+    d = ImageDraw.Draw(img, "RGBA")
+    lw = H * 0.24
+    d.polygon([(cx - lw, desk_y), (cx + lw, desk_y), (cx + lw * 0.92, desk_y - H * 0.012),
+               (cx - lw * 0.92, desk_y - H * 0.012)], fill=(48, 46, 54, 255))
+
+
 def draw_room(img: Image.Image, c: dict, theme: str, window_side: str,
               rng: np.random.Generator) -> Image.Image:
     """Return the room scene (same size as `img`). `window_side` is where the
@@ -287,7 +403,11 @@ def draw_room(img: Image.Image, c: dict, theme: str, window_side: str,
     outside = _view_layer(view, c, ww // S, wh // S, rng).resize((ww, wh), Image.LANCZOS)
     if view in ("rain_city", "rain_forest"):
         outside = outside.filter(ImageFilter.GaussianBlur(1.0))
+    style = WINDOW_STYLES[int(rng.integers(0, len(WINDOW_STYLES)))]
+    wall_lit = canvas.copy() if style == "arched" else None
     canvas.paste(outside, (x0, y0))
+    if wall_lit is not None:          # wall back over the corners outside the arch
+        canvas.paste(wall_lit, (0, 0), _arch_mask(canvas.size, (x0, y0, x1, y1)))
     d = ImageDraw.Draw(canvas, "RGBA")
     d.polygon([(x0 + ww * 0.08, y1), (x0 + ww * 0.3, y0), (x0 + ww * 0.42, y0),
                (x0 + ww * 0.2, y1)], fill=(255, 255, 255, 14))
@@ -297,13 +417,40 @@ def draw_room(img: Image.Image, c: dict, theme: str, window_side: str,
             d.ellipse([dx - r, dy - r, dx + r, dy + r], fill=(230, 240, 255, 70))
     frame = tuple(max(0, int(v * 0.5)) for v in c["bg_bot"])
     fw = max(18, int(TW * 0.011))
-    d.rectangle([x0 - fw, y0 - fw, x1 + fw, y1 + fw], outline=(*frame, 255), width=fw)
-    d.line([((x0 + x1) / 2, y0), ((x0 + x1) / 2, y1)], fill=(*frame, 255), width=fw - 4)
-    d.line([(x0, y0 + wh * 0.45), (x1, y0 + wh * 0.45)], fill=(*frame, 255), width=fw - 4)
+    if style == "arched":
+        r = ww / 2
+        d.arc([x0 - fw, y0 - fw, x1 + fw, y0 + 2 * r + fw], 180, 360, fill=(*frame, 255), width=fw)
+        for xx in (x0 - fw, x1):
+            d.rectangle([xx, y0 + r, xx + fw, y1 + fw], fill=(*frame, 255))
+        d.rectangle([x0 - fw, y1, x1 + fw, y1 + fw], fill=(*frame, 255))
+    else:
+        d.rectangle([x0 - fw, y0 - fw, x1 + fw, y1 + fw], outline=(*frame, 255), width=fw)
+    _mullions(d, (x0, y0, x1, y1), style, (*frame, 255), fw - 4)
     sill_c = tuple(min(255, int(v * 1.6) + 20) for v in frame)
     d.rectangle([x0 - fw * 2, y1 + fw, x1 + fw * 2, y1 + fw * 2.4], fill=(*sill_c, 255))
     if view == "snow":
         d.rectangle([x0, y1 - 10, x1, y1], fill=(235, 242, 255, 230))
+    if rng.random() < 0.45:
+        _curtains(d, (x0, y0, x1, y1), _mix(c["accent"], c["bg_bot"], 0.62), fw)
+    # Something on the wall beside the window: a shelf, a framed print or both.
+    walls = ([(0, x0)] if window_side == "right" else [(x1, TW)] if window_side == "left"
+             else [(0, x0), (x1, TW)])
+    decor = rng.choice(["shelf", "print", "both", "none"], p=[0.35, 0.3, 0.2, 0.15])
+    if decor == "both" and len(walls) == 1:     # one wall only has room for one
+        decor = "shelf"
+    for k, (wa, wb) in enumerate(walls):
+        span = wb - wa
+        if span < TW * 0.15:
+            continue
+        if decor in ("shelf", "both") and k == 0:
+            sw = min(span * 0.62, TW * 0.3)
+            sy = TH * (0.45 if window_side == "center" else 0.36)
+            _shelf(d, wa + (span - sw) / 2, sy, sw, c["accent"], rng)
+        if decor in ("print", "both") and (k == len(walls) - 1):
+            pw = min(span * 0.34, TW * 0.12)
+            py = TH * (0.42 if window_side == "center" else 0.1)
+            px = wa + (span - pw) / 2
+            _wall_print(d, px, py, pw, c["accent"], sky_bot)
     if rng.random() < 0.6:
         _fairy_lights(d, x0 - fw, x1 + fw, y0 - fw * 0.4, wh * 0.08, 13, rng, S * 2.2)
 
@@ -347,6 +494,9 @@ def draw_room(img: Image.Image, c: dict, theme: str, window_side: str,
         catx = x0 + ww * (0.16 if flip else 0.84)
         _silhouette_cat(d, catx, y1 + fw - cs * 0.78, cs, cs, (16, 12, 14, 255), rim, rng)
 
+    if rng.random() < 0.35:
+        _laptop_glow(canvas, cx, desk_y, TH, (150, 190, 255))
+        d = ImageDraw.Draw(canvas, "RGBA")
     # The listener, back to us, facing the window.
     rimlight = (*_mix(sky_bot, (255, 255, 255), 0.35), 210)
     _listener(d, cx, desk_y, TH, rimlight, int(rng.integers(0, 3)))

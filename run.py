@@ -288,6 +288,7 @@ def main():
         duration=args.duration,
         title=seo.get("title"),
         text=seo.get("thumb_text"),
+        genre=seo.get("genre_label", ""),
         variant=thumb_variant
     )
 
@@ -303,6 +304,7 @@ def main():
             duration=args.duration,
             title=seo.get("title"),
             text=seo.get("thumb_text"),
+        genre=seo.get("genre_label", ""),
             variant=thumb_variant + 1,
         )
         alt_path = thumb_path.rsplit(".", 1)[0] + "_alt.jpg"

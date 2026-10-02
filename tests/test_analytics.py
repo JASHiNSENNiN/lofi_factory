@@ -232,3 +232,12 @@ def test_title_variant_weights_ignores_retired_title_forms():
     fake.update({f"x{i}": {"pillar": "temporal", "title_chosen_idx": 0,
                            "ctr": 0.05, "impressions": 1000} for i in range(10)})
     assert title_variant_weights(fake) == {}
+
+
+def test_title_features_tell_current_titles_apart():
+    f = analytics_mod.title_features
+    scene = f("first snow of winter ❄️ [lofi jazz · 1 hour]")
+    moment = f("coding after midnight 🌙 [jazz hop · 1 hour]")
+    assert scene["seasonal"] == "seasonal" and moment["seasonal"] == "evergreen"
+    assert moment["time_of_day"] == "time" and scene["time_of_day"] == "no_time"
+    assert scene["length_band"] == "40_62"

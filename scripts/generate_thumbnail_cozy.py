@@ -464,7 +464,7 @@ def _fit_title_font(draw: ImageDraw.ImageDraw, text: str, font_path: str, max_te
 def _card_position(layout: str, side: str, card_w: int, card_h: int) -> tuple[int, int]:
     """Compute the (x, y) top-left origin of the text card for a layout."""
     if layout == "thirds":
-        cx_frac = 0.24 if side == "left" else 0.76
+        cx_frac = 0.255 if side == "left" else 0.745
         card_x  = int(TW * cx_frac) - card_w // 2
         card_x  = max(40, min(TW - 40 - card_w, card_x))
         card_y  = int(TH * 0.60) - card_h // 2   # sits on the lower third line
@@ -473,21 +473,19 @@ def _card_position(layout: str, side: str, card_w: int, card_h: int) -> tuple[in
         card_x = margin if side == "left" else TW - margin - card_w
         card_x = max(40, min(TW - 40 - card_w, card_x))
         card_y = TH - card_h - 64             # low band hugging the bottom edge
-    else:  # centered: low, over the desk, so the window and the listener stay visible
+    else:  # centered: a title band above the (lowered) window
         card_x = (TW - card_w) // 2
-        card_y = TH - card_h - 40
+        card_y = 30
     return card_x, card_y
 
 
 def _max_card_width(layout: str) -> int:
-    # Widened 2026-08-16 alongside the bigger _TITLE_FONT_SIZES -- the old,
-    # narrower caps (0.44/0.62) were the actual reason titles kept landing on
-    # the smallest font-size step regardless of how big the range went.
-    if layout == "thirds":
-        return int(TW * 0.56)
-    if layout == "edge":
-        return int(TW * 0.74)
-    return TW - 64   # centered
+    """Side cards stay on the wall half, clear of the window and the
+    listener (scripts/thumbnail_scene._window_box); the centered card is a
+    title band above the window."""
+    if layout in ("thirds", "edge"):
+        return int(TW * 0.47)
+    return int(TW * 0.62)
 
 
 # ── Desk-object silhouettes (used by scripts/thumbnail_scene.py) ────────────────
@@ -583,7 +581,7 @@ def _silhouette_coffee_cup(draw, cx, cy, w, h, fill, rim, rng) -> tuple[float, f
 # ── Elegant frosted-glass text card ───────────────────────────────────────────
 
 def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
-                    duration: str, layout: str, side: str) -> dict:
+                    duration: str, layout: str, side: str, genre: str = "") -> dict:
     """
     Compute the text card's fonts/sizes/position without drawing anything.
     Font metrics don't depend on image content, so this is deterministic
@@ -596,7 +594,8 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
     # Mixed case title — much more elegant than ALL CAPS
     title_text = short_title.title()
     # The duration is already on the corner badge; don't print it twice.
-    sub_text   = "lofi beats"
+    # The genre that plays ("jazz hop", "sleep lofi"), not a generic tag.
+    sub_text   = (genre or "lofi beats").strip().lower()
     # No deco mark: the intended ✦ isn't in the title font and rendered as "*".
     deco_text  = ""
 
@@ -644,6 +643,7 @@ def _draw_text_card(
     side: str = "left",
     glass_alpha: int = 155,
     force_solid_dark: bool = False,
+    genre: str = "",
 ) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """
     Text card with frosted-glass backing, composed per `layout`:
@@ -659,7 +659,7 @@ def _draw_text_card(
     c    = THEMES[theme]
     draw = ImageDraw.Draw(img, "RGBA")
 
-    g = _card_geometry(draw, theme, short_title, duration, layout, side)
+    g = _card_geometry(draw, theme, short_title, duration, layout, side, genre)
     title_text, sub_text, deco_text = g["title_text"], g["sub_text"], g["deco_text"]
     title_font, sub_font, deco_font = g["title_font"], g["sub_font"], g["deco_font"]
     tw_t, th_t = g["tw_t"], g["th_t"]
@@ -870,6 +870,7 @@ def generate_thumbnail(
     title:      str = None,
     variant:    int = 0,
     text:       str | None = None,
+    genre:      str = "",
 ) -> tuple[str, str]:
     if theme_name not in THEMES:
         theme_name = "cozy_rain"
@@ -952,6 +953,7 @@ def generate_thumbnail(
         candidate, card_bbox = _draw_text_card(
             candidate, theme_name, short_title, duration,
             layout=lyt, side=sd, glass_alpha=alpha, force_solid_dark=solid_dark,
+            genre=genre,
         )
         ok, ratio = _check_card_legibility(candidate, card_bbox, c["text_main"])
         if ok or i == len(attempts) - 1:

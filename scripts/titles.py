@@ -24,29 +24,45 @@ from collections import Counter
 # Visual theme -> scenes. All lowercase (the genre's house style), <= 4 words.
 SCENES: dict[str, list[str]] = {
     "cozy_rain":      ["rain on the window", "rainy night study", "listening to the rain",
-                       "rain and warm coffee", "a rainy evening in"],
+                       "rain and warm coffee", "a rainy evening in", "storm out, tea in",
+                       "puddles and streetlights", "rain until morning"],
     "midnight_cafe":  ["midnight coffee", "the last café open", "coffee after midnight",
-                       "a quiet corner café"],
+                       "a quiet corner café", "one more espresso", "the 2am barista",
+                       "steam on the glass"],
     "purple_dusk":    ["dusk on the rooftop", "when the city glows", "purple evening sky",
-                       "twilight thoughts"],
-    "amber_night":    ["candlelight and pages", "a slow amber night", "warm light, late hours"],
+                       "twilight thoughts", "streetlights coming on", "the sky turns violet"],
+    "amber_night":    ["candlelight and pages", "a slow amber night", "warm light, late hours",
+                       "old records, low light", "honey-coloured evening", "lamplight and letters"],
     "winter_snow":    ["first snow of winter", "snowy night in", "quiet snowfall",
-                       "warm room, cold night"],
+                       "warm room, cold night", "frost on the window", "snow on the rooftops",
+                       "blankets and cocoa"],
     "autumn_study":   ["autumn study session", "falling leaves outside", "golden autumn light",
-                       "sweater weather"],
-    "spring_dawn":    ["spring morning light", "windows open in spring", "soft spring dawn"],
+                       "sweater weather", "maple leaves and tea", "october afternoon",
+                       "leaves on the sill"],
+    "spring_dawn":    ["spring morning light", "windows open in spring", "soft spring dawn",
+                       "birdsong at sunrise", "first light, fresh air", "a gentle spring morning"],
     "neon_tokyo":     ["neon city at 2am", "city lights below", "late train home",
-                       "rain on neon streets"],
+                       "rain on neon streets", "vending machine glow", "last train, empty car",
+                       "convenience store light"],
     "summer_lofi":    ["summer sunset", "golden hour drive", "warm summer evening",
-                       "sun-faded afternoon"],
-    "blue_hour":      ["the blue hour", "after the sun sets", "quiet blue evening"],
-    "forest_rain":    ["rain in the forest", "cabin in the rain", "green leaves, grey skies"],
-    "sakura_night":   ["cherry blossom night", "petals in the moonlight", "a spring night walk"],
-    "vaporwave":      ["mall at closing time", "sunset in 1987", "dreams in pastel"],
-    "lofi_house":     ["dancing alone at 2am", "late night grooves", "warm basement lights"],
-    "lofi_classical": ["moonlight and piano", "candlelit piano", "a quiet recital"],
-    "bedroom_pop":    ["bedroom daydreams", "fairy lights and posters", "headphones on, world off"],
-    "lofi_rnb":       ["slow night drive", "late night feelings", "velvet midnight"],
+                       "sun-faded afternoon", "windows down, sun low", "the beach at dusk",
+                       "long summer days"],
+    "blue_hour":      ["the blue hour", "after the sun sets", "quiet blue evening",
+                       "the world slows down", "lights on, sky blue", "blue skies fading"],
+    "forest_rain":    ["rain in the forest", "cabin in the rain", "green leaves, grey skies",
+                       "moss and mist", "rain on the pines", "cabin in the woods"],
+    "sakura_night":   ["cherry blossom night", "petals in the moonlight", "a spring night walk",
+                       "petals on the river", "lanterns and blossoms", "under the sakura"],
+    "vaporwave":      ["mall at closing time", "sunset in 1987", "dreams in pastel",
+                       "an empty food court", "neon palm trees", "a vhs summer"],
+    "lofi_house":     ["dancing alone at 2am", "late night grooves", "warm basement lights",
+                       "the after-party glow", "kitchen dance floor", "records till sunrise"],
+    "lofi_classical": ["moonlight and piano", "candlelit piano", "a quiet recital",
+                       "nocturne by the window", "piano next door", "old sheet music"],
+    "bedroom_pop":    ["bedroom daydreams", "fairy lights and posters", "headphones on, world off",
+                       "polaroids on the wall", "a soft sunday", "talking to the ceiling"],
+    "lofi_rnb":       ["slow night drive", "late night feelings", "velvet midnight",
+                       "city lights, slow heart", "texts we never sent", "a warm late call"],
 }
 # Used when the season filter empties a theme's list; split by time of day
 # so a dawn theme never falls back to "late night".
@@ -73,13 +89,17 @@ _ADJ: dict[str, str] = {
 
 _SEASONS = {"winter": (12, 1, 2), "snow": (11, 12, 1, 2, 3), "spring": (3, 4, 5),
             "blossom": (3, 4, 5), "summer": (6, 7, 8), "autumn": (9, 10, 11),
-            "leaves": (9, 10, 11), "sweater": (10, 11, 12, 1, 2)}
+            "leaves": (9, 10, 11), "sweater": (10, 11, 12, 1, 2), "october": (10,),
+            "maple": (9, 10, 11), "frost": (11, 12, 1, 2, 3), "cocoa": (11, 12, 1, 2),
+            "petals": (3, 4, 5), "sakura": (3, 4, 5)}
 
 _NIGHT_THEMES = {"cozy_rain", "midnight_cafe", "amber_night", "winter_snow", "neon_tokyo",
                  "blue_hour", "sakura_night", "lofi_house", "lofi_classical", "lofi_rnb",
                  "purple_dusk", "bedroom_pop"}
-_NIGHT_TIMES = ["after midnight", "at 2am", "late at night"]
-_DAY_TIMES = ["on a slow morning", "at golden hour", "on a sunday afternoon"]
+_NIGHT_TIMES = ["after midnight", "at 2am", "late at night", "at 3am", "past midnight",
+                "on a quiet night"]
+_DAY_TIMES = ["on a slow morning", "at golden hour", "on a sunday afternoon",
+              "with morning coffee", "on a quiet afternoon", "before sunset"]
 
 STRATEGIES = ("scene", "moment", "radio")
 THUMB_MAX_CHARS = 24    # the longest scene phrase; longer text shrinks on the card

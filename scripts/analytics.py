@@ -683,6 +683,12 @@ def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, 
 _TITLE_BENEFIT_VOCAB = {"study", "focus", "relax", "sleep", "chill", "unwind"}
 
 
+_SEASON_TITLE_WORDS = ("winter", "snow", "frost", "cocoa", "spring", "blossom", "petals",
+                       "sakura", "summer", "autumn", "leaves", "maple", "october", "sweater")
+_TIME_TITLE_WORDS = ("midnight", "2am", "3am", "late at night", "morning", "afternoon",
+                     "golden hour", "sunset", "dusk", "dawn", "sunrise")
+
+
 def title_features(title: str) -> dict[str, str]:
     """Bucket a title string into a few coarse, cheap surface-text features
     -- feeds title_feature_weights()/title_feature_bandit_posteriors() below,
@@ -699,10 +705,17 @@ def title_features(title: str) -> dict[str, str]:
                       "target_45_70" if length <= 70 else "long_gt70")
     has_emoji = any(ord(c) > 0x2600 for c in title)
     benefit_hits = sum(1 for w in _TITLE_BENEFIT_VOCAB if w in title.lower())
+    low = title.lower()
     return {
         "length_bucket": length_bucket,
         "has_emoji": "emoji" if has_emoji else "no_emoji",
         "benefit_list": "benefit_list" if benefit_hits >= 2 else "no_benefit_list",
+        # The dimensions above describe the retired title templates (every
+        # current title has an emoji and none lists benefits); these vary
+        # between current titles. Old rows simply score into them too.
+        "length_band": ("under_40" if length < 40 else "40_62" if length <= 62 else "over_62"),
+        "seasonal": "seasonal" if any(w in low for w in _SEASON_TITLE_WORDS) else "evergreen",
+        "time_of_day": "time" if any(w in low for w in _TIME_TITLE_WORDS) else "no_time",
     }
 
 

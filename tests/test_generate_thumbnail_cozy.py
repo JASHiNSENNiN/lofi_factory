@@ -211,3 +211,29 @@ def test_room_has_no_dark_halo_rings_around_the_moon():
     from scripts.thumbnail_scene import _view_layer
     layer = _view_layer("moon", gtc.THEMES["lofi_classical"], 400, 300, np.random.default_rng(2))
     assert layer.mode == "RGB"     # opaque: translucent shapes blend, never punch holes
+
+
+def test_text_card_never_covers_the_window_or_the_listener():
+    from PIL import Image, ImageDraw
+    from scripts import generate_thumbnail_cozy as gtc
+    from scripts.thumbnail_scene import _window_box, window_side_for
+    draw = ImageDraw.Draw(Image.new("RGB", (gtc.TW, gtc.TH)))
+    for text in ("rain", "headphones on, world off", "petals in the moonlight"):
+        for layout in gtc.LAYOUT_NAMES:
+            for side in ("left", "right"):
+                g = gtc._card_geometry(draw, "cozy_rain", text, "1 hour", layout, side, "jazz hop")
+                cx0, cy0 = g["card_x"], g["card_y"]
+                cx1, cy1 = cx0 + g["card_w"], cy0 + g["card_h"]
+                wx0, wy0, wx1, wy1 = _window_box(window_side_for(layout, side), gtc.TW, gtc.TH)
+                if layout == "centered":
+                    assert cy1 < wy0, (text, layout)                  # title band above the window
+                else:
+                    assert cx1 < wx0 or cx0 > wx1, (text, layout, side)
+
+
+def test_thumbnail_subtitle_names_the_genre():
+    from PIL import Image, ImageDraw
+    from scripts import generate_thumbnail_cozy as gtc
+    draw = ImageDraw.Draw(Image.new("RGB", (gtc.TW, gtc.TH)))
+    g = gtc._card_geometry(draw, "cozy_rain", "rain", "1 hour", "edge", "left", "Sleep Lofi")
+    assert g["sub_text"] == "sleep lofi"

@@ -464,7 +464,10 @@ def regenerate_thumbnail(video_id: str, title: str) -> str | None:
         duration_label = min(DURATION_MAP, key=lambda k: abs(DURATION_MAP[k] - duration_secs))
 
     from scripts.generate_thumbnail_cozy import generate_thumbnail
-    out_path, _ = generate_thumbnail(theme_name=theme_name, duration=duration_label, title=title)
+    from scripts.generate_seo import _SUBGENRE_TO_GENRE_LABEL
+    genre = _SUBGENRE_TO_GENRE_LABEL.get(entry.get("sub_genre") or "", "")
+    out_path, _ = generate_thumbnail(theme_name=theme_name, duration=duration_label,
+                                     title=title, genre=genre)
     return out_path
 
 
