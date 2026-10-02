@@ -10,8 +10,7 @@ for how "success"/"failure" is derived from the composite engagement KPI).
 Algorithm
 ---------
 Each arm keeps a Beta(alpha, beta) posterior over its true (binarized)
-success probability, starting from the uninformative Jeffreys-ish prior
-Beta(1, 1) (uniform on [0, 1]):
+success probability, starting from the uniform (Laplace) prior Beta(1, 1):
 
     alpha_i = 1 + successes_i
     beta_i  = 1 + failures_i

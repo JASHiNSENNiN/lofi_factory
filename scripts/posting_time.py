@@ -39,7 +39,8 @@ ANALYTICS_LOG = os.path.join(ROOT, "assets", "analytics_log.json")
 
 # Below this many upload<->analytics joins, a "best hour" is just noise --
 # refuse to recommend rather than dress up a guess as a finding.
-MIN_SAMPLES = 3
+MIN_SAMPLES = 20          # total joined uploads before any recommendation
+MIN_PER_BUCKET = 3        # an hour/day needs this many uploads to be ranked
 
 _DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -67,19 +68,17 @@ def _parse_ts(ts: str) -> datetime.datetime | None:
 
 
 def _performance_for(video_id: str, analytics: dict) -> float | None:
-    """Best-effort performance score for one video: prefer views, fall back
-    to watch-minutes. Returns None if neither field is present/numeric."""
+    """Views (falling back to watch-minutes) at a fixed video age, so older
+    uploads don't win just by having been up longer."""
     entry = analytics.get(video_id)
     if not isinstance(entry, dict):
         return None
+    from scripts.analytics import metrics_at_age
+    m = metrics_at_age(entry)
     for key in ("views", "estimatedMinutesWatched"):
-        v = entry.get(key)
-        if v is None:
-            continue
-        try:
+        v = m.get(key)
+        if isinstance(v, (int, float)):
             return float(v)
-        except (TypeError, ValueError):
-            continue
     return None
 
 
@@ -132,7 +131,8 @@ def recommend(upload_log_path: str | None = None,
         if e.get("type") not in (None, "upload"):
             continue
         vid = e.get("video_id")
-        ts = _parse_ts(e.get("timestamp", ""))
+        # When the video went public, not when the upload finished.
+        ts = _parse_ts(e.get("scheduled_at") or e.get("timestamp", ""))
         if not vid or not ts:
             continue
         perf = _performance_for(vid, analytics)
@@ -150,19 +150,28 @@ def recommend(upload_log_path: str | None = None,
         )
 
     by_hour = sorted(
-        ({"hour": h, "avg_score": sum(v) / len(v), "n": len(v)} for h, v in hour_scores.items()),
+        ({"hour": h, "avg_score": sum(v) / len(v), "n": len(v)}
+         for h, v in hour_scores.items() if len(v) >= MIN_PER_BUCKET),
         key=lambda r: -r["avg_score"],
     )
     by_day = sorted(
-        ({"day": d, "avg_score": sum(v) / len(v), "n": len(v)} for d, v in day_scores.items()),
+        ({"day": d, "avg_score": sum(v) / len(v), "n": len(v)}
+         for d, v in day_scores.items() if len(v) >= MIN_PER_BUCKET),
         key=lambda r: -r["avg_score"],
     )
+    if len(by_hour) < 2 and len(by_day) < 2:
+        return _empty_result(
+            "every upload so far went out at the same hour/day, so there's nothing "
+            "to compare -- try a different schedule for a few weeks first",
+            n_samples=n_joined,
+        )
 
     return {
         "available": True,
         "reason": None,
-        "best_hour_utc": by_hour[0]["hour"] if by_hour else None,
-        "best_day": by_day[0]["day"] if by_day else None,
+        # A "best" needs at least two options to have been tried.
+        "best_hour_utc": by_hour[0]["hour"] if len(by_hour) >= 2 else None,
+        "best_day": by_day[0]["day"] if len(by_day) >= 2 else None,
         "by_hour": by_hour,
         "by_day": by_day,
         "n_samples": n_joined,
@@ -174,8 +183,10 @@ if __name__ == "__main__":
     if not result["available"]:
         print(f"[posting-time] {result['reason']}")
     else:
-        print(f"[posting-time] Best hour (UTC): {result['best_hour_utc']:02d}:00  "
-              f"·  Best day: {result['best_day']}  ·  n={result['n_samples']}")
+        hour = result["best_hour_utc"]
+        print(f"[posting-time] Best hour (UTC): "
+              f"{f'{hour:02d}:00' if hour is not None else 'n/a (one hour tried)'}  "
+              f"·  Best day: {result['best_day'] or 'n/a'}  ·  n={result['n_samples']}")
         print("\n  By hour (UTC):")
         for row in result["by_hour"]:
             print(f"    {row['hour']:02d}:00  avg={row['avg_score']:.1f}  n={row['n']}")

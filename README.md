@@ -15,9 +15,13 @@ of that creeps back in.
 AI is trash. Algorithm is art.
 
 The channel-growth side is similarly procedural/statistical rather than
-black-box: a Thompson Sampling bandit picks concept pillars, durations,
-title variants, and thumbnails; a two-proportion z-test gates thumbnail
-swaps; CUSUM flags viral moments; `statsmodels` forecasts 7/30-day views.
+black-box: Beta-posterior weights (from a composite engagement score at a
+fixed video age) bias concept pillars, title variants and sub-genres; a
+Bonferroni-corrected two-proportion z-test flags videos whose CTR is
+well below the channel's and swaps in their alternate thumbnail; CUSUM
+flags viral moments; `statsmodels` forecasts 7/30-day views. With roughly
+one upload a day these signals take months to mean anything, so treat
+them as weak nudges, not findings.
 See `scripts/analytics.py`, `scripts/bandit.py`.
 
 ## Quick start
@@ -107,7 +111,7 @@ See **[DEPLOYMENT.md](DEPLOYMENT.md)** for the VPS setup runbook
 - `scripts/track_quality.py` — MIDI-structural gates + audio-domain gates (clipping/silence/LUFS/spectral balance) on the rendered WAV
 - `scripts/stream_live.py` — 24/7 live-stream mode
 - `scripts/generate_shorts.py` — auto-clips a 9:16 highlight from the assembled video and uploads it as a Short
-- `scripts/analytics.py` / `scripts/bandit.py` — longitudinal analytics, A/B significance testing, Thompson Sampling bandit, CUSUM change-point detection, forecasting
+- `scripts/analytics.py` / `scripts/bandit.py` — longitudinal analytics, underperformer thumbnail swaps, Beta-posterior weighting, CUSUM change-point detection, forecasting
 - `scripts/posting_time.py` — recommends posting hour/day from historical upload+view data
 - `scripts/playlist_curation.py` — pillar-based playlist auto-assignment
 - `webui/` — NiceGUI-based web control panel (analytics dashboard, content calendar, automation controls)

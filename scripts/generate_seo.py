@@ -887,7 +887,7 @@ def _pillar_weights() -> dict[str, float]:
 
     Thin wrapper kept for pick_concept_from_pool()'s call site -- the real
     implementation is scripts/analytics.py's pillar_weights(), which is now
-    backed by a Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py)
+    backed by Beta-Bernoulli posterior means (scripts/bandit.py)
     over a composite engagement score instead of a raw CTR-ratio multiplier,
     and shares its binarization/posterior-ratio logic with
     duration_weights()/title_variant_weights() instead of each having its

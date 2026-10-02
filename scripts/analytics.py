@@ -189,6 +189,45 @@ def latest_metrics(entry: dict) -> dict:
     return entry or {}
 
 
+SCORE_AT_AGE_DAYS = 7
+_RETENTION_WINDOW_SECS = 1800
+
+
+def metrics_at_age(entry: dict, days: int = SCORE_AT_AGE_DAYS) -> dict:
+    """The snapshot taken closest to `days` after upload, so videos of
+    different ages are compared on equal footing (a 60-day-old video has
+    piled up far more views than a 3-day-old one). Falls back to the latest
+    snapshot when upload date or snapshot dates are missing."""
+    if not _is_history_format(entry):
+        return entry or {}
+    hist = entry.get("history") or []
+    upload = entry.get("upload_date", "")
+    try:
+        target = (datetime.datetime.fromisoformat(upload[:10])
+                  + datetime.timedelta(days=days)).date()
+    except ValueError:
+        return hist[-1] if hist else {}
+    dated = []
+    for snap in hist:
+        try:
+            dated.append((abs((datetime.date.fromisoformat(snap.get("date", "")[:10]) - target).days), snap))
+        except ValueError:
+            continue
+    if not dated:
+        return hist[-1] if hist else {}
+    return min(dated, key=lambda d: d[0])[1]
+
+
+def ctr_fraction(value) -> float | None:
+    """Click-through rate as a fraction. Accepts either convention the API
+    might use (0.045 or 4.5 for 4.5%), so a unit mismatch can't silently pin
+    every CTR at 100%."""
+    if value is None:
+        return None
+    v = float(value)
+    return v / 100.0 if v > 1.0 else v
+
+
 def _load_raw_analytics() -> dict:
     if not os.path.exists(ANALYTICS_LOG):
         return {}
@@ -441,7 +480,7 @@ def composite_engagement_score(entry: dict, duration_secs: float | None = None) 
     or callers that only have CTR (e.g. title_variant_weights()). Returns
     None if *no* component has usable data.
     """
-    m = latest_metrics(entry)
+    m = metrics_at_age(entry)
     duration_secs = duration_secs or entry.get("duration_secs")
     views = m.get("views")
 
@@ -450,14 +489,17 @@ def composite_engagement_score(entry: dict, duration_secs: float | None = None) 
     avd = m.get("averageViewDuration")
     if avd is not None and duration_secs:
         try:
-            watch_ratio = max(0.0, min(1.0, float(avd) / float(duration_secs)))
+            # Retention against the first 30 minutes, not the whole video:
+            # dividing by the full length scored every 8-hour video near zero
+            # however well it held viewers, biasing every bandit to short ones.
+            watch_ratio = max(0.0, min(1.0, float(avd) / min(float(duration_secs), _RETENTION_WINDOW_SECS)))
             components.append((0.40, watch_ratio))
         except (TypeError, ZeroDivisionError):
             pass
 
-    ctr = m.get("videoThumbnailImpressionsClickRate")
+    ctr = ctr_fraction(m.get("videoThumbnailImpressionsClickRate"))
     if ctr is not None:
-        components.append((0.35, max(0.0, min(1.0, float(ctr)))))
+        components.append((0.35, max(0.0, min(1.0, ctr))))
 
     likes = m.get("likes")
     if likes is not None and views:
@@ -497,7 +539,7 @@ def binarize_above_median(values: list[float]) -> list[bool]:
 
 def _build_bucket_bandit(buckets: dict[str, list[float]]) -> ThompsonSamplingBandit:
     """
-    Build a Beta-Bernoulli Thompson Sampling bandit (scripts/bandit.py) with
+    Build a Beta-Bernoulli bandit (scripts/bandit.py) with
     one arm per bucket label, updated from `buckets` ({label: [scores]})
     binarized against the *pooled* median across all buckets
     (binarize_above_median's median-split — see that function's docstring
@@ -589,47 +631,6 @@ def pillar_bandit_posteriors(pillars: list[str] | None = None, analytics: dict |
 
     buckets = {p: by_pillar.get(p, []) for p in pillars}
     return _build_bucket_bandit(buckets).posterior_stats()
-
-
-def duration_weights(duration_map: dict[str, int], analytics: dict | None = None) -> dict[str, float]:
-    """
-    Per-duration-label weight multipliers derived from analytics_log.json,
-    same shape as generate_seo.py's _pillar_weights(): 0.5x-2.0x, uniform
-    1.0 for any bucket with fewer than 5 samples. Now backed by the shared
-    Beta-Bernoulli Thompson Sampling bandit (_bandit_weights()) instead of a
-    raw mean-ratio, using composite_engagement_score() (watch-ratio-weighted)
-    rather than raw averageViewDuration alone.
-
-    Each video's measured duration_secs is bucketed to its *nearest* label in
-    duration_map (upload_log only stores the real ffprobe length, not which
-    label was requested -- renders can run a bit long/short).
-    """
-    labels = list(duration_map.keys())
-    default = {label: 1.0 for label in labels}
-    if analytics is None:
-        analytics = load_analytics()
-    if not analytics:
-        return default
-
-    from collections import defaultdict as _dd
-    by_label: dict[str, list[float]] = _dd(list)
-    for entry in analytics.values():
-        secs = entry.get("duration_secs")
-        if not secs:
-            continue
-        score = composite_engagement_score(entry, duration_secs=secs)
-        if score is None:
-            continue
-        nearest = min(labels, key=lambda label: abs(duration_map[label] - secs))
-        by_label[nearest].append(score)
-
-    bandit_weights = _bandit_weights(by_label, min_samples=5)
-    if bandit_weights is None:
-        return default
-
-    weights = dict(default)
-    weights.update(bandit_weights)
-    return weights
 
 
 def title_variant_weights(analytics: dict | None = None) -> dict[str, dict[str, float]]:
@@ -1034,10 +1035,13 @@ def two_proportion_ztest(
 
 def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 0.05) -> None:
     """
-    For videos 7-30 days old whose CTR is *significantly* below the rest of
-    the channel (two-proportion z-test, p < p_threshold — not just below an
-    arbitrary ratio like the old CTR < 70%-of-average heuristic), swap in an
-    alternate thumbnail if one exists (thumb_*_alt.jpg).
+    Underperformer swap -- NOT an A/B test of two thumbnails. For videos
+    7-30 days old whose CTR is significantly below the rest of the channel's
+    (two-proportion z-test), swap in the alternate thumbnail if one exists
+    (thumb_*_alt.jpg). The comparison is against *other videos*, so it
+    flags weak videos, not a weak thumbnail as such. One test runs per
+    eligible video, so the threshold is Bonferroni-corrected
+    (p_threshold / number of videos tested) to keep chance swaps rare.
 
     The test compares this video's estimated clicks/impressions against the
     pooled clicks/impressions of every *other* currently-eligible, not-yet-
@@ -1080,11 +1084,11 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
         if d.get("thumb_swapped"):
             continue
         m = latest_metrics(d)
-        ctr = m.get("videoThumbnailImpressionsClickRate")
+        ctr = ctr_fraction(m.get("videoThumbnailImpressionsClickRate"))
         impressions = m.get("videoThumbnailImpressions")
         if ctr is None or not impressions:
             continue
-        pool.append((vid, float(ctr), float(impressions)))
+        pool.append((vid, ctr, float(impressions)))
 
     if len(pool) < 2:
         print("[analytics] thumbnail swaps: 0 (not enough videos with CTR+impressions data)")
@@ -1095,6 +1099,8 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
     max_age = now - datetime.timedelta(days=30)
 
     swapped = 0
+    # Bonferroni: one test per video in the pool.
+    corrected_threshold = p_threshold / max(1, len(pool))
     for vid, ctr, impressions in pool:
         data = analytics[vid]
         upload_date = data.get("upload_date", "")
@@ -1117,7 +1123,7 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
         data["thumb_ab_z"] = z
         data["thumb_ab_p"] = p_value
 
-        if p_value >= p_threshold or ctr >= pooled_avg_ctr:
+        if p_value >= corrected_threshold or ctr >= pooled_avg_ctr:
             continue  # not significantly worse than the rest of the channel
 
         # Find alternate thumbnail — validate path stays within assets/.

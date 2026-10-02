@@ -33,14 +33,15 @@ def test_composite_score_none_when_no_data():
 
 def test_composite_score_full_weighted_average():
     entry = {
-        "averageViewDuration": 1800,
+        "averageViewDuration": 900,
         "duration_secs": 3600,
         "videoThumbnailImpressionsClickRate": 0.05,
         "likes": 50,
         "comments": 10,
         "views": 1000,
     }
-    # watch_ratio=0.5 (w=.40), ctr=0.05 (w=.35), like_rate=0.05 (w=.15), comment_rate=0.01 (w=.10)
+    # watch_ratio = 900 / min(3600, 1800) = 0.5 (w=.40), ctr=0.05 (w=.35),
+    # like_rate=0.05 (w=.15), comment_rate=0.01 (w=.10)
     expected = 0.40 * 0.5 + 0.35 * 0.05 + 0.15 * 0.05 + 0.10 * 0.01
     assert composite_engagement_score(entry) == pytest.approx(expected)
 
@@ -68,10 +69,10 @@ def test_composite_score_reads_from_longitudinal_history_format():
         "history": [
             {"date": "2026-01-01", "videoThumbnailImpressionsClickRate": 0.01},
             {"date": "2026-01-08", "videoThumbnailImpressionsClickRate": 0.05,
-             "averageViewDuration": 1800},
+             "averageViewDuration": 900},
         ],
     }
-    # Should use the *latest* snapshot (ctr=0.05, avd=1800), not the first --
+    # No upload_date, so the latest snapshot is used (ctr=0.05, avd=900) --
     # only two of the four components are available here (no likes/comments),
     # so the .40/.35 weights get renormalized to sum to 1 (divide by 0.75).
     expected = (0.40 * 0.5 + 0.35 * 0.05) / 0.75
@@ -459,3 +460,29 @@ def test_pillar_bandit_posteriors_reflects_observed_data():
     # 6 successes / 0 failures -> alpha=7, beta=1 for the strictly-above-median arm
     assert result["temporal"]["alpha"] == pytest.approx(7.0)
     assert result["temporal"]["beta"] == pytest.approx(1.0)
+
+
+def test_composite_score_compares_videos_at_the_same_age():
+    entry = {
+        "duration_secs": 3600,
+        "upload_date": "2026-01-01",
+        "history": [
+            {"date": "2026-01-03", "videoThumbnailImpressionsClickRate": 0.01},
+            {"date": "2026-01-08", "videoThumbnailImpressionsClickRate": 0.04},
+            {"date": "2026-02-20", "videoThumbnailImpressionsClickRate": 0.09},
+        ],
+    }
+    # Day 7 after upload is 2026-01-08: that snapshot, not the latest one.
+    assert composite_engagement_score(entry) == pytest.approx(0.04)
+
+
+def test_long_videos_are_not_penalised_for_their_length():
+    short = {"averageViewDuration": 900, "duration_secs": 1800}
+    long_ = {"averageViewDuration": 900, "duration_secs": 8 * 3600}
+    assert composite_engagement_score(short) == composite_engagement_score(long_)
+
+
+def test_ctr_reported_as_a_percentage_is_normalised():
+    from scripts.analytics import ctr_fraction
+    assert ctr_fraction(4.5) == pytest.approx(0.045)
+    assert ctr_fraction(0.045) == pytest.approx(0.045)

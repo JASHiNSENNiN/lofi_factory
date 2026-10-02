@@ -79,17 +79,8 @@ def main():
                         choices=["30 min", "45 min", "1 hour", "90 min",
                                  "2 hours", "3 hours", "4 hours", "5 hours",
                                  "8 hours", "10 hours", "all night"])
-    # Three-state: None (default) = let the engagement-analytics engine
-    # bandit (scripts.analytics.engine_weights()) choose v1 vs v2, weighted
-    # by which has performed better (neutral 50/50 with no data yet).
-    # --music-v2/--no-music-v2 explicitly force v2/v1, which always wins
-    # over the bandit (explicit flag > auto-selection). BooleanOptionalAction
-    # (not plain store_true) is what makes the "not passed at all" state
-    # distinguishable from "explicitly forced off".
     parser.add_argument("--music-v2", action=argparse.BooleanOptionalAction, default=None,
-                        help="Use v2 beta music generator (improved voice leading, melody, bass, humanization). "
-                             "Omit to let the engagement-analytics bandit pick v1/v2 automatically; "
-                             "--no-music-v2 forces v1.")
+                        help="Use the experimental v2 composer instead of v1 (default: v1).")
     parser.add_argument("--music-count", type=int, default=None,
                         help="Number of tracks to generate (default: enough to fill the duration without repeats)")
     parser.add_argument("--skip-visual", action="store_true",
@@ -192,24 +183,8 @@ def main():
     generated_tracks = []
     if not args.skip_music:
         print("\n[1/5] Generating music...")
-        if args.music_v2 is None:
-            # No explicit --music-v2/--no-music-v2 on the CLI — let the
-            # engagement-analytics engine bandit choose (neutral 50/50
-            # when there's no/insufficient data yet). try/except-guarded
-            # the same way every other optional analytics-feedback layer
-            # is (sub_genre_weights()/bpm_bucket_weights() above) — a
-            # missing/corrupt analytics log must never block a render.
-            try:
-                from scripts.analytics import engine_weights
-                _ew = engine_weights()
-                use_v2 = random.choices(
-                    ["v1", "v2"], weights=[_ew.get("v1", 1.0), _ew.get("v2", 1.0)], k=1,
-                )[0] == "v2"
-            except Exception as _eng_e:
-                print(f"  [run] Engine bandit selection failed ({_eng_e}) — defaulting to v1")
-                use_v2 = False
-        else:
-            use_v2 = args.music_v2  # explicit flag wins over the bandit
+        # v1 is the production composer; v2 only when asked for explicitly.
+        use_v2 = bool(args.music_v2)
         if use_v2:
             from scripts.generate_music_v2 import generate_tracks
             print("[run] Using music generator v2 (beta)")

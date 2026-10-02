@@ -1311,7 +1311,7 @@ def view_analytics(root) -> None:
                 # ── Bandit arm posteriors ───────────────────────────────────────────
                 with ui.element("div").classes("studio-card w-full"):
                     ui.label("Pillar bandit posteriors").classes(theme.H)
-                    ui.label("Beta-Bernoulli Thompson Sampling posterior behind the pillar weighting "
+                    ui.label("Beta-Bernoulli posterior behind the pillar weighting "
                              "above (scripts/bandit.py) — alpha/beta accumulate composite-engagement "
                              "successes/failures (median-split) per pillar; mean is the current "
                              "posterior estimate of that pillar's win probability. This is what "
@@ -1332,7 +1332,7 @@ def view_analytics(root) -> None:
                 # ── Title-feature bandit posteriors ─────────────────────────────────
                 with ui.element("div").classes("studio-card w-full"):
                     ui.label("Title-feature bandit posteriors").classes(theme.H)
-                    ui.label("Same Beta-Bernoulli Thompson Sampling machinery as the pillar "
+                    ui.label("Same Beta-Bernoulli posterior weighting as the pillar "
                              "posteriors above, but mined from the actual published title TEXT "
                              "(scripts/analytics.py's title_features()) instead of which pillar or "
                              "hook-strategy was used — length bucket, emoji presence, and whether "
@@ -1999,10 +1999,12 @@ def view_automation(root) -> None:
                 if not rec["available"]:
                     rec_label.text = f"Not enough data yet — {rec['reason']}"
                     return
+                hour = rec["best_hour_utc"]
+                hour_txt = f"{hour:02d}:00" if hour is not None else "only one hour tried so far"
                 rec_label.text = (
-                    f"Best hour (UTC): {rec['best_hour_utc']:02d}:00  ·  "
-                    f"Best day: {rec['best_day']}  ·  based on {rec['n_samples']} "
-                    f"upload(s) with analytics data")
+                    f"Best hour (UTC): {hour_txt}  ·  "
+                    f"Best day: {rec['best_day'] or 'only one day tried so far'}  ·  "
+                    f"based on {rec['n_samples']} upload(s) with analytics data")
 
                 def use_hour() -> None:
                     hour_sel.value = rec["best_hour_utc"]
@@ -2010,9 +2012,10 @@ def view_automation(root) -> None:
                     ui.notify("Filled in the recommended hour below — click "
                               "\"Apply schedule\" to actually change it.", type="info")
 
-                with rec_actions:
-                    ui.button("Use this hour", icon="auto_awesome", on_click=use_hour) \
-                        .props("flat dense color=secondary")
+                if hour is not None:
+                    with rec_actions:
+                        ui.button("Use this hour", icon="auto_awesome", on_click=use_hour) \
+                            .props("flat dense color=secondary")
 
             refresh_recommendation()
 

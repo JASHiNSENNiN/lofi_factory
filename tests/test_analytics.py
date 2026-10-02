@@ -2,51 +2,9 @@ import datetime
 import json
 
 import scripts.analytics as analytics_mod
-from scripts.analytics import duration_weights, title_variant_weights
+from scripts.analytics import title_variant_weights
 
 DURATION_MAP = {"1 hour": 3600, "2 hours": 7200, "3 hours": 10800}
-
-
-def test_duration_weights_empty_analytics():
-    assert duration_weights(DURATION_MAP, {}) == {"1 hour": 1.0, "2 hours": 1.0, "3 hours": 1.0}
-
-
-def test_duration_weights_uniform_below_sample_threshold():
-    fake = {f"v{i}": {"duration_secs": 3600, "averageViewDuration": 1800} for i in range(3)}
-    assert duration_weights(DURATION_MAP, fake) == {"1 hour": 1.0, "2 hours": 1.0, "3 hours": 1.0}
-
-
-def test_duration_weights_rewards_higher_retention_bucket():
-    fake = {}
-    for i in range(6):
-        fake[f"v1_{i}"] = {"duration_secs": 3600, "averageViewDuration": 3000}  # high retention
-    for i in range(6):
-        fake[f"v2_{i}"] = {"duration_secs": 7200, "averageViewDuration": 1800}  # low retention
-    result = duration_weights(DURATION_MAP, fake)
-    assert result["1 hour"] > 1.0
-    assert result["2 hours"] < 1.0
-    assert result["3 hours"] == 1.0  # no data for this bucket -> untouched default
-
-
-def test_duration_weights_buckets_to_nearest_label():
-    # duration_secs=3550 is closer to "1 hour" (3600) than "2 hours" (7200) -- all 6
-    # entries should land in the "1 hour" bucket, not get spread/misbucketed.
-    fake = {f"v{i}": {"duration_secs": 3550, "averageViewDuration": 3000} for i in range(6)}
-    fake.update({f"w{i}": {"duration_secs": 10800, "averageViewDuration": 1000} for i in range(6)})
-    result = duration_weights(DURATION_MAP, fake)
-    assert result["1 hour"] > 1.0   # got the (only) high-retention bucket's data
-    assert result["2 hours"] == 1.0  # no entries bucketed here -> untouched default
-
-
-def test_duration_weights_clamped_to_range():
-    fake = {}
-    for i in range(6):
-        fake[f"hi_{i}"] = {"duration_secs": 3600, "averageViewDuration": 100000}  # absurdly high
-    for i in range(6):
-        fake[f"lo_{i}"] = {"duration_secs": 7200, "averageViewDuration": 1}  # absurdly low
-    result = duration_weights(DURATION_MAP, fake)
-    assert result["1 hour"] <= 2.0
-    assert result["2 hours"] >= 0.5
 
 
 def test_title_variant_weights_empty():
