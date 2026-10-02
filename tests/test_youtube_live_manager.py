@@ -63,3 +63,35 @@ def test_radio_title_keeps_the_searched_phrase_first():
     assert t.startswith(base) and t.endswith("Until the Small Hours") and len(t) <= 100
     long = ylm.now_playing_title(base, "x" * 300)
     assert long.startswith(base) and len(long) <= 100
+
+
+def test_stream_accepts_every_visual_theme():
+    import subprocess
+    import sys
+    from scripts.visual_v2.themes import ALL_THEMES
+    out = subprocess.run([sys.executable, "scripts/stream_live.py", "--help"],
+                         capture_output=True, text=True, timeout=60).stdout
+    assert all(t in out for t in ALL_THEMES)
+
+
+def test_stream_uses_its_own_radio_background(tmp_path, monkeypatch):
+    import sys
+    sys.path.insert(0, "scripts")
+    import stream_live as sl
+    import scripts.visual_v2 as vv
+    monkeypatch.setattr(sl, "STREAM_VISUALS_DIR", str(tmp_path / "stream"))
+    calls = []
+
+    def fake_generate(**kw):
+        calls.append(kw)
+        out = tmp_path / "stream" / f"bg_{kw['theme_name']}_20261002_000000.mp4"
+        out.parent.mkdir(exist_ok=True)
+        out.write_bytes(b"x")
+        return str(out), kw["theme_name"]
+
+    monkeypatch.setattr(vv, "generate_visual", fake_generate)
+    first = sl.ensure_radio_visual("cozy_rain")
+    again = sl.ensure_radio_visual("cozy_rain")
+    assert first == again and len(calls) == 1                 # rendered once, then reused
+    assert calls[0]["track_title"] == sl.RADIO_SESSION         # no video's session name
+    assert calls[0]["genre"] == sl.RADIO_BADGE                 # no single genre on a mixed stream

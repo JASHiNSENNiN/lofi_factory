@@ -72,6 +72,11 @@ if os.path.exists(_env):
 # render generates in music/ (which the render pipeline prunes).
 MUSIC_DIR   = os.path.join(ROOT, "music", "stream")
 VISUALS_DIR = os.path.join(ROOT, "visuals")
+# The radio's own loops. A video's loop has that video's session name and
+# genre baked into its panel ("THIS SESSION: city lights below / lofi drill"),
+# which is false on a stream that plays the whole mixed library.
+STREAM_VISUALS_DIR = os.path.join(VISUALS_DIR, "stream")
+RADIO_SESSION, RADIO_BADGE = "lofi hip hop radio", "24/7 · mixed genres"
 OUTPUT_DIR  = os.path.join(ROOT, "output")
 
 # YouTube RTMP ingest
@@ -152,17 +157,36 @@ _DEFAULT_AMBIENT = ("brown", 0.003, 800)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def find_visual(theme_name=None, prefer_path=None, random_pick=False):
+def find_visual(theme_name=None, prefer_path=None, random_pick=False, folder=None):
     if prefer_path and os.path.exists(prefer_path):
         return prefer_path
     pattern = f"bg_{theme_name}*.mp4" if theme_name else "bg_*.mp4"
-    files = [f for f in glob.glob(os.path.join(VISUALS_DIR, pattern))
+    files = [f for f in glob.glob(os.path.join(folder or VISUALS_DIR, pattern))
              if "_graded720" not in f]
     if not files:
         return None
     if random_pick and len(files) > 1:
         return random.choice(files)
     return max(files, key=os.path.getmtime)
+
+
+def ensure_radio_visual(theme_name):
+    """A loop for this theme with the radio's labels, rendered once (about a
+    minute of video) and reused. None if rendering fails."""
+    have = find_visual(theme_name, folder=STREAM_VISUALS_DIR)
+    if have:
+        return have
+    print(f"  [stream] Rendering a radio background for {theme_name} (first time only)...")
+    try:
+        sys.path.insert(0, ROOT)
+        from scripts.visual_v2 import generate_visual
+        path, _ = generate_visual(theme_name=theme_name, duration_secs=60,
+                                  track_title=RADIO_SESSION, genre=RADIO_BADGE,
+                                  out_dir=STREAM_VISUALS_DIR)
+        return path
+    except Exception as e:
+        print(f"  [stream] Radio background failed ({e}); using a video's loop instead")
+        return None
 
 
 def build_visual_list(tmp_dir, theme_name):
@@ -175,7 +199,8 @@ def build_visual_list(tmp_dir, theme_name):
     pre-graded in a background thread and added to the playlist when ready.
     """
     pattern = f"bg_{theme_name}*.mp4" if theme_name else "bg_*.mp4"
-    raw_files = [f for f in glob.glob(os.path.join(VISUALS_DIR, pattern))
+    folder = STREAM_VISUALS_DIR if glob.glob(os.path.join(STREAM_VISUALS_DIR, pattern)) else VISUALS_DIR
+    raw_files = [f for f in glob.glob(os.path.join(folder, pattern))
                  if "_graded720" not in f]
     if not raw_files:
         return None
@@ -249,7 +274,8 @@ def build_music_list(tmp_dir):
     if not files:
         raise FileNotFoundError(
             f"No music files found in {MUSIC_DIR}\n"
-            "Start the stream without --no-warmup to generate a library first."
+            "Start a real stream once (not --test) to generate a library first, "
+            f"or copy rendered tracks (music/*.wav with their .meta.json) into {MUSIC_DIR}."
         )
     random.shuffle(files)
     list_path = os.path.join(tmp_dir, "stream_playlist.txt")
@@ -847,25 +873,29 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
-    ALL_THEMES = [
-        "cozy_rain", "midnight_cafe", "purple_dusk", "amber_night",
-        "winter_snow", "autumn_study", "spring_dawn", "neon_tokyo",
-        "summer_lofi", "blue_hour", "forest_rain", "sakura_night",
-    ]
+    # The shared list: a copy here had fallen five themes behind.
+    sys.path.insert(0, ROOT)
+    from scripts.visual_v2.themes import ALL_THEMES
 
     parser = argparse.ArgumentParser(description="Lo-fi Factory — Live Stream to YouTube")
     parser.add_argument("--key", default=None,
                         help="YouTube stream key (default: $YT_STREAM_KEY env var)")
     parser.add_argument("--theme", choices=ALL_THEMES, default=None,
-                        help="Visual theme (default: auto-detect from most recent visual)")
+                        help="Visual theme (default: one that suits the season)")
     parser.add_argument("--visual", default=None,
                         help="Path to a specific visual .mp4 (default: most recent in visuals/)")
     parser.add_argument("--test", action="store_true",
                         help="Test mode: encode 60s to output/stream_test.mp4 instead of streaming")
     args = parser.parse_args()
 
-    # Resolve visual + theme before anything else
-    visual_path = find_visual(args.theme, prefer_path=args.visual)
+    # Resolve visual + theme before anything else: the radio's own loop for
+    # the theme (given, or one that suits the season), rendered if missing.
+    visual_path = None
+    if not args.visual:
+        from scripts.titles import theme_for_genre
+        radio_theme = args.theme or theme_for_genre(None)
+        visual_path = ensure_radio_visual(radio_theme)
+    visual_path = visual_path or find_visual(args.theme, prefer_path=args.visual)
     if not visual_path:
         print("ERROR: No visual found.\n"
               "  Generate one first: python run.py --skip-music --skip-upload\n"

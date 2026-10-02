@@ -42,6 +42,7 @@ def generate_visual(theme_name: str = "cozy_rain",
                     visual_seed: int = None,
                     track_title: str = "lofi dreams",
                     genre: str = "lo-fi hip hop",
+                    out_dir: str | None = None,
                     ) -> tuple:
     """
     Render an abstract lo-fi radio interface loop video.
@@ -54,7 +55,9 @@ def generate_visual(theme_name: str = "cozy_rain",
 
     n_frames = duration_secs * fps
     ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(VISUALS_DIR, f"bg_{theme_name}_{ts}.mp4")
+    out_dir  = out_dir or VISUALS_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"bg_{theme_name}_{ts}.mp4")
 
     print(f"[VISUAL v2] theme={theme_name} | seed={visual_seed} | "
           f"{n_frames} frames @ {fps}fps | {duration_secs}s")

@@ -1268,3 +1268,36 @@ Bugs found by sweeping the rest of the code, fixed:
   was named after the whole video concept.
 - Mechanical checks added to the review: every internal import and module
   attribute resolves (they are inside functions, where lint can't see).
+
+## Round 10: test what couldn't be tested, then fix what that found
+
+"Uploads and streams can't be tested without a YouTube account" was the
+biggest weak point. Three ways around it:
+
+- YouTube API contract tests (`tests/test_youtube_contract.py`): every API
+  call path runs against a client built from Google's own API definition
+  (the discovery documents googleapiclient ships), offline. Wrong method or
+  parameter names fail as they would at YouTube; request bodies are checked
+  for unknown fields, wrong types, documented read-only fields and parts
+  missing from `part=`. Putting the old madeForKids bug back fails the
+  upload test.
+- The web panel driven in a real browser at desktop and phone width, every
+  view and button, with layout measured. Found and fixed: the panel's
+  width classes collided with Quasar's grid classes of the same names, so
+  every table's buttons were cut off at the card edge; four views scrolled
+  sideways on a phone; the private panel loaded its font from Google on
+  every page view (now served locally); "Send test alert" never refreshed
+  (un-awaited coroutine; a test now scans for these); Library named local
+  renders by theme instead of title.
+- The 24/7 stream's test mode run for real. Found and fixed: its theme list
+  had fallen five themes behind; an error message named a flag that doesn't
+  exist; and it reused a video's background loop, whose panel says that
+  video's session and genre ("lofi drill") over a stream playing the whole
+  mixed library. The radio now renders its own loops ("lofi hip hop radio",
+  "24/7 · mixed genres") into visuals/stream/, once per theme.
+
+Also: thumbnail titles on side cards had shrunk to the smallest size (and 8
+phrases spilled past the card) after the cards were narrowed; long phrases
+now wrap onto two lines at 94-108px. The genre-hint matcher's substring
+fallback picked the first table entry ('lofi' meant anime lofi); it now
+needs a unique match.

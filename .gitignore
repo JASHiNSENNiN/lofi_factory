@@ -21,6 +21,7 @@ output/
 music/
 visuals/bg_*.mp4
 visuals/bg_scenes/
+visuals/stream/
 visuals/.recipe_log.jsonl
 assets/seo_*.json
 assets/thumb_*.jpg
