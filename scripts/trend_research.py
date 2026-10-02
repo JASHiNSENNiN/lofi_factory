@@ -170,7 +170,7 @@ def fetch_yt_trending(max_results: int = 20) -> list[dict]:
         # NOTE: videoDuration='long' combined with publishedAfter returns 0 results
         # from the YouTube API — filter by duration in post-processing instead.
         queries = [
-            "lofi hip hop study music 2026",
+            f"lofi hip hop study music {datetime.datetime.now().year}",
             "lofi beats to relax study to",
             "chill lofi beats study focus",
             "lofi music sleep study",

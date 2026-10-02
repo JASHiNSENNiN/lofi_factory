@@ -392,6 +392,16 @@ def _run_auto_once(args) -> bool:
     )
     try:
         cmd_upload(upload_args)
+    except SystemExit as e:
+        # cmd_upload exits on refusals (no login, too short, no metadata)
+        # and with 0 when the video is already on YouTube. Record it either
+        # way: unrecorded failures never triggered the fallback tier, and in
+        # --loop mode the exit used to end the loop.
+        if e.code not in (0, None):
+            _record_auto_result(success=False)
+            if not getattr(args, "loop", False):
+                raise
+            return False
     except Exception:
         _record_auto_result(success=False)
         raise
@@ -657,6 +667,20 @@ def cmd_playlist(args):
 
 # ── UPLOAD ──────────────────────────────────────────────────────────────────
 
+def _to_rfc3339_utc(value: str) -> str | None:
+    """'2026-05-16T20:00:00', '...Z' or '...+02:00' -> '2026-05-16T20:00:00.000Z'.
+    A time without an offset is taken as UTC. None if it doesn't parse."""
+    if "T" not in value:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
 def cmd_upload(args):
     youtube = get_youtube()
 
@@ -733,12 +757,14 @@ def cmd_upload(args):
     # Scheduled publish: --schedule-at sets privacyStatus=private + publishAt
     schedule_at = getattr(args, "schedule_at", None)
     if schedule_at:
-        # Normalise to RFC3339 UTC format required by YouTube API
-        schedule_at = schedule_at.replace("+00:00", "").rstrip("Z")
-        if "T" not in schedule_at:
-            print("[ERROR] --schedule-at must be ISO format: 2026-05-16T20:00:00")
+        schedule_at = _to_rfc3339_utc(schedule_at)
+        if not schedule_at:
+            print("[ERROR] --schedule-at must be an ISO date-time, e.g. 2026-05-16T20:00:00 "
+                  "(UTC) or 2026-05-16T20:00:00+02:00")
             sys.exit(1)
-        schedule_at = schedule_at + ".000Z"
+        if schedule_at <= datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"):
+            print(f"[ERROR] --schedule-at {schedule_at} is in the past.")
+            sys.exit(1)
 
     print(f"\n[UPLOAD] {os.path.basename(video_path)}")
     print(f"  Title:   {seo['title']}")
@@ -1045,7 +1071,7 @@ def _start_ffmpeg_stream(video_path: str, stream_key: str, preset: dict) -> subp
     # stderr → log file (not PIPE — unread pipes deadlock when buffer fills ~10 min)
     log_path = os.path.join(ROOT, "ffmpeg_stream.log")
     log_f    = open(log_path, "w")
-    print(f"  Streaming → {rtmp_url[:50]}...")
+    print(f"  Streaming → {RTMP_BASE}/****")
     print(f"  ffmpeg log: {log_path}")
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_f)

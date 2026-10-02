@@ -142,3 +142,14 @@ def test_drum_break_is_silent_outside_spans(tmp_path):
     assert np.max(np.abs(head - head.mean())) < 1e-3          # only the flat base
     assert np.max(np.abs(mixed[sr * 5:])) > 0.02              # drums in the span
     assert np.max(np.abs(mixed)) <= 10 ** (-1.5 / 20) + 1e-3  # true-peak headroom
+
+
+def test_a_video_spreads_its_tracks_over_the_genres_progressions():
+    from collections import Counter
+    random.seed(11)
+    sets = _quiet(g._build_diverse_params, 9, genre_hint='chillhop')
+    counts = Counter(p['progression'] for p in sets)
+    n_progs = len(g._SUBGENRE_CONFIG['chillhop']['progs'])
+    # As even as the genre's progression list allows (9 tracks over n options).
+    assert max(counts.values()) <= -(-9 // min(n_progs, 9)) + 1
+    assert all(a['progression'] != b['progression'] for a, b in zip(sets, sets[1:]))

@@ -53,12 +53,16 @@ _GLOBAL = "*"
 def client_id(request) -> str:
     """Client address, using Cloudflare's header when behind the tunnel
     (every request otherwise appears to come from 127.0.0.1)."""
-    headers = getattr(request, "headers", {}) or {}
-    forwarded = headers.get("cf-connecting-ip")
-    if forwarded:
-        return forwarded.strip()
     client = getattr(request, "client", None)
-    return getattr(client, "host", None) or "unknown"
+    host = getattr(client, "host", None) or "unknown"
+    # cloudflared connects from this machine. Anyone else could put any
+    # address in the header and get a fresh lockout counter per attempt.
+    if host in ("127.0.0.1", "::1", "localhost"):
+        headers = getattr(request, "headers", {}) or {}
+        forwarded = headers.get("cf-connecting-ip")
+        if forwarded:
+            return forwarded.strip()
+    return host
 
 
 def _recent(key: str, window: float, now: float) -> list[float]:
@@ -90,15 +94,28 @@ def record_success(client: str) -> None:
     _locked_until.pop(client, None)
 
 
+def _password_fingerprint() -> str:
+    """Changes whenever WEBUI_PASSWORD does, so changing the password ends
+    every existing session instead of leaving them logged in forever."""
+    key = (config.STORAGE_SECRET or "").encode("utf-8")
+    return hmac.new(key, (config.WEBUI_PASSWORD or "").encode("utf-8"), "sha256").hexdigest()[:32]
+
+
+def _session_valid(storage) -> bool:
+    return (bool(storage.get("authenticated", False))
+            and hmac.compare_digest(str(storage.get("pw_fp", "")), _password_fingerprint()))
+
+
 def is_authenticated() -> bool:
     try:
-        return bool(app.storage.user.get("authenticated", False))
+        return _session_valid(app.storage.user)
     except Exception:
         return False
 
 
 def login(remember_path: str | None = None) -> None:
     app.storage.user["authenticated"] = True
+    app.storage.user["pw_fp"] = _password_fingerprint()
 
 
 def logout() -> None:
@@ -110,7 +127,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        if not DEV_OPEN and not app.storage.user.get("authenticated", False):
+        if not DEV_OPEN and not _session_valid(app.storage.user):
             if (
                 not path.startswith("/_nicegui")        # framework internals
                 and not path.startswith("/static")

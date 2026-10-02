@@ -36,3 +36,24 @@ def test_cloudflare_header_identifies_the_client():
         headers = {"cf-connecting-ip": "203.0.113.7"}
         client = type("C", (), {"host": "127.0.0.1"})()
     assert auth.client_id(Req()) == "203.0.113.7"
+
+
+def test_cloudflare_header_only_trusted_from_the_local_tunnel():
+    from types import SimpleNamespace
+    from webui import auth
+    spoof = SimpleNamespace(client=SimpleNamespace(host="203.0.113.9"),
+                            headers={"cf-connecting-ip": "198.51.100.1"})
+    assert auth.client_id(spoof) == "203.0.113.9"
+    tunnel = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"),
+                             headers={"cf-connecting-ip": "198.51.100.1"})
+    assert auth.client_id(tunnel) == "198.51.100.1"
+
+
+def test_changing_the_password_ends_existing_sessions(monkeypatch):
+    from webui import auth, config
+    monkeypatch.setattr(config, "WEBUI_PASSWORD", "old")
+    session = {"authenticated": True, "pw_fp": auth._password_fingerprint()}
+    assert auth._session_valid(session)
+    monkeypatch.setattr(config, "WEBUI_PASSWORD", "new")
+    assert not auth._session_valid(session)
+    assert not auth._session_valid({"authenticated": True})   # sessions from before this check

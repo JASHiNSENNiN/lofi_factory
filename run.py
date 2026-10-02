@@ -256,10 +256,19 @@ def main():
     else:
         print("\n[2/5] Skipping visual generation (using existing)")
         import glob
-        visuals = glob.glob(os.path.join(ROOT, "visuals", "bg_*.mp4"))
+        import re as _re
+        # Prefer a loop of the chosen theme; otherwise reuse the latest one
+        # and take its theme, so the thumbnail matches what's on screen.
+        same = glob.glob(os.path.join(ROOT, "visuals", f"bg_{theme}_*.mp4"))
+        visuals = same or glob.glob(os.path.join(ROOT, "visuals", "bg_*.mp4"))
         visual_path = max(visuals, key=os.path.getmtime) if visuals else None
         if not visual_path:
             print("  WARNING: No visual found. Assembler will generate a gradient fallback.")
+        else:
+            m = _re.match(r"bg_(.+)_\d{8}_\d{6}\.mp4$", os.path.basename(visual_path))
+            if m and m.group(1) != theme:
+                print(f"  Reusing a {m.group(1)} visual, so the theme is now {m.group(1)}.")
+                theme = m.group(1)
 
     # ── STEP 3: SEO ────────────────────────────────────────────
     print("\n[3/5] Generating SEO metadata...")
@@ -374,7 +383,18 @@ def main():
 
     print("\n[5/5] Assembling final video...")
     from scripts.assemble_video import assemble
-    video_path = assemble(theme_name=theme, duration_label=args.duration, visual_path=visual_path, music_files=generated_tracks)
+    video_path = assemble(theme_name=theme, duration_label=args.duration, visual_path=visual_path,
+                          music_files=generated_tracks or None)   # None: --skip-music uses music/ as is
+
+    # Real chapters: the assembler recorded where each track actually starts.
+    import json as _json
+    tracks_path = video_path + ".tracks.json"
+    if os.path.exists(tracks_path):
+        from scripts.generate_seo import with_tracklist
+        from scripts.fileutil import atomic_write_json
+        with open(tracks_path) as _tf:
+            seo["description"] = with_tracklist(seo["description"], _json.load(_tf))
+        atomic_write_json(seo_path, seo, ensure_ascii=False)
 
     # ── STEP 6: Upload ─────────────────────────────────────────
     upload_ok = False
@@ -413,7 +433,7 @@ def main():
                 "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
             })
         except SystemExit:
-            print("  Upload skipped (auth not set up yet)")
+            print("  Upload failed: YouTube isn't connected. Video is ready at:", video_path)
         except Exception as e:
             print(f"  Upload failed: {e}")
             print("  Video is ready at:", video_path)
@@ -445,6 +465,8 @@ def main():
         "seo": seo_path,
     }
     print(f"[RESULT] {_json.dumps(_result)}")
+    if not args.skip_upload and not upload_ok:
+        sys.exit(1)   # the video exists, but what was asked for didn't happen
 
 
 if __name__ == "__main__":

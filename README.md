@@ -1,16 +1,17 @@
 # lofi_factory
 
-An automated lofi-music YouTube pipeline: generates original lofi tracks
-(procedural MIDI composition, no sampling of existing recordings), renders
-atmospheric background video, assembles a full video, and uploads it to
-YouTube on a daily schedule — or streams live 24/7. There are no AI or
-LLM calls anywhere in the code: the generative core (Euclidean/cellular-
-automata rhythms, Markov and L-system melodic generation, a table-driven
-functional-harmony grammar, genetic-algorithm/simulated-annealing
-voice-leading with species-counterpoint rules, noise-field visuals) is
-entirely procedural — no neural nets, nothing trained on a corpus, no
-text or image generators. `tests/test_no_ai.py` fails the build if any
-of that creeps back in.
+An automated lofi-music YouTube pipeline: composes original lofi tracks
+(procedural MIDI rendered through a General MIDI soundfont, with drums
+layered from free CC0 one-shot samples; no existing songs are sampled),
+renders a looping background video, assembles a full video, and uploads it
+to YouTube on a schedule, or streams live. There are no AI or LLM calls
+anywhere in the code. The default composer (`scripts/composer.py`) uses
+curated and Markov-walk chord progressions, motif-based melodies, Euclidean
+and pattern-table drums and a key/clash filter; the experimental v2 composer
+(`--music-v2`, off by default) adds genetic-algorithm/simulated-annealing
+voice-leading and L-system melodies. Nothing is trained on a corpus; the only
+"learning" is a small Markov table built from the pipeline's own past
+melodies. `tests/test_no_ai.py` fails the build if AI code creeps back in.
 
 AI is trash. Algorithm is art.
 

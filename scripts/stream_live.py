@@ -474,6 +474,14 @@ def build_eq_filtergraph(theme_name):
 _STALL_TIMEOUT = 30   # seconds without any ffmpeg output before killing
 
 
+_RTMP_KEY_RE = re.compile(r"(rtmps?://[^\s/]+/[^\s/]+/)[^\s:'\"]+")
+
+
+def redact_stream_key(line: str) -> str:
+    """ffmpeg names the full output URL, stream key included, in its errors."""
+    return _RTMP_KEY_RE.sub(r"\1****", line)
+
+
 def _monitor_stderr(proc, stop_event, last_output_time):
     """
     Background thread — reads ffmpeg stderr byte-chunks.
@@ -493,7 +501,7 @@ def _monitor_stderr(proc, stop_event, last_output_time):
         parts = re.split(b"[\r\n]", buf)
         buf = parts[-1]   # keep incomplete line
         for raw in parts[:-1]:
-            line = raw.strip().decode("utf-8", errors="replace")
+            line = redact_stream_key(raw.strip().decode("utf-8", errors="replace"))
             if not line:
                 continue
             if "fps=" in line or "speed=" in line or "bitrate=" in line:

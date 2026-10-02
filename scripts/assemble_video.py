@@ -136,6 +136,28 @@ def pick_music_files(target_duration_secs, force_files=None):
     return playlist
 
 
+def _track_title(path: str) -> str:
+    try:
+        with open(path + ".meta.json", encoding="utf-8") as f:
+            title = (json.load(f).get("title") or "").strip()
+    except (OSError, ValueError):
+        title = ""
+    return title or os.path.splitext(os.path.basename(path))[0]
+
+
+def build_tracklist(playlist, out_secs: float) -> list[dict]:
+    """Where each track really starts in the finished video, for chapters.
+    Tracks that would start in the last 10 s (inside the fade) are left out."""
+    tracks, start = [], 0.0
+    for path, secs in playlist:
+        if start >= out_secs - 10:
+            break
+        tracks.append({"start": round(start, 2), "secs": round(min(secs, out_secs - start), 2),
+                       "title": _track_title(path)})
+        start += secs
+    return tracks
+
+
 def concat_audio(playlist, target_secs, tmp_dir):
     """Join the playlist into one lossless FLAC of exactly target_secs (or the
     music's length, if shorter), with a 2 s fade in and a 5 s fade out at the
@@ -822,6 +844,8 @@ def assemble(theme_name=None, duration_label="2 hours", output_name=None, visual
                         theme_name=theme_name, audio_path=audio_path)
 
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        from scripts.fileutil import atomic_write_json
+        atomic_write_json(out_path + ".tracks.json", build_tracklist(playlist, audio_secs))
     except Exception:
         # Keep the logs for inspection, but not the multi-GB intermediates.
         for big in glob.glob(os.path.join(tmp_dir, "*.mp4")) + glob.glob(os.path.join(tmp_dir, "*.flac")):

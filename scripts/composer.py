@@ -17,7 +17,7 @@ Math: 14 keys × 51 progressions × BPM/swing ranges per sub-genre
       = effectively infinite unique tracks
 """
 
-import os, sys, time, random, json, subprocess, tempfile, math
+import os, sys, time, random, json, subprocess, tempfile, math, threading
 from itertools import product as _iproduct
 
 try:
@@ -2206,7 +2206,8 @@ def build_bass(progression, start_bar, num_loops, swing, bpm, walking=False, gli
     return events
 
 
-def _markov_next_pitch_class(markov_nodes: dict, prev_pc: int, scale_pcs: set) -> int | None:
+def _markov_next_pitch_class(markov_nodes: dict, prev_pc: int, scale_pcs: set,
+                             root_pc: int = 0) -> int | None:
     """
     Given a Markov transition table (isobar.MarkovLearner-style — either
     {pitch_class: [successor_pcs...]} or {pitch_class: {successor_pc: count}}),
@@ -2216,18 +2217,23 @@ def _markov_next_pitch_class(markov_nodes: dict, prev_pc: int, scale_pcs: set) -
     """
     if not markov_nodes:
         return None
-    node = markov_nodes.get(prev_pc, markov_nodes.get(str(prev_pc)))
+    # The table is in scale degrees relative to the key's root (see
+    # _save_melody_pitch_classes); a table of absolute pitch classes learned
+    # from melodies in different keys says nothing about the next note.
+    rel = (prev_pc - root_pc) % 12
+    node = markov_nodes.get(rel, markov_nodes.get(str(rel)))
     if not node:
         return None
     if isinstance(node, dict):
         candidates, weights = list(node.keys()), list(node.values())
     else:
         candidates, weights = list(node), [1] * len(node)
-    filtered = [(c, w) for c, w in zip(candidates, weights) if int(c) % 12 in scale_pcs]
+    filtered = [((int(c) + root_pc) % 12, w) for c, w in zip(candidates, weights)
+                if (int(c) + root_pc) % 12 in scale_pcs]
     if not filtered:
         return None
     cands, wts = zip(*filtered)
-    return int(random.choices(cands, weights=wts, k=1)[0]) % 12
+    return random.choices(cands, weights=wts, k=1)[0]
 
 
 def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', scale='pent',
@@ -2240,10 +2246,9 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
     the nearest chord tone (60% chance) so melody lands convincingly on the harmony.
 
     markov_nodes: optional pitch-class transition table (from
-    isobar.MarkovLearner, e.g. MidiDNA.markov_melody_nodes) learned from a
-    real source melody. When present, blended in as a probabilistic nudge
-    toward pitch classes the source tends to move to — additive to, not a
-    replacement for, the existing chord-tone/phi-point logic above.
+    isobar.MarkovLearner) of scale degrees learned from this pipeline's own
+    past melodies. When present, blended in as a probabilistic nudge --
+    additive to, not a replacement for, the chord-tone/phi-point logic above.
 
     tension: 0.0-1.0 storytelling-arc scalar (see _tension()). Higher tension
     raises the phrase-trigger probability (denser phrasing) and biases phrase
@@ -2352,7 +2357,8 @@ def build_melody(key_root, start_bar, num_bars, swing, bpm, density='sparse', sc
                 # toward a pitch class the source melody's own transition
                 # statistics favor after the previous note, when available.
                 if markov_nodes and prev_final_note is not None and random.random() < 0.35:
-                    target_pc = _markov_next_pitch_class(markov_nodes, prev_final_note % 12, scale_pcs)
+                    target_pc = _markov_next_pitch_class(markov_nodes, prev_final_note % 12,
+                                                         scale_pcs, root_pc=key_root % 12)
                     if target_pc is not None:
                         same_pc = [n for n in notes_scale
                                    if n % 12 == target_pc and abs(n - note) <= 14]
@@ -2718,26 +2724,30 @@ def _load_params_history() -> list[dict]:
         return []
 
 
+_HISTORY_LOCK = threading.Lock()   # tracks render on worker threads
+
+
 def _save_params_history(params: dict) -> None:
-    history = _load_params_history()
-    history.append({
-        'sub_genre':   params.get('sub_genre', ''),
-        'key':         params.get('key', ''),
-        'progression': params.get('progression', ''),
-        'mood':        params.get('mood', ''),
-    })
-    history = history[-_HISTORY_MAXLEN:]
-    try:
-        os.makedirs(os.path.dirname(_PARAMS_HISTORY_FILE), exist_ok=True)
-        with open(_PARAMS_HISTORY_FILE, 'w') as f:
-            json.dump(history, f)
-    except OSError:
-        pass
+    from scripts.fileutil import atomic_write_json
+    with _HISTORY_LOCK:
+        history = _load_params_history()
+        history.append({
+            'sub_genre':   params.get('sub_genre', ''),
+            'key':         params.get('key', ''),
+            'progression': params.get('progression', ''),
+            'mood':        params.get('mood', ''),
+        })
+        try:
+            atomic_write_json(_PARAMS_HISTORY_FILE, history[-_HISTORY_MAXLEN:], indent=None)
+        except OSError:
+            pass
 
 
 # ─── SELF-REFERENTIAL MELODY HISTORY (Markov, learned from own past output) ───
 
-_MELODY_HISTORY_FILE = os.path.join(MUSIC_DIR, '.melody_history.json')
+# Scale degrees relative to each track's key. (The old .melody_history.json
+# held absolute pitch classes from mixed keys and isn't reused.)
+_MELODY_HISTORY_FILE = os.path.join(MUSIC_DIR, '.melody_degrees_history.json')
 _MELODY_HISTORY_MAXLEN = 50  # rolling cap: bounds the model and guards against
                               # Markov mode-collapse from unbounded accumulation
 
@@ -2754,15 +2764,14 @@ def _save_melody_pitch_classes(pitch_classes: list[int]) -> None:
     """Append one track's melody pitch-class sequence to the rolling history."""
     if not pitch_classes:
         return
-    history = _load_melody_history()
-    history.append(pitch_classes)
-    history = history[-_MELODY_HISTORY_MAXLEN:]
-    try:
-        os.makedirs(os.path.dirname(_MELODY_HISTORY_FILE), exist_ok=True)
-        with open(_MELODY_HISTORY_FILE, 'w') as f:
-            json.dump(history, f)
-    except OSError:
-        pass
+    from scripts.fileutil import atomic_write_json
+    with _HISTORY_LOCK:
+        history = _load_melody_history()
+        history.append(pitch_classes)
+        try:
+            atomic_write_json(_MELODY_HISTORY_FILE, history[-_MELODY_HISTORY_MAXLEN:], indent=None)
+        except OSError:
+            pass
 
 
 def _build_self_markov(history: list[list[int]]) -> dict:
@@ -3713,9 +3722,8 @@ def build_midi(params, output_path):
     walking   = bool(params.get('bass_walking', False))
     energy    = params.get('drum_energy', 'medium')
     sub_genre = params.get('sub_genre', 'chillhop')
-    # Pitch-class Markov transition table, when available (DNA-guided covers
-    # via isobar.MarkovLearner, or the self-referential history-based table —
-    # see _build_self_markov) — blended into build_melody's note choices.
+    # Scale-degree Markov table learned from the pipeline's own past melodies
+    # (see _build_self_markov), blended into build_melody's note choices.
     markov_nodes = params.get('markov_melody_nodes')
 
     # A procedurally-generated progression (Markov walk, ~18% of the time —
@@ -4083,7 +4091,8 @@ def build_midi(params, output_path):
     # Fires once, on the winning attempt only — a discarded low-quality
     # attempt must never pollute the self-referential model with exactly the
     # kind of melody the quality gate exists to filter out.
-    _save_melody_pitch_classes([note % 12 for (_t, note, _v, _d) in mel_ev])
+    _root_pc = KEY_ROOTS.get(key, 57) % 12
+    _save_melody_pitch_classes([(note - _root_pc) % 12 for (_t, note, _v, _d) in mel_ev])
     try:
         _append_recipe_log(params, quality_score=best_score,
                             quality_retries=attempts_used - 1, ga_voicing=False)
@@ -4254,15 +4263,18 @@ def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> lis
     param_sets = [anchor]
     sub = anchor.get('sub_genre')
     used_moods = {anchor.get('mood')}
+    prog_uses = {anchor.get('progression'): 1}
     for _ in range(1, count):
-        params = None
-        for _attempt in range(4):
-            # Only the first track carries the video's concept as its title;
-            # the others get their own phrase (they're named one by one in
-            # the live stream's now-playing line).
-            params = pick_params(concept_hint=None, genre_hint=sub)
-            if params.get('progression') != param_sets[-1].get('progression'):
-                break
+        # Only the first track carries the video's concept as its title; the
+        # others get their own phrase. Of several candidates, take the one
+        # whose progression this video has used least (and never the one
+        # just played): checking only the previous track let one progression
+        # fill a third of a video.
+        candidates = [pick_params(concept_hint=None, genre_hint=sub) for _attempt in range(8)]
+        fresh = [c for c in candidates
+                 if c.get('progression') != param_sets[-1].get('progression')] or candidates
+        params = min(fresh, key=lambda c: prog_uses.get(c.get('progression'), 0))
+        prog_uses[params.get('progression')] = prog_uses.get(params.get('progression'), 0) + 1
         for _attempt in range(8):
             if params['mood'] not in used_moods:
                 break

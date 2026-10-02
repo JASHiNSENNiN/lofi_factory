@@ -18,7 +18,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import shutil
 import signal
+import subprocess
 import time
 import uuid
 from collections import deque
@@ -30,6 +33,35 @@ from scripts.fileutil import CorruptStateFile, atomic_write_json, load_json_or_q
 
 # How many log lines to retain per job (ring buffer for late-joining pages).
 _MAX_LINES = 4000
+
+
+# Jobs inherit the panel's cgroup, and lofi-webui.service caps that at 768M,
+# far below what a render needs (the scheduled unit allows 4G). Under
+# systemd each job therefore gets its own scope with its own limit, so a
+# render isn't throttled or OOM-killed by the panel's cap, and an OOM kill
+# takes out the job, not the panel.
+JOB_MEMORY_MAX = os.environ.get("WEBUI_JOB_MEMORY_MAX", "4G")
+_scope_ok: bool | None = None
+
+
+def _scope_prefix() -> list[str]:
+    global _scope_ok
+    if _scope_ok is None:
+        _scope_ok = False
+        if os.environ.get("INVOCATION_ID") and shutil.which("systemd-run"):
+            try:
+                _scope_ok = subprocess.run(
+                    ["systemd-run", "--user", "--scope", "--quiet", "true"],
+                    capture_output=True, timeout=10).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                _scope_ok = False
+    if not _scope_ok:
+        return []
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+            "-p", f"MemoryMax={JOB_MEMORY_MAX}", "--"]
+
+
+_RTMP_KEY_RE = re.compile(r"(rtmps?://[^\s/]+/[^\s/]+/)[^\s:'\"]+")
 
 
 def _failure_summary(lines) -> str:
@@ -97,6 +129,9 @@ class Job:
         return _off
 
     def _emit_line(self, line: str) -> None:
+        # Job output is kept, shown in the panel and written to job_logs/;
+        # none of that may carry a stream key.
+        line = _RTMP_KEY_RE.sub(r"\1****", line)
         self.lines.append(line)
         for cb in list(self._line_subs):
             try:
@@ -302,8 +337,9 @@ class JobManager:
         try:
             # Own process group, so cancel() can stop ffmpeg/FluidSynth
             # children too, not just the Python process.
+            prefix = await asyncio.to_thread(_scope_prefix)
             proc = await asyncio.create_subprocess_exec(
-                *job.cmd,
+                *prefix, *job.cmd,
                 cwd=config.ROOT,
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,

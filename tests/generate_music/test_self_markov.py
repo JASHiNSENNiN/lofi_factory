@@ -53,3 +53,11 @@ def test_markov_next_pitch_class_accepts_dict_of_counts_shape():
     }
     assert results <= {2, 4}
     assert results
+
+
+def test_markov_table_is_key_relative():
+    # Degree 0 -> degree 7 (tonic to fifth). In D (root 2) that's D -> A.
+    nodes = {0: [7]}
+    assert _markov_next_pitch_class(nodes, prev_pc=2, scale_pcs={9}, root_pc=2) == 9
+    # In C the same table means C -> G.
+    assert _markov_next_pitch_class(nodes, prev_pc=0, scale_pcs={7}, root_pc=0) == 7

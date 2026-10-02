@@ -1018,3 +1018,110 @@ during a real render started from the command line.
 
 A full 30-minute render (`run.py --skip-upload --duration "30 min"`)
 completed: 9 tracks, 30:00.0 exactly, 720p24, −17.9 LUFS, LRA 2.4 LU.
+
+## Round 5: whole-project re-check
+
+### Fixed
+
+**Leaks and safety**
+- KEY-1: `publish.py live` printed the first 50 characters of the RTMP URL,
+  which is 18 of the stream key's 24 characters, into job logs the panel
+  stores and shows. `stream_live.py` echoed ffmpeg error lines verbatim, and
+  ffmpeg names the full URL on connection errors. Both redact now, and every
+  panel job line is redacted before it is stored.
+- MEM-1: renders started from the panel ran inside `lofi-webui.service`'s
+  cgroup, capped at 768M, while a render needs gigabytes (the scheduled
+  unit allows 4G). Under systemd each panel job now runs in its own scope
+  with its own limit (`WEBUI_JOB_MEMORY_MAX`, default 4G).
+- AUTH-1: `CF-Connecting-IP` was trusted from any client, so anyone reaching
+  the panel directly could send a new fake address with every guess and
+  never hit the per-client lockout. It is now trusted only from loopback,
+  where cloudflared connects.
+- AUTH-2: sessions never ended, even after a password change. Sessions now
+  carry a fingerprint of the password; changing it logs everyone out.
+- TEST-1: the test suite rewrote the real `music/.params_history.json`,
+  which steers what the next real video picks. Found by snapshotting file
+  times around a full test run; that was the only leak.
+
+**Unattended runs**
+- AUTO-1: `cmd_upload` refuses with `sys.exit`, which `except Exception`
+  doesn't catch. Failed uploads were never recorded (so the
+  fall-back-to-a-lighter-tier logic never triggered), a duplicate (exit 0)
+  skipped cleanup, and in `--loop` mode one refusal ended the loop.
+- AUTO-2: `run.py` exited 0 after a failed upload ("Upload skipped (auth not
+  set up yet)").
+- CLI-1: `--skip-music` could never work: an empty track list was taken as
+  "use only these tracks". `--skip-visual` reused the newest visual of any
+  theme while the thumbnail used another.
+- CLI-2: `--schedule-at` with an offset (`+02:00`) produced an invalid
+  timestamp, and times in the past were sent to YouTube.
+
+**Metadata honesty** (what every upload says about itself)
+- META-1: chapters were invented: keyword phrases at fixed fractions of the
+  video ("so a single upload can rank for multiple long-tail queries"),
+  unrelated to where tracks change. The assembler now records the real
+  track order and start times, and the description gets a tracklist that
+  YouTube turns into chapters.
+- META-2: the scene line was template mad-libs. Most descriptions read like
+  "The wherever you are at summer night hits different" or
+  "2am. A any room. Your meditation. This." It is now built from whole
+  phrases, and season-specific times only appear in that season.
+- META-3: tags were stuffed by design ("fill the full 500-char budget"):
+  every video carried other genres' tags (phonk, dark, jazz, chillhop) and
+  claims like "study music that actually works" and "calm music for
+  anxiety and stress"; up to three of other channels' trending tags were
+  copied in through a filter that passed anything containing "music". Now
+  at most 15 tags, all about this video.
+- META-4: false or broken copy: "New lo-fi drops weekly", "No algorithm. No
+  playlist filler.", "freshly composed for this upload" (not true for
+  reused tracks), a comment calling the visible ref ID "invisible", a
+  leading blank line, duplicate hashtags, generic hashtags that named the
+  wrong genre, mood lines cut mid-word, and titles like "1 hour to
+  meditation". The description now says plainly that the music comes from
+  the channel's own composing software, with CC0 drum samples.
+- META-5: a "minecraft cozy" aesthetic put a game's trademark into titles
+  and tags of videos unrelated to Minecraft.
+
+**Music**
+- MUS-2: tracks of one video repeated progressions (3 of 9 tracks shared
+  one); only the previous track was checked. Now the least-used of several
+  candidates is taken.
+- MUS-3: the "self-referential" melody Markov table was built from absolute
+  pitch classes of melodies in different keys, so its nudges were noise.
+  It now works in scale degrees relative to each track's key.
+- MUS-4: the composer's history files were rewritten unlocked and
+  non-atomically by three render threads at once.
+
+**Docs**
+- DOC-1: the README said "no sampling of existing recordings" (the drums are
+  CC0 recordings) and presented v2-only features as the core.
+
+### Not fixed (decisions or larger work)
+- The premise. A box that uploads machine-composed videos daily, with
+  titles, thumbnails and copy generated from templates, is what YouTube's
+  "inauthentic/repetitious content" monetization policy is written about.
+  The code can't fix that.
+- 29 "sub-genres" are mostly a BPM range, a drum-pattern list, a scale and
+  a GM piano program. `lofi_garage` runs at 66–76 BPM (UK garage is
+  ~130); "nujabes" is a real artist's name used as a preset label.
+- Thumbnails: dark gradient, a featureless mannequin figure, and big text.
+  The A/B "alternate" only changes layout, so the swap test measures little.
+- Two unrelated live systems: the panel's Live page drives `publish.py live`
+  (loop one finished video), while `run.py --stream` runs `stream_live.py`
+  (24/7, generating music). They don't share state, and the panel can't see
+  the second.
+- Three separate alert paths (`webui/alerts.py`, `stream_live._send_alert`,
+  `scripts/notify_auto_failure.py`).
+- The OAuth token carries the full `youtube` scope (can delete videos) and
+  is copied unencrypted into `backups/`.
+- 30 failed logins lock everyone out for 15 minutes (already-logged-in
+  sessions keep working).
+- Trend research spends 400–800 API quota units every 6 hours and now only
+  reorders four keywords in titles.
+- Dependencies far heavier than their use: statsmodels for one exponential
+  smoothing, audiomentations for one convolution, librosa for one stretch.
+- Dead code: `bandit.select_arm`, `analytics.engine_weights`,
+  `binarize_above_median`, `harmony_engine.validate_roman_numerals`,
+  `realize_numeral_pitches`, `postfx.draw_watermark`, `stats.list_replies`,
+  `data.latest_video`, `trend_research.compute_trend_deltas`, among others.
+- The panel's first page loads still make cached-but-blocking YouTube calls.

@@ -42,7 +42,7 @@ def _prune_older_than(pattern: str, days: float) -> int:
 
 def cleanup_after_upload(root: str, uploaded_video: str | None) -> int:
     """Delete the uploaded render and prune old intermediates. Returns bytes freed."""
-    freed = _remove(uploaded_video) if uploaded_video else 0
+    freed = (_remove(uploaded_video) + _remove(uploaded_video + ".tracks.json")) if uploaded_video else 0
     freed += _prune_newest(os.path.join(root, "visuals", "bg_*.mp4"), KEEP_VISUAL_LOOPS)
     for ext in ("wav", "mp3"):
         freed += _prune_newest(os.path.join(root, "music", f"*.{ext}"), KEEP_TRACKS,
