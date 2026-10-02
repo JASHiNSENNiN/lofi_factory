@@ -745,7 +745,8 @@ def stream(visual_path, playlist_path, rtmp_url, theme_name=None, test_secs=None
             stream_id  = yt_info.get("stream_id")
             sched      = yt_info.get("scheduled_start")
             if active_yt and active_bid:
-                title_updater = _yt_mgr.LiveTitleUpdater(active_yt, active_bid, sched)
+                title_updater = _yt_mgr.LiveTitleUpdater(active_yt, active_bid, sched,
+                                                         base_title=yt_info.get("title"))
                 # Transition to live once ffmpeg connects (background thread)
                 _yt_mgr.transition_to_live_async(active_yt, active_bid, stream_id)
         except Exception as e:

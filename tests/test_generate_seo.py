@@ -224,3 +224,31 @@ def test_build_description_still_shows_default_when_genre_is_generic():
     assert desc.startswith("1 hour of lo-fi hip hop beats")
 
 
+
+
+def test_corrected_cross_genre_concept_drops_the_old_genres_words():
+    base = _concept_for_pillar("cross_genre")
+    base.update(genre_label="lofi ambient", mood_line="texture more than melody.",
+                tags_extra=["ambient lofi", "atmospheric lofi"])
+    updated = concept_from_music_params(music_sub_genre="lofi_house", music_mood="",
+                                        base_concept=base)
+    assert updated["genre_label"] == "lofi house"
+    assert not updated["mood_line"] and not updated["tags_extra"]
+
+
+def test_sleep_and_ambient_videos_are_not_sold_as_study_beats():
+    import random
+    from scripts import generate_seo as g
+    random.seed(3)
+    for genre in ("sleep lofi", "ambient lofi"):
+        concept = {"pillar": "activity", "genre_label": genre, "activity": "coding",
+                   "mood_line": "", "tags_extra": ["coding lofi"], "theme": "blue_hour"}
+        desc = g.build_description({**concept, "activity": "winding down"}, "1 hour", "the blue hour")
+        assert "studying" not in desc.split("\n")[0] and "#studymusic" not in desc
+        tags = g.build_tags(concept, "1 hour")
+        assert f"{genre} beats" not in tags
+
+
+def test_sentences_start_with_capitals():
+    from scripts.generate_seo import _sentence
+    assert _sentence("functional. mostly functional. fine") == "Functional. Mostly functional. Fine."

@@ -124,7 +124,8 @@ _MOMENT_ACTIVITIES = {
     "coding", "essay writing", "studying", "reading", "journaling", "math homework",
     "piano practice", "novel writing", "research", "design work", "exam prep", "gaming",
     "drawing", "cooking", "cleaning", "learning guitar", "meditation", "interview prep",
-    "language learning", "working from home",
+    "language learning", "working from home", "falling asleep", "winding down",
+    "reading in bed",
 }
 
 _WORD = re.compile(r"[a-z]+")
@@ -167,16 +168,37 @@ def _genre_tag(genre: str) -> str:
     return "lofi hip hop" if g == "lo-fi hip hop" else g
 
 
+def purpose(genre: str) -> str:
+    """What a genre's videos are for: "sleep", "relax" (beatless ambient),
+    "groove" (dance-derived genres) or "study"."""
+    g = (genre or "").lower()
+    if "sleep" in g:
+        return "sleep"
+    if "ambient" in g:
+        return "relax"
+    if any(w in g for w in ("house", "garage", "funk", "city pop", "synthwave")):
+        return "groove"
+    return "study"
+
+
+_REST_ACTIVITIES = {"sleep": ("falling asleep", "winding down", "reading in bed"),
+                    "relax": ("winding down", "reading", "meditation", "journaling")}
+
+
+def activity_for(genre: str, activity: str, rng: random.Random | None = None) -> str:
+    """The concept's activity, unless the genre is for rest: sleep music
+    isn't for "coding" or "studying"."""
+    rest = _REST_ACTIVITIES.get(purpose(genre))
+    if rest and activity not in rest:
+        return (rng or random).choice(rest)
+    return activity
+
+
 def _use_phrase(genre: str) -> str:
     """What the music is for, in the genre's own idiom: sleep music isn't
     for studying, and ambient has no beats."""
-    if "sleep" in genre:
-        return "music to fall asleep to"
-    if "ambient" in genre:
-        return "music to drift away to"
-    if any(w in genre for w in ("house", "garage", "funk", "city pop", "synthwave")):
-        return "grooves to work & unwind to"
-    return "beats to study & relax to"
+    return {"sleep": "music to fall asleep to", "relax": "music to drift away to",
+            "groove": "grooves to work & unwind to"}.get(purpose(genre), "beats to study & relax to")
 
 
 def build(strategy: str, *, theme: str, genre: str, activity: str, duration: str,
@@ -189,7 +211,8 @@ def build(strategy: str, *, theme: str, genre: str, activity: str, duration: str
     g = _genre_tag(genre)
     scene = pick_scene(theme, trends, month, rng)
     if strategy == "moment":
-        when = rng.choice(_NIGHT_TIMES if theme in _NIGHT_THEMES else _DAY_TIMES)
+        night = theme in _NIGHT_THEMES or purpose(genre) == "sleep"
+        when = rng.choice(_NIGHT_TIMES if night else _DAY_TIMES)
         act = activity if activity in _MOMENT_ACTIVITIES else "studying"
         head = f"{act} {when}"
         # Thumbnail text stays short enough to read on a phone.

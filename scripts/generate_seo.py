@@ -439,7 +439,9 @@ def build_tags(concept: dict, duration: str, theme_name: str | None = None) -> l
             g = "lofi hip hop"   # the spelling people search
         dur = DURATION_DISPLAY.get(duration, duration)
         # How people actually search for a genre: mix, beats, playlist, length.
-        candidates += [genre, g, f"{g} mix", f"{g} beats", f"{g} {dur}", f"{g} playlist"]
+        from scripts.titles import purpose
+        kind = "music" if purpose(genre) in ("sleep", "relax") else "beats"   # ambient has no beats
+        candidates += [genre, g, f"{g} mix", f"{g} {kind}", f"{g} {dur}", f"{g} playlist"]
         if concept.get("activity"):
             candidates.append(f"{g} for {concept['activity']}")
     candidates += [_clean_tag(t) for t in concept.get("tags_extra", []) if t.strip("#")]
@@ -494,7 +496,9 @@ def _sentence(text: str) -> str:
     text = (text or "").strip()
     if not text:
         return ""
-    text = text[0].upper() + text[1:]
+    # Every sentence starts with a capital ("functional. mostly functional."
+    # in the stylised mood lines).
+    text = re.sub(r"(^|[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), text)
     return text if text[-1] in ".!?" else text + "."
 
 
@@ -797,6 +801,10 @@ def concept_from_music_params(music_sub_genre: str, music_mood: str, base_concep
         from scripts.composer import _resolve_genre_hint
         if _resolve_genre_hint(base_concept.get("genre_label") or "") == music_sub_genre:
             genre_label = None
+        elif genre_label:
+            # The pool pick's mood line and tags describe its genre ("texture
+            # more than melody" is ambient); they go with its label.
+            updated.update(mood_line="", tags_extra=[], concept=genre_label)
     if genre_label:
         updated["genre_label"] = genre_label
     # music_mood is the first track's name ("Until the Small Hours"): a song
@@ -842,20 +850,31 @@ def search_phrase(genre: str) -> str:
     return genre if re.search(r"lo-?fi", genre, re.I) else f"{genre} lofi"
 
 
+_PURPOSE_USES = {"sleep": ("sleeping", "resting", "relaxing"),
+                 "relax": ("relaxing", "reading", "meditation"),
+                 "groove": ("working", "cooking", "unwinding"),
+                 "study": ("studying", "working", "relaxing")}
+_PURPOSE_HASHTAG = {"sleep": "sleepmusic", "relax": "relaxingmusic",
+                    "groove": "chillmusic", "study": "studymusic"}
+
+
 def _search_line(genre: str, duration: str, activity: str) -> str:
     """The first line YouTube shows under the title in search results: what
     the video is, how long, and what it's for, in the words people search."""
+    from scripts.titles import purpose
+    p = purpose(genre)
     uses = []
-    for u in (activity, "studying", "working", "relaxing"):
+    for u in (activity, *_PURPOSE_USES[p]):
         if u and u.lower() not in uses:
             uses.append(u.lower())
     uses = uses[:3]
     use_text = f"{', '.join(uses[:-1])} and {uses[-1]}" if len(uses) > 1 else uses[0]
-    return _sentence(f"{duration} of {search_phrase(genre)} beats for {use_text}")
+    noun = "music" if p in ("sleep", "relax") else "beats"
+    return _sentence(f"{duration} of {search_phrase(genre)} {noun} for {use_text}")
 
 
 def build_description(concept: dict, duration: str, scene: str = "") -> str:
-    from scripts.titles import fits_time_of_day
+    from scripts.titles import fits_time_of_day, purpose
     activity = concept.get("activity", "work")
     genre    = concept.get("genre_label", "lo-fi hip hop")
     theme    = concept.get("theme") or ""
@@ -879,7 +898,7 @@ def build_description(concept: dict, duration: str, scene: str = "") -> str:
     dur_tags = TAGS_DURATION.get(duration, [])
     candidates = ["lofi", _clean_tag(genre).replace(" ", ""),
                   _clean_tag(dur_tags[0]).replace(" ", "") if dur_tags else "",
-                  "studymusic"]
+                  _PURPOSE_HASHTAG[purpose(genre)]]
     hashtags, seen = [], set()
     for h in candidates:
         if h and h not in seen and re.fullmatch(r"\w+", h):
@@ -926,7 +945,12 @@ def generate_seo(theme_name: str = None, duration: str = None,
     # performance of each form for this pillar (title_variant_weights) and
     # of surface features such as length (title_feature_weights). Both are
     # a neutral 1.0 until a form or feature has >=5 scored videos.
+    from scripts.titles import activity_for
     concept = {**concept, "theme": theme_name or concept.get("theme") or "cozy_rain"}
+    activity = (concept.get("activity") or "studying").lower()
+    concept["activity"] = activity_for(concept.get("genre_label") or "", activity)
+    if concept["activity"] != activity:      # its tags ("coding lofi") went with it
+        concept["tags_extra"] = []
     title_variants, variant_strategies = generate_title_variants(concept, duration, trends, n=3)
     from scripts.analytics import (
         title_variant_weights as _title_variant_weights,

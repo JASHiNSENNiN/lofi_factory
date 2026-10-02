@@ -8,7 +8,7 @@ Manages the full broadcast lifecycle so the stream actually shows up on the chan
   3. Create ingestion stream → get RTMP address + key
   4. Bind broadcast to stream
   5. After ffmpeg connects, poll stream health → transition broadcast to LIVE
-  6. Update broadcast title when track changes (rate-limited to ≤1 per 5 min)
+  6. Add the current track to the broadcast title (rate-limited, see _TITLE_COOLDOWN)
   7. End broadcast on Ctrl+C (transitions to 'complete')
 
 Falls back to env-var YT_STREAM_KEY if credentials not available.
@@ -240,12 +240,12 @@ def setup_live_stream(theme_name=None, stream_key_override=None):
                 "rtmp_url": f"{ingest_addr}/{stream_name}",
                 "broadcast_id": bid, "stream_id": stream_id,
                 "scheduled_start": bsched, "youtube": youtube,
+                "title": radio_title(theme_name),
             }
         print("  [yt-api] Existing broadcast has no bound stream — creating new one")
 
     # Create a fresh broadcast
-    theme_label = theme_name.replace("_", " ").title() if theme_name else "Lo-Fi Chill"
-    title = f"Lo-Fi Hip Hop Radio — {theme_label} | beats to relax/study to"[:100]
+    title = radio_title(theme_name)
     try:
         broadcast_id, stream_id, ingest_addr, stream_name, scheduled_start = \
             _create_broadcast_and_stream(youtube, title, theme_name)
@@ -253,6 +253,7 @@ def setup_live_stream(theme_name=None, stream_key_override=None):
             "rtmp_url": f"{ingest_addr}/{stream_name}",
             "broadcast_id": broadcast_id, "stream_id": stream_id,
             "scheduled_start": scheduled_start, "youtube": youtube,
+            "title": title,
         }
     except Exception as e:
         print(f"  [yt-api] Broadcast creation failed: {e}")
@@ -339,13 +340,34 @@ def end_broadcast(youtube, broadcast_id):
 
 # ── Live title updater ────────────────────────────────────────────────────────
 
+def radio_title(theme_name: str | None = None) -> str:
+    """The 24/7 stream's title: the searched phrase first, the way the big
+    radio streams are titled ("lofi hip hop radio 📚 beats to relax/study
+    to"). The library mixes genres, so the title names none but lofi hip hop.
+    (It used to read "Lo-Fi Hip Hop Radio — Lofi House | ..." from the theme
+    key, which named a genre the stream may not play.)"""
+    from scripts.titles import EMOJI
+    return f"lofi hip hop radio {EMOJI.get(theme_name or '', '🎧')} beats to relax/study to"
+
+
+def now_playing_title(base: str, track: str) -> str:
+    """The radio title with the current track after it; the searched words
+    stay first and the track name is cut, never the title."""
+    room = 100 - len(base) - len(" · ♪ ")
+    track = (track or "").strip()
+    if room < 8 or not track:
+        return base[:100]
+    return f"{base} · ♪ {track[:room].rstrip()}"
+
+
 class LiveTitleUpdater:
     """
     Background thread that updates the YouTube broadcast title as tracks change.
     Rate-limited to max 1 update per _TITLE_COOLDOWN seconds to conserve quota.
     """
 
-    def __init__(self, youtube, broadcast_id, scheduled_start):
+    def __init__(self, youtube, broadcast_id, scheduled_start, base_title: str | None = None):
+        self._base    = base_title or radio_title()
         self._yt      = youtube
         self._bid     = broadcast_id
         self._sched   = scheduled_start or \
@@ -359,7 +381,7 @@ class LiveTitleUpdater:
 
     def set_track(self, title, genre):
         """Call when track changes. Queues a broadcast title update."""
-        label = f"{title[:60]} | Lo-Fi Radio"
+        label = now_playing_title(self._base, title)
         with self._lock:
             self._pending = label
 

@@ -47,10 +47,19 @@ def test_title_update_keeps_description(monkeypatch):
         real_sleep(0.01)
     updater.stop()
     snippet = yt.b.updates[0]["snippet"]
-    assert snippet["title"].startswith("Amber glow")
+    assert snippet["title"].startswith("lofi hip hop radio") and snippet["title"].endswith("Amber glow")
     assert snippet["description"] == "keep me"
 
 
 def test_title_cooldown_fits_the_daily_quota():
     updates_per_day = 86400 / ylm._TITLE_COOLDOWN
     assert updates_per_day * 51 < 3000
+
+
+def test_radio_title_keeps_the_searched_phrase_first():
+    base = ylm.radio_title("lofi_house")
+    assert base.startswith("lofi hip hop radio") and "house" not in base.lower()
+    t = ylm.now_playing_title(base, "Until the Small Hours")
+    assert t.startswith(base) and t.endswith("Until the Small Hours") and len(t) <= 100
+    long = ylm.now_playing_title(base, "x" * 300)
+    assert long.startswith(base) and len(long) <= 100

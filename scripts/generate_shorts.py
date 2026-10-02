@@ -44,6 +44,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import subprocess
 import tempfile
 
@@ -192,24 +193,47 @@ def build_vertical_clip(video_path: str, out_path: str, start_sec: float, end_se
 # ─────────────────────────────────────────────────────────────────────────────
 # Metadata
 # ─────────────────────────────────────────────────────────────────────────────
+_LENGTH_TAG = re.compile(r"\s*·\s*(?:\d+\s*(?:hours?|min(?:utes)?)|24/7 live|all night)\b",
+                         re.IGNORECASE)
+
+
+def _short_title_base(title: str) -> str:
+    """The long title without its length ("rain on the window 🌧️ [lofi hip
+    hop · 1 hour]" -> "... [lofi hip hop]"): a one-minute Short is not an
+    hour long."""
+    return _LENGTH_TAG.sub("", title).replace("[]", "").strip()
+
+
 def build_shorts_metadata(seo: dict, title_override: str | None = None) -> dict:
     """
-    Derive Shorts-compliant title/description/tags from the long-form
-    video's SEO dict (assets/seo_*.json). Pure/testable: no I/O.
+    Shorts title/description/tags from the long-form video's SEO dict
+    (assets/seo_*.json). Pure/testable: no I/O.
 
-    - Title: the long-form title, trimmed to leave room for a trailing
-      " #Shorts" tag within YouTube's 100-char title limit.
-    - Description/tags: carried over, with #Shorts guaranteed present per
-      YouTube's own Shorts-discoverability convention.
+    - Title: the long-form title without its length, plus " #Shorts",
+      within YouTube's 100-char limit.
+    - Description: written for the clip. The long video's description is
+      not copied: its tracklist timestamps and length don't fit a one-minute
+      clip, and its `lofi:` ref line is what publish.py's duplicate guard
+      searches for, so a Short carrying it made the guard skip the real
+      upload as "already on YouTube".
     """
-    base_title = title_override or seo.get("title") or "lo-fi beats"
+    base_title = title_override or _short_title_base(seo.get("title") or "") or "lo-fi beats"
     suffix = " #Shorts"
     title = f"{base_title[:100 - len(suffix)].rstrip()}{suffix}"[:100]
 
-    description = (seo.get("description") or "Lo-fi beats.").strip()
-    if "#shorts" not in description.lower():
-        description = f"{description}\n\n#Shorts #lofi #shorts"
-    description = description[:4900]
+    genre = (seo.get("genre_label") or "lofi").strip()
+    duration = (seo.get("duration") or "").strip()
+    scene = (seo.get("thumb_text") or "").strip()
+    first = f"{scene[0].upper()}{scene[1:]}. " if scene else ""
+    mix = f"a {duration} {genre} mix" if duration else f"a longer {genre} mix"
+    tag = re.sub(r"[^a-z0-9]", "", genre.lower()) or "lofi"
+    hashtags = " ".join(dict.fromkeys(["#Shorts", "#lofi", f"#{tag}"]))
+    description = (
+        f"{first}A minute from {mix}; the full video is on the channel.\n\n"
+        "Original music, written and mixed by this channel's own composing software. "
+        "Drums use free CC0 one-shot samples; no AI models are involved.\n\n"
+        f"{hashtags}"
+    )
 
     tags = [t for t in seo.get("tags", []) if isinstance(t, str)]
     if not any(t.lower() == "shorts" for t in tags):
@@ -270,6 +294,15 @@ def _find_latest(directory: str, pattern: str) -> str | None:
     return files[0] if files else None
 
 
+def _paired_seo(video_path: str) -> str | None:
+    """The SEO file written in the same run as video_path (the newest one
+    from before the video was finished), not whichever is newest now."""
+    vt = os.path.getmtime(video_path)
+    seos = [p for p in glob.glob(os.path.join(ASSETS_DIR, "seo_*.json"))
+            if os.path.getmtime(p) <= vt + 60]
+    return max(seos, key=os.path.getmtime) if seos else None
+
+
 def _load_seo(seo_path: str | None) -> dict:
     path = seo_path or _find_latest(ASSETS_DIR, "seo_*.json")
     if not path or not os.path.exists(path):
@@ -292,7 +325,7 @@ def run_pipeline(video_path: str | None = None, seo_path: str | None = None,
     if not video_path or not os.path.exists(video_path):
         raise FileNotFoundError("No source video found -- pass --video or run.py first")
 
-    seo = _load_seo(seo_path)
+    seo = _load_seo(seo_path or _paired_seo(video_path))
     total_secs = get_video_duration(video_path)
 
     with tempfile.TemporaryDirectory() as tmpdir:
