@@ -143,41 +143,41 @@ DEFAULT_PRIVACY = _env("DEFAULT_PRIVACY", "public")
 # reads .env once at startup (see webui.py's load_dotenv() call). The UI makes
 # that explicit rather than pretending a live reload happens.
 def read_env_file() -> dict[str, str]:
-    """Parse .env into {KEY: value}, ignoring comments/blank lines."""
-    values: dict[str, str] = {}
+    """Parse .env exactly the way the pipeline does (python-dotenv), so quoted
+    values and inline comments are read the same here as at runtime."""
     if not os.path.exists(ENV_FILE):
-        return values
-    with open(ENV_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            values[k.strip()] = v.strip()
-    return values
+        return {}
+    from dotenv import dotenv_values
+    return {k: (v or "") for k, v in dotenv_values(ENV_FILE).items()}
+
+
+def _quote_env_value(value: str) -> str:
+    """Quote a value when python-dotenv would otherwise misread it: an
+    unquoted ' #' starts a comment, and surrounding quotes/spaces are stripped."""
+    if value == "" or not any(c in value for c in " \t#'\"\\=$"):
+        return value
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def write_env_value(key: str, value: str) -> None:
-    """Update (or append) KEY=value in .env, preserving other lines/comments."""
+    """Update (or append) KEY=value in .env, preserving other lines/comments.
+    The file is replaced atomically and is never readable by other users."""
     if "\n" in value or "\r" in value:
-        # A newline in the value would inject extra, uncontrolled lines into .env
-        # (e.g. a pasted multi-line value could silently add unrelated KEY=VALUE
-        # entries). .env doesn't support multi-line values without quoting we
-        # don't implement, so reject rather than corrupt.
+        # A newline in the value would inject extra, uncontrolled lines into .env.
         raise ValueError(f"{key}: value can't contain a newline")
     lines: list[str] = []
     if os.path.exists(ENV_FILE):
         with open(ENV_FILE) as f:
             lines = f.readlines()
-    found = False
+    entry = f"{key}={_quote_env_value(value)}\n"
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped == key or stripped.startswith(f"{key}="):
-            lines[i] = f"{key}={value}\n"
-            found = True
+        if stripped == key or stripped.startswith(f"{key}=") or stripped.startswith(f"export {key}="):
+            lines[i] = entry
             break
-    if not found:
-        lines.append(f"{key}={value}\n")
-    with open(ENV_FILE, "w") as f:
-        f.writelines(lines)
-    os.chmod(ENV_FILE, 0o600)
+    else:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        lines.append(entry)
+    from scripts.fileutil import atomic_write_text
+    atomic_write_text(ENV_FILE, "".join(lines), mode=0o600)

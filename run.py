@@ -69,51 +69,6 @@ if os.path.exists(_env_path):
         pass
 
 
-def _cleanup_old_files(root: str, uploaded_video: str,
-                        keep_visuals: int = 2,
-                        keep_music: int = 10,
-                        keep_assets: int = 5) -> None:
-    """Delete uploaded video + prune old files to free disk space."""
-    import glob as _glob
-
-    freed = 0
-
-    def _prune(pattern: str, keep: int) -> int:
-        files = sorted(_glob.glob(pattern), key=os.path.getmtime, reverse=True)
-        removed = 0
-        for f in files[keep:]:
-            try:
-                sz = os.path.getsize(f)
-                os.remove(f)
-                removed += sz
-            except OSError:
-                pass
-        return removed
-
-    # Delete the uploaded video (already on YouTube, largest file)
-    if uploaded_video and os.path.exists(uploaded_video):
-        try:
-            freed += os.path.getsize(uploaded_video)
-            os.remove(uploaded_video)
-        except OSError:
-            pass
-
-    # Keep only N most-recent visuals (bg loops, reusable)
-    freed += _prune(os.path.join(root, "visuals", "bg_*.mp4"), keep_visuals)
-
-    # Keep only N most-recent music tracks
-    freed += _prune(os.path.join(root, "music", "*.wav"), keep_music)
-    freed += _prune(os.path.join(root, "music", "*.mp3"), keep_music)
-
-    # Keep only N most-recent assets (thumbnails + SEO JSON)
-    freed += _prune(os.path.join(root, "assets", "thumb_*.png"), keep_assets)
-    freed += _prune(os.path.join(root, "assets", "thumb_*.jpg"), keep_assets)
-    freed += _prune(os.path.join(root, "assets", "seo_*.json"), keep_assets)
-
-    if freed:
-        print(f"\n[cleanup] Freed {freed / 1_048_576:.1f} MB of disk space.")
-
-
 def main():
     parser = argparse.ArgumentParser(description="Lo-fi Factory — Full Pipeline")
     from scripts.visual_v2.themes import ALL_THEMES
@@ -448,13 +403,8 @@ def main():
             upload_ok = True
             # Write upload log so analytics.py can track this upload
             import datetime as _dt, json as _json
-            _log_path = os.path.join(ROOT, "upload_log.json")
-            _log = []
-            if os.path.exists(_log_path):
-                with open(_log_path) as _f:
-                    try: _log = _json.load(_f)
-                    except Exception: pass
-            _log.append({
+            from scripts.fileutil import append_json_list
+            append_json_list(os.path.join(ROOT, "upload_log.json"), {
                 "type":             "upload",
                 "video_id":         video_id,
                 "url":              url,
@@ -477,8 +427,6 @@ def main():
                 "music_engine":     seo.get("music_engine") or "v1",
                 "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
             })
-            with open(_log_path, "w") as _f:
-                _json.dump(_log, _f, indent=2)
         except SystemExit:
             print("  Upload skipped (auth not set up yet)")
         except Exception as e:
@@ -489,7 +437,8 @@ def main():
 
     # ── STEP 7: Cleanup old files (prevent disk fill) ──────────
     if upload_ok:
-        _cleanup_old_files(ROOT, video_path)
+        from scripts.cleanup import cleanup_after_upload
+        cleanup_after_upload(ROOT, video_path)
 
     print("\n" + "=" * 60)
     print("  PIPELINE COMPLETE")

@@ -323,9 +323,9 @@ def sync_analytics() -> dict:
             updated += 1
             print(f"  {vid}  CTR={ctr:.2%}  views={views}  pillar={entry.get('pillar', '?')}")
 
-    os.makedirs(os.path.dirname(ANALYTICS_LOG), exist_ok=True)
-    with open(ANALYTICS_LOG, "w") as f:
-        json.dump(analytics, f, indent=2, ensure_ascii=False)
+    from scripts.fileutil import atomic_write_json, preserve_if_corrupt
+    preserve_if_corrupt(ANALYTICS_LOG)
+    atomic_write_json(ANALYTICS_LOG, analytics, ensure_ascii=False)
 
     print(f"[analytics] synced {updated} video(s). total tracked: {len(analytics)}")
     return analytics
@@ -1166,8 +1166,9 @@ def swap_low_ctr_thumbnails(analytics: dict | None = None, p_threshold: float = 
             print(f"  [thumb-swap] {vid}: failed — {ex}")
 
     if _own_load or swapped:
-        with open(ANALYTICS_LOG, "w") as f:
-            json.dump(analytics, f, indent=2, ensure_ascii=False)
+        from scripts.fileutil import atomic_write_json, preserve_if_corrupt
+        preserve_if_corrupt(ANALYTICS_LOG)
+        atomic_write_json(ANALYTICS_LOG, analytics, ensure_ascii=False)
     print(f"[analytics] thumbnail swaps: {swapped}")
 
 

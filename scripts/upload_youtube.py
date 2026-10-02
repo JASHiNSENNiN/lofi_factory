@@ -314,13 +314,8 @@ def main():
     video_id, url = upload_video(youtube, video_path, seo, thumb_path)
 
     # Log upload
-    log_path = os.path.join(ROOT, "upload_log.json")
-    log = []
-    if os.path.exists(log_path):
-        with open(log_path) as f:
-            log = json.load(f)
-    import datetime as _dt
-    log.append({
+    from scripts.fileutil import append_json_list
+    append_json_list(os.path.join(ROOT, "upload_log.json"), {
         "type":             "upload",
         "video_id":         video_id,
         "url":              url,
@@ -343,8 +338,6 @@ def main():
         "music_engine":     seo.get("music_engine") or "v1",
         "timestamp":        _dt.datetime.now(_dt.timezone.utc).isoformat(),
     })
-    with open(log_path, "w") as f:
-        json.dump(log, f, indent=2)
 
     print(f"\n[DONE] {url}")
 

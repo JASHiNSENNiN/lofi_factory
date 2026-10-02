@@ -13,6 +13,7 @@ pattern). Nothing in this module touches ``nicegui.ui``.
 """
 from __future__ import annotations
 
+import fcntl
 import glob
 import json
 import os
@@ -340,6 +341,23 @@ _SCRATCH_PATTERNS = {
 }
 
 
+PIPELINE_LOCK = os.path.join(config.ROOT, ".pipeline.lock")
+
+
+def pipeline_running() -> bool:
+    """True while any run.py holds the pipeline lock (web UI job, systemd
+    timer or a manual CLI run alike)."""
+    if not os.path.exists(PIPELINE_LOCK):
+        return False
+    with open(PIPELINE_LOCK, "a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
+
+
 def orphaned_scratch_files() -> list[dict]:
     """{"path", "size_bytes", "mtime"} for every scratch file currently in
     music/ or visuals/. Caller must confirm nothing is rendering first (see
@@ -365,6 +383,8 @@ def clean_orphaned_scratch() -> dict:
     and the lofi-auto systemd unit both need checking) -- this module doesn't
     import either to avoid a dependency cycle, so that safety check lives at
     the call site, same pattern as app.py's _confirm_delete_render guard."""
+    if pipeline_running():
+        raise RuntimeError("A render is running; scratch cleanup refused.")
     files = orphaned_scratch_files()
     freed = 0
     deleted = 0

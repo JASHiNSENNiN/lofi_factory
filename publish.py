@@ -113,19 +113,30 @@ def get_video_duration(path: str) -> float:
 
 
 def find_latest_valid_video(min_secs: float = MIN_UPLOAD_SECS) -> str | None:
-    """Return the most recent valid video, deleting any corrupt files found along the way."""
+    """Newest finished render that's at least min_secs long. Files touched in
+    the last 10 minutes are skipped (a render may still be writing them), and
+    nothing is deleted."""
     candidates = sorted(
         glob.glob(os.path.join(ROOT, "output", "lofi_*.mp4")),
         key=os.path.getmtime, reverse=True,
     )
     for path in candidates:
-        dur = get_video_duration(path)
-        if dur >= min_secs:
+        if time.time() - os.path.getmtime(path) < 600:
+            continue
+        if get_video_duration(path) >= min_secs:
             return path
-        size_mb = os.path.getsize(path) / 1024 / 1024
-        print(f"  [upload] Corrupt video ({size_mb:.0f} MB, unreadable) — deleting: {os.path.basename(path)}")
-        os.remove(path)
+        print(f"  [upload] Skipping unreadable or short video: {os.path.basename(path)}")
     return None
+
+
+def paired_asset(pattern: str, video_path: str) -> str | None:
+    """The asset (seo_*.json / thumb_*.jpg) made in the same run as video_path:
+    the newest one written before the video was finished. A/B alternates
+    (*_alt.jpg) are never picked."""
+    video_mtime = os.path.getmtime(video_path)
+    candidates = [p for p in glob.glob(os.path.join(ROOT, "assets", pattern))
+                  if not p.endswith("_alt.jpg") and os.path.getmtime(p) <= video_mtime + 60]
+    return max(candidates, key=os.path.getmtime) if candidates else None
 
 
 def load_seo(seo_path: str | None) -> dict:
@@ -137,25 +148,17 @@ def load_seo(seo_path: str | None) -> dict:
 
 
 def append_upload_log(entry: dict):
-    log = []
-    if os.path.exists(UPLOAD_LOG):
-        with open(UPLOAD_LOG) as f:
-            try:
-                log = json.load(f)
-            except Exception:
-                log = []
-    log.append(entry)
-    with open(UPLOAD_LOG, "w") as f:
-        json.dump(log, f, indent=2)
+    from scripts.fileutil import append_json_list
+    append_json_list(UPLOAD_LOG, entry)
 
 
 _live_state_lock = threading.Lock()   # guards live_state.json across threads
 
 
 def save_live_state(data: dict):
+    from scripts.fileutil import atomic_write_json
     with _live_state_lock:
-        with open(STATE_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_write_json(STATE_FILE, data)
 
 
 def load_live_state() -> dict | None:
@@ -245,9 +248,8 @@ def _load_auto_state() -> dict:
 
 
 def _save_auto_state(state: dict) -> None:
-    os.makedirs(os.path.dirname(_AUTO_STATE_FILE), exist_ok=True)
-    with open(_AUTO_STATE_FILE, "w") as f:
-        json.dump(state, f)
+    from scripts.fileutil import atomic_write_json
+    atomic_write_json(_AUTO_STATE_FILE, state)
 
 
 def _record_auto_result(success: bool) -> None:
@@ -330,7 +332,12 @@ def _run_auto_once(args) -> bool:
     # Snapshot existing files so we can identify what's NEW after generation
     before_videos = set(_glob.glob(os.path.join(output_dir, "lofi_*.mp4")))
     before_seo    = set(_glob.glob(os.path.join(assets_dir, "seo_*.json")))
-    before_thumbs = set(_glob.glob(os.path.join(assets_dir, "thumb_*.jpg")))
+    # The A/B alternate (thumb_*_alt.jpg) is written after the primary, so it
+    # must be excluded here or "newest thumbnail" picks it as the primary.
+    def _primary_thumbs():
+        return {p for p in _glob.glob(os.path.join(assets_dir, "thumb_*.jpg"))
+                if not p.endswith("_alt.jpg")}
+    before_thumbs = _primary_thumbs()
 
     run_script = os.path.join(ROOT, "run.py")
     duration = getattr(args, "duration", None) or _pick_auto_duration()
@@ -359,7 +366,7 @@ def _run_auto_once(args) -> bool:
     # Find the files that are new (didn't exist before the run)
     new_videos = set(_glob.glob(os.path.join(output_dir, "lofi_*.mp4"))) - before_videos
     new_seo    = set(_glob.glob(os.path.join(assets_dir, "seo_*.json")))    - before_seo
-    new_thumbs = set(_glob.glob(os.path.join(assets_dir, "thumb_*.jpg")))   - before_thumbs
+    new_thumbs = _primary_thumbs() - before_thumbs
 
     if not new_videos:
         print("[AUTO] No new video was created — aborting to avoid re-uploading old content.")
@@ -389,6 +396,8 @@ def _run_auto_once(args) -> bool:
         _record_auto_result(success=False)
         raise
     _record_auto_result(success=True)
+    from scripts.cleanup import cleanup_after_upload
+    cleanup_after_upload(ROOT, new_video)
     return True
 
 
@@ -719,16 +728,12 @@ def cmd_upload(args):
     else:
         video_path = find_latest_valid_video()
         if not video_path:
-            print("[upload] No valid video found — regenerating using existing music tracks...")
-            run_script = os.path.join(ROOT, "run.py")
-            result = subprocess.run([sys.executable, run_script, "--skip-upload", "--skip-music"])
-            if result.returncode != 0:
-                print("[ERROR] Regeneration failed. Run manually: python run.py")
-                sys.exit(1)
-            video_path = find_latest_valid_video()
-            if not video_path:
-                print("[ERROR] Regenerated video is still unreadable — check assembly logs.")
-                sys.exit(1)
+            print("[ERROR] No finished video in output/. Render one first: python run.py --skip-upload")
+            sys.exit(1)
+
+    # Pair the SEO file and thumbnail with this video, not with whatever is newest.
+    args.seo = args.seo or paired_asset("seo_*.json", video_path)
+    args.thumb = args.thumb or paired_asset("thumb_*.jpg", video_path)
 
     # Already-uploaded guard — check YouTube by ref_id embedded in description.
     # Immune to: title collisions, different devices, cross-machine runs.
@@ -769,7 +774,7 @@ def cmd_upload(args):
             print(f"[ERROR] Video is only {dur:.0f}s ({dur/60:.1f} min). Use --force to upload anyway.")
             sys.exit(1)
 
-    thumb_path = args.thumb or find_latest(os.path.join(ROOT, "assets"), "thumb_*.jpg")
+    thumb_path = args.thumb
     seo        = dict(load_seo(args.seo))
 
     # CLI overrides on top of the SEO file

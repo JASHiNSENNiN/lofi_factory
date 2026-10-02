@@ -2767,12 +2767,17 @@ def _confirm_delete_backup(name: str, on_change) -> None:
     dlg.open()
 
 
+def _render_in_progress() -> bool:
+    return (jobs.manager.is_busy()
+            or automation.status().get("running_now", False)
+            or system_admin.pipeline_running())
+
+
 def _confirm_clean_scratch(on_change) -> None:
-    busy = jobs.manager.is_busy()
-    auto_running = automation.status().get("running_now", False)
+    busy = _render_in_progress()
     with ui.dialog() as dlg, ui.element("div").classes("studio-card gap-3")\
             .style("max-width:460px"):
-        if busy or auto_running:
+        if busy:
             ui.label("Clean up orphaned scratch files?").classes(theme.H)
             ui.label("A render is in progress (Studio or the lofi-auto systemd run) — "
                      "cleanup is disabled until it finishes, since this can't tell an "
@@ -2796,7 +2801,18 @@ def _confirm_clean_scratch(on_change) -> None:
                 ui.button("Cancel", on_click=dlg.close).props("flat")
 
                 async def do_clean() -> None:
-                    result = await asyncio.to_thread(system_admin.clean_orphaned_scratch)
+                    # Re-check at click time: a render may have started since
+                    # the dialog opened.
+                    if await asyncio.to_thread(_render_in_progress):
+                        dlg.close()
+                        ui.notify("A render started — cleanup cancelled.", type="warning")
+                        return
+                    try:
+                        result = await asyncio.to_thread(system_admin.clean_orphaned_scratch)
+                    except RuntimeError as e:
+                        dlg.close()
+                        ui.notify(str(e), type="warning")
+                        return
                     dlg.close()
                     ui.notify(f"Deleted {result['deleted']} file(s), "
                               f"freed {result['freed_bytes'] / 1_048_576:.0f} MB."
