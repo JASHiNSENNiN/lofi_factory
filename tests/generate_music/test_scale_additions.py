@@ -4,7 +4,7 @@ identified as missing: melodic minor (jazz minor), locrian, altered
 (super-locrian), and bebop dominant. Mirrors the style of
 test_new_subgenres.py's test_phrygian_dominant_has_the_right_intervals.
 """
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     build_melody,
     get_altered,
     get_bebop_dominant,

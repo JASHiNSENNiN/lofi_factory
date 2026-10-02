@@ -15,7 +15,7 @@ from collections import Counter
 
 import scripts.analytics as analytics_mod
 from scripts.analytics import bpm_bucket_weights, engine_weights, sub_genre_weights
-from scripts.generate_music_gemini import _SUBGENRE_CONFIG, _pick_subgenre_weighted
+from scripts.composer import _SUBGENRE_CONFIG, _pick_subgenre_weighted
 
 SUBS = ["chillhop", "jazzhop", "ambient_lofi"]
 
@@ -56,7 +56,7 @@ def test_sub_genre_weights_clamped_to_range():
 
 
 def test_sub_genre_weights_lazy_default_uses_real_subgenre_config():
-    # No explicit `sub_genres` -> lazy-imports scripts.generate_music_gemini
+    # No explicit `sub_genres` -> lazy-imports scripts.composer
     # and defaults to every known key. Cold start (analytics={}) so this
     # only tests wiring, not the bandit math.
     result = sub_genre_weights(analytics={})

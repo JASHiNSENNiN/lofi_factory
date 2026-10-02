@@ -1,6 +1,6 @@
 """
 Tests for the simulated-annealing voice-leading optimizer ported into v1
-(generate_music_gemini.py) from v2's Stage-3 work:
+(composer.py) from v2's Stage-3 work:
 _voice_lead_progression_annealing and the GA-vs-annealing chooser
 _voice_lead_progression_best. Mirrors test_annealing.py (which tests the
 original v2 versions) against the new v1 location -- everything now lives
@@ -9,7 +9,7 @@ in one module (v1 already owned VOICING_OPTIONS; v2 only ever imported it).
 
 import random
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     VOICING_OPTIONS,
     _build_voicing_gene_pools,
     _chromosome_cost,

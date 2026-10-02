@@ -1,10 +1,10 @@
 """
 euclidean.py — Bjorklund's Euclidean-rhythm algorithm, E(k, n).
 
-Previously implemented twice, identically, in generate_music_gemini.py (the
+Previously implemented twice, identically, in composer.py (the
 MIDI-layer rhythm generator) and drum_sampler.py (the audio-layer sample
 generator) — drum_sampler.py's copy was deliberately kept local rather than
-importing generate_music_gemini.py to stay dependency-free of the (much
+importing composer.py to stay dependency-free of the (much
 heavier) MIDI-generation module. This tiny leaf module gives both call sites
 a single source of truth without creating that dependency: generate_music_
 gemini.py already imports FROM drum_sampler.py (for layer_drum_break), so

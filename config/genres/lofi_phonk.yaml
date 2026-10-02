@@ -22,7 +22,7 @@ swing_range: [0.62, 0.73]
 cozy_bias: false
 # research/theory/rhythm-groove.md: phonk's loose feel comes from swing +
 # off-grid hat placement + roll density as three separate levers -- this is
-# the third one (see _scale_roll_intensity() in generate_music_gemini.py,
+# the third one (see _scale_roll_intensity() in composer.py,
 # applied to pattern Q's back-quarter hat-roll steps 12-15).
 roll_density: 0.85
 drum_kit_programs: [24, 25]

@@ -2,7 +2,7 @@ import pytest
 
 isobar = pytest.importorskip("isobar")
 
-from scripts.generate_music_gemini import _build_self_markov, _markov_next_pitch_class
+from scripts.composer import _build_self_markov, _markov_next_pitch_class
 
 
 def test_build_self_markov_values_are_lists_of_successors():

@@ -42,7 +42,6 @@ def _find_font() -> str:
 _DRAWTEXT_FONT = _find_font()
 
 DURATION_MAP = {
-    "single":    270,     # ~4.5 min — one lofi track (lofi-inator single cover)
     "30 min":    1800,
     "45 min":    2700,
     "1 hour":    3600,

@@ -12,7 +12,7 @@ rest-having engine.
 """
 import random
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     PROGRESSIONS,
     VOICING_OPTIONS,
     _CONTINUOUS_ARP_GENRES,
@@ -51,7 +51,7 @@ def _grid_of(event):
     # Recover an approximate 16th-grid position from an event's absolute
     # tick for bucketing by bar -- good enough at subdivision=16 where the
     # step and the 16th-grid coincide (S16 = PPQN // 4 = 120 ticks).
-    from scripts.generate_music_gemini import S16
+    from scripts.composer import S16
     return round(event[0] / S16)
 
 
@@ -77,7 +77,7 @@ def test_arpeggio_cycles_continuously_without_rests_across_multiple_octaves():
     # Every gap should be roughly one subdivision step (S16=120 ticks @ 16
     # steps/bar) -- no multi-step silent gaps the way build_melody()'s
     # rest-driven phrasing would leave.
-    from scripts.generate_music_gemini import S16
+    from scripts.composer import S16
     assert max(gaps) < S16 * 2
     notes = {e[1] for e in events}
     first_chord_tones = sorted(set(VOICING_OPTIONS[_PROG[0][0]][0]))

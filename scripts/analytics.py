@@ -840,7 +840,7 @@ def pillar_weights(pillars: list[str] | None = None, analytics: dict | None = No
 # ── Composition-selection feedback (sub-genre / BPM / engine bandits) ───────
 # Extends the same engagement-bandit machinery above (previously wired only
 # into SEO-pillar choice and video duration) to which sub-genre, BPM, and
-# generation engine (v1 vs v2) get used -- see generate_music_gemini.py's
+# generation engine (v1 vs v2) get used -- see composer.py's
 # _pick_subgenre_weighted()/pick_params() and run.py's engine selection for
 # the call sites. All three below are thin wrappers around
 # composite_engagement_score()/_bandit_weights() -- zero new statistical
@@ -856,7 +856,7 @@ def sub_genre_weights(sub_genres: list[str] | None = None, analytics: dict | Non
     entry['pillar'] (the SEO framing, e.g. "temporal").
 
     `sub_genres` defaults to every known sub-genre key from
-    scripts.generate_music_gemini._SUBGENRE_CONFIG -- lazy-imported HERE
+    scripts.composer._SUBGENRE_CONFIG -- lazy-imported HERE
     (inside the function body, not at module top) so analytics.py doesn't
     acquire a hard import-time dependency on the whole music-generation
     module (which does soundfont/filesystem setup at import time) just for
@@ -865,7 +865,7 @@ def sub_genre_weights(sub_genres: list[str] | None = None, analytics: dict | Non
     """
     if sub_genres is None:
         try:
-            from scripts.generate_music_gemini import _SUBGENRE_CONFIG
+            from scripts.composer import _SUBGENRE_CONFIG
             sub_genres = list(_SUBGENRE_CONFIG.keys())
         except Exception:
             sub_genres = []

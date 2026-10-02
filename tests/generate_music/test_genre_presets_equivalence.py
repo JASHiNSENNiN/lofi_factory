@@ -2,7 +2,7 @@
 Snapshot-equivalence test for the config/genres/*.yaml refactor.
 
 Every table below is HAND-TYPED from the pre-refactor literal dicts/sets
-that used to live in scripts/generate_music_gemini.py and scripts/lofi_fx.py
+that used to live in scripts/composer.py and scripts/lofi_fx.py
 (as of `git show HEAD:...` at the time this test was written) — NOT derived
 from the new YAML files. This is deliberate: re-deriving the "expected"
 values from the same YAML that scripts/genre_presets.py parses would make
@@ -46,7 +46,7 @@ from scripts.gm_instruments import (
     GM_WARM_PAD,
 )
 
-# ─── generate_music_gemini._SUBGENRE_CONFIG (pre-refactor literal) ───────────
+# ─── composer._SUBGENRE_CONFIG (pre-refactor literal) ───────────
 EXPECTED_SUBGENRE_CONFIG = {
     'chillhop':     {'piano': GM_RHODES,    'melody': GM_GUITAR_NYLON,'cmelo': GM_WARM_PAD,
                      'scale': ['pent','dorian','natural_minor'],
@@ -181,7 +181,7 @@ EXPECTED_SUBGENRE_CONFIG = {
                      'progs': [19,35,37,17,44]},
 }
 
-# ─── generate_music_gemini._SWING_RANGE (pre-refactor literal, minus the
+# ─── composer._SWING_RANGE (pre-refactor literal, minus the
 # _SWING_DEFAULT fallback which isn't per-subgenre data) ─────────────────────
 EXPECTED_SWING_RANGE = {
     'lofi_drill':    (0.63, 0.74),
@@ -218,14 +218,14 @@ EXPECTED_SWING_RANGE = {
     'lofi_synthwave':(0.5, 0.58),
 }
 
-# ─── generate_music_gemini._COZY_SUBGENRES (pre-refactor literal) ───────────
+# ─── composer._COZY_SUBGENRES (pre-refactor literal) ───────────
 EXPECTED_COZY_SUBGENRES = frozenset({
     "cozy_cafe", "anime_lofi", "summer_vibes", "study_lofi",
     "morning_lofi", "jazz_cafe", "piano_lofi", "bedroom_pop",
     "lofi_rnb", "lofi_classical", "lofi_house", "chillhop",
 })
 
-# ─── generate_music_gemini._SUBGENRE_TEXTURE (pre-refactor literal) ─────────
+# ─── composer._SUBGENRE_TEXTURE (pre-refactor literal) ─────────
 EXPECTED_SUBGENRE_TEXTURE = {
     'bossa_lofi':     (GM_GUITAR_NYLON, 'strum'),
     'lofi_jazz':      (GM_GUITAR_JAZZ,  'strum'),
@@ -249,7 +249,7 @@ EXPECTED_SUBGENRE_TEXTURE = {
     'lofi_synthwave': (GM_MARIMBA,      'pop'),
 }
 
-# ─── generate_music_gemini._SUBGENRE_DRUM_KITS (pre-refactor literal) ───────
+# ─── composer._SUBGENRE_DRUM_KITS (pre-refactor literal) ───────
 EXPECTED_SUBGENRE_DRUM_KITS = {
     'hip_hop_lofi': [0, 24, 25],
     'lofi_phonk':   [24, 25],
@@ -267,7 +267,7 @@ EXPECTED_SUBGENRE_DRUM_KITS = {
     'lo_fi_funk':   [0, 16],
 }
 
-# ─── generate_music_gemini._FORM_BY_SUBGENRE (pre-refactor literal) ─────────
+# ─── composer._FORM_BY_SUBGENRE (pre-refactor literal) ─────────
 EXPECTED_FORM_BY_SUBGENRE = {
     'ambient':        'ambient',
     'chill_beats':    'ambient',

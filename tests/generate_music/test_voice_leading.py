@@ -1,7 +1,7 @@
 import random
 from unittest.mock import patch
 
-from scripts.generate_music_gemini import VOICING_OPTIONS
+from scripts.composer import VOICING_OPTIONS
 from scripts.generate_music_v2 import (
     _enumerate_shift_options,
     _voice_lead_progression_ga,

@@ -6,7 +6,7 @@ triplet subdivision (chh_triplet=) and lofi_phonk's roll_density lever.
 import random
 
 from scripts import genre_presets
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     CHH,
     DRUM_PATTERNS,
     KICK,

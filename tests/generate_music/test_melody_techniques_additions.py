@@ -11,7 +11,7 @@ phrase-start) chord-tone snapping in build_melody().
 """
 import random
 
-from scripts.generate_music_gemini import build_counter_melody, build_melody
+from scripts.composer import build_counter_melody, build_melody
 
 _PENT = [60, 63, 65, 67, 70, 72, 75, 77, 79, 82, 84, 87, 89, 91, 94]
 
@@ -36,7 +36,7 @@ def test_leap_reversal_produces_direction_change_after_large_steps(monkeypatch):
     # Force every phi-point step choice to a fixed +2 leap so we can assert
     # the very next note's direction is forced negative by the lookback --
     # deterministic rather than relying on statistical sampling.
-    import scripts.generate_music_gemini as gmg
+    import scripts.composer as gmg
 
     call_count = {"n": 0}
     real_choices = random.choices
@@ -60,7 +60,7 @@ def test_leap_reversal_produces_direction_change_after_large_steps(monkeypatch):
 # ── chromatic grace note ────────────────────────────────────────────────────
 
 def test_chromatic_grace_note_can_fire_and_is_off_scale(monkeypatch):
-    import scripts.generate_music_gemini as gmg
+    import scripts.composer as gmg
 
     # Force the acciaccatura branch's own roll to fail (>=0.15) and the
     # chromatic branch's roll to succeed (<0.08) deterministically.
@@ -82,7 +82,7 @@ def test_grace_note_modes_are_mutually_exclusive_per_note():
     # Statistical check over many renders: total grace-note-like short
     # events (dur ~= int(S16*0.30)) should reflect roughly one or the other
     # firing per phrase-first-note, not both stacking on the same note.
-    from scripts.generate_music_gemini import S16
+    from scripts.composer import S16
     total_short_events = 0
     total_phrases_seen = 0
     for seed in range(30):
@@ -99,7 +99,7 @@ def test_grace_note_modes_are_mutually_exclusive_per_note():
 # ── interior chord-tone snapping ────────────────────────────────────────────
 
 def test_interior_notes_can_be_chord_snapped_with_a_progression(monkeypatch):
-    import scripts.generate_music_gemini as gmg
+    import scripts.composer as gmg
 
     # Force every snap-probability roll to succeed so every note (not just
     # phrase-start) gets pulled toward a chord tone -- deterministic check

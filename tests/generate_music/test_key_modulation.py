@@ -9,8 +9,8 @@ import random
 import mido
 import pytest
 
-import scripts.generate_music_gemini as gmg
-from scripts.generate_music_gemini import (
+import scripts.composer as gmg
+from scripts.composer import (
     _PITCHWHEEL_NOTE,
     _transpose_events,
     maybe_modulate_key,

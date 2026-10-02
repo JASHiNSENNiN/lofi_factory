@@ -198,7 +198,7 @@ def generate_euclidean_pat_dict(energy: float) -> dict:
     hat_pat = _bjorklund(k_hat, n)
 
     # Snare: rotation-search for max overlap with the backbeat (steps 4, 12) —
-    # same technique used by the MIDI-layer generator in generate_music_gemini.py,
+    # same technique used by the MIDI-layer generator in composer.py,
     # so the synthesized layer and the MIDI layer share the same rhythmic logic.
     snare_base = _bjorklund(2, n)
     backbeat = {4, 12}
@@ -271,7 +271,7 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
     # ~35% chance to use a freshly-generated Euclidean pattern instead of the
     # fixed 5-pattern table, for extra rhythmic variety on this synthesis layer
     # (Phase-A adoption bump; started at 20%). This module is intentionally
-    # dependency-free of generate_music_gemini.py, so a failure here can't
+    # dependency-free of composer.py, so a failure here can't
     # cascade into the MIDI-layer generation — still wrapped defensively since
     # this runs unattended daily.
     try:

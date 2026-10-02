@@ -17,7 +17,7 @@ cozy_bias: false
 # research/subgenres/lofi_world.md: "Gamaka-style ornamentation (grace-note
 # bends around a target pitch, per raga convention) is the genre's most
 # distinctive melodic device" -- see build_melody(gamaka=True) /
-# _gamaka_pitchbend_events() in generate_music_gemini.py.
+# _gamaka_pitchbend_events() in composer.py.
 gamaka: true
 # research/subgenres/lofi_world.md: "tala rhythmic cycles" -- a genuinely
 # odd-meter (7-beat Rupak Tal) polymetric overlay layered over the existing

@@ -8,7 +8,7 @@ surfaced (not in the theory doc itself), gated to lofi_world/nujabes in
 pick_params() rather than offered to every genre.
 """
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     CHH,
     KICK,
     OHH,

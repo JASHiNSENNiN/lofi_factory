@@ -2,8 +2,8 @@
 gm_instruments.py — General MIDI program-number constants.
 
 Pure relocation of the GM_* constants that used to live inline near the top
-of generate_music_gemini.py. No behavior here — just names to symbolic
-integers, imported back into generate_music_gemini.py (and used directly by
+of composer.py. No behavior here — just names to symbolic
+integers, imported back into composer.py (and used directly by
 config/genres/*.yaml's symbolic-name resolution in scripts/genre_presets.py).
 """
 

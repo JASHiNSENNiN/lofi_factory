@@ -75,7 +75,7 @@ OUTPUT_DIR  = os.path.join(ROOT, "output")
 # YouTube RTMP ingest
 YT_RTMP_BASE = "rtmp://a.rtmp.youtube.com/live2"
 
-# Optional disconnect alerting — opt-in only (same pattern as LOFI_LLM_FAILSAFE):
+# Optional disconnect alerting — opt-in only:
 # unset by default, so a fresh checkout never makes an outbound network call it
 # wasn't explicitly configured for. Any webhook that accepts a JSON POST with a
 # "text" field works (Slack/Discord-compatible incoming webhook URL).
@@ -399,9 +399,9 @@ def _warmup_music_library(concept_hint=None):
     print(f"\n  [radio] Library has {current} track(s) — warming up to {_RADIO_MIN_TRACKS} before stream starts...")
     try:
         sys.path.insert(0, ROOT)
-        from scripts.generate_music_gemini import generate_track
+        from scripts.composer import generate_track
     except ImportError:
-        print("  [radio] Cannot import generate_music_gemini — skipping warm-up")
+        print("  [radio] Cannot import composer — skipping warm-up")
         return
 
     idx = 0
@@ -422,9 +422,9 @@ def _start_bg_music_gen(stop_event, concept_hint=None):
     def _run():
         try:
             sys.path.insert(0, ROOT)
-            from scripts.generate_music_gemini import generate_track
+            from scripts.composer import generate_track
         except ImportError:
-            print("  [bg-gen] Could not import generate_music_gemini — skipping background generation")
+            print("  [bg-gen] Could not import composer — skipping background generation")
             return
 
         idx = 10  # start at index 10 to avoid overwriting pre-generated 00-04

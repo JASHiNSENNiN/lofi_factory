@@ -8,8 +8,8 @@ Regression coverage for the storytelling-arc + instrument revamp:
 """
 import random
 
-import scripts.generate_music_gemini as gmg
-from scripts.generate_music_gemini import (
+import scripts.composer as gmg
+from scripts.composer import (
     PROGRESSIONS,
     _SUBGENRE_CONFIG,
     _bridge_progression,

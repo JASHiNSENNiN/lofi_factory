@@ -27,7 +27,6 @@ TOKEN_FILE = os.path.join(ROOT, "token.json")
 # ordinary uploads/analytics. See MONETARY_SCOPES below and youtube_oauth.py's
 # monetary_* functions.
 TOKEN_FILE_MONETARY = os.path.join(ROOT, "token_monetary.json")
-COOKIES_FILE = os.path.join(ROOT, "cookies.txt")
 UPLOAD_LOG = os.path.join(ROOT, "upload_log.json")
 OUTPUT_DIR = os.path.join(ROOT, "output")
 ASSETS_DIR = os.path.join(ROOT, "assets")

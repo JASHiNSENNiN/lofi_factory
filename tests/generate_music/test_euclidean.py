@@ -1,6 +1,6 @@
 import pytest
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     CHH,
     KICK,
     OHH,
@@ -38,7 +38,7 @@ def test_bjorklund_onset_count_matches_k(k, n):
 
 
 def test_bjorklund_is_a_single_shared_implementation():
-    # Both generate_music_gemini.py and drum_sampler.py used to carry their
+    # Both composer.py and drum_sampler.py used to carry their
     # own identical copy of this algorithm; both now import the same
     # function from scripts/euclidean.py -- assert they're literally the
     # same object, not just coincidentally-equal outputs (which wouldn't

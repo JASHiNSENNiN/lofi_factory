@@ -1,10 +1,9 @@
 """
-generate_music_gemini.py — v3 (Alive Edition)
+composer.py — v3 (Alive Edition)
 ==============================================
 Every track is unique. Infinite combinations guaranteed by:
   · pick_params() procedurally picks personality (key, progression, bpm, swing,
-    density, energy) — no LLM in the loop; Groq/Gemini only ever supply a
-    decorative mood-text phrase, and only as an opt-in failsafe (LOFI_LLM_FAILSAFE=1)
+    density, energy) — fully procedural, no external generators
   · Multiple voicings per chord — rotates randomly each hit
   · 4 drum patterns + per-bar mutation + fills at section boundaries
   · Hi-hat 16th-note runs every 4 bars for energy bursts
@@ -35,7 +34,6 @@ _ROOT = os.path.join(os.path.dirname(__file__), '..')
 _MUSESCORE_SF = os.path.join(_ROOT, 'assets', 'soundfonts', 'MuseScore_General.sf3')
 _DEFAULT_SF   = _MUSESCORE_SF if os.path.exists(_MUSESCORE_SF) else '/usr/share/soundfonts/FluidR3_GM.sf2'
 SOUNDFONT = os.getenv('SOUNDFONT', _DEFAULT_SF)
-GROQ_KEY  = os.getenv('GROQ_API_KEY')
 
 # Soundfont rotation pool — different timbre every track.
 # Checks both project assets/ and system /usr/share/soundfonts/; skips empty files.
@@ -2960,9 +2958,7 @@ def _resolve_genre_hint(hint: str) -> str | None:
 def _pick_mood_phrase(concept_hint: str | None = None, sub_genre: str = '',
                       history: list[dict] | None = None) -> str:
     """Poetic mood phrase. Procedural composer is primary (combinatorial word-bank
-    generator — thousands of unique phrases per genre, never repeats fixed strings).
-    Groq LLM is only ever used as an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1)
-    if the procedural composer can't produce a fresh, non-repeated phrase."""
+    generator). Retries a few times to avoid the last 10 phrases used."""
     if concept_hint:
         return concept_hint
 
@@ -2973,42 +2969,6 @@ def _pick_mood_phrase(concept_hint: str | None = None, sub_genre: str = '',
             return phrase
         phrase = _compose_mood_phrase(sub_genre)
 
-    if os.getenv('LOFI_LLM_FAILSAFE') == '1' and GROQ_KEY:
-        try:
-            from groq import Groq
-            genre_txt = f' Genre: {sub_genre.replace("_", " ")}.' if sub_genre else ''
-            recent = [h['mood'] for h in (history or [])[-10:] if h.get('mood')]
-            avoid_txt = (' Avoid these already-used phrases: '
-                         + '; '.join(f'"{p}"' for p in recent[-5:]) + '.') if recent else ''
-            resp = Groq(api_key=GROQ_KEY).chat.completions.create(
-                model='llama-3.3-70b-versatile',
-                messages=[{'role': 'user', 'content':
-                    f'Write ONE short poetic phrase (4-8 words) for a lo-fi music track.{genre_txt}'
-                    f'{avoid_txt} '
-                    'Rules: concrete image or sensation, unexpected angle, no clichés. '
-                    'BANNED words (any form): rain, whisper, forgotten, soft, fade, cassette, '
-                    'vinyl, warmth, cozy, peaceful, dreamy, melancholy, nostalgia, gentle, '
-                    'midnight, moonlit, hazy, haze, lofi, lo-fi. '
-                    'Output ONLY the phrase. No quotes. No punctuation at end.'
-                }],
-                max_tokens=25,
-                temperature=1.5,
-                presence_penalty=1.0,
-            )
-            phrase = (resp.choices[0].message.content
-                      .strip().split('\n')[0].strip().strip('"\' ').rstrip('.,'))
-            _banned = {'rain','rainy','raining','whisper','whispers','forgotten','forgetting',
-                       'soft','softly','fading','fade','faded','cassette','vinyl','warmth',
-                       'cozy','peaceful','dreamy','melancholy','nostalgia','gentle','midnight',
-                       'moonlit','hazy','haze','lofi','lo-fi'}
-            words_lc = {w.lower().strip('s') for w in phrase.split()}
-            if (any(c in phrase for c in '{}[]:')
-                    or not (3 <= len(phrase.split()) <= 12)
-                    or words_lc & _banned):
-                raise ValueError('banned/bad phrase')
-            return phrase
-        except Exception:
-            pass
     return _compose_mood_phrase(sub_genre)
 
 
@@ -3695,7 +3655,7 @@ def build_midi(params, output_path):
     prog_bars = sum(d for _,d in prog)
     key_root  = KEY_ROOTS.get(key, 57)
 
-    # Drum pattern selection (Groq picks specific patterns now)
+    # Drum pattern selection
     pat_a_idx = int(params.get('drum_pattern_a', random.randint(0, len(DRUM_PATTERNS)-1)))
     pat_b_idx = int(params.get('drum_pattern_b', random.randint(0, len(DRUM_PATTERNS)-1)))
     # A freshly-generated Euclidean pattern (see generate_euclidean_drum_pattern,
@@ -4122,7 +4082,7 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
                     low_priority: bool = False):
     print(f"\n[Track {index+1}] Picking parameters...")
     if song_dna is not None:
-        # lofi-inator: use pre-computed musical DNA instead of random Groq params
+        # Pre-computed params (from generate_tracks' per-track diversity pass)
         params = dict(song_dna)
         # Add minor per-track variation so tracks in the same cover aren't identical
         params['drum_pattern_b'] = (params.get('drum_pattern_b', 3) + index) % len(DRUM_PATTERNS)
@@ -4206,17 +4166,17 @@ def generate_track(index=0, concept_hint: str = None, genre_hint: str = None, so
 def _build_diverse_params(count: int, concept_hint=None, genre_hint=None) -> list[dict]:
     """
     Pre-compute N diverse param dicts for a multi-track video.
-    Track 0: call pick_params (Groq or random) as anchor.
+    Track 0: call pick_params as anchor.
     Tracks 1+: random fallback with forced sub-genre + key rotation so no two
                adjacent tracks share the same sub-genre or key.
     This replaces calling pick_params() N times with the same prompt (which
-    produces near-identical Groq outputs and monotonous-sounding videos).
+    produces monotonous-sounding videos).
     """
     all_keys  = list(KEY_ROOTS.keys())
     all_subs  = list(_SUBGENRE_CONFIG.keys())
     n_pats    = len(DRUM_PATTERNS)
 
-    # Track 0: anchor via Groq
+    # Track 0: anchor
     anchor = pick_params(concept_hint=concept_hint, genre_hint=genre_hint)
     param_sets = [anchor]
 
@@ -4362,7 +4322,7 @@ def generate_tracks(count=3, concept_hint: str = None, genre_hint: str = None, s
 
     # For standard generation (no song_dna), pre-compute diverse params per track
     # so each track has a unique sub-genre, key, BPM, and progression.
-    # Without this, all N tracks call pick_params() with the same prompt → identical Groq output.
+    # Without this, all N tracks call pick_params() independently and can collide.
     if song_dna is None and count > 1:
         param_sets = _build_diverse_params(count, concept_hint, genre_hint)
         print(f"  [MUSIC] Track plan: {' → '.join(p['sub_genre'] for p in param_sets)}")
@@ -4370,7 +4330,7 @@ def generate_tracks(count=3, concept_hint: str = None, genre_hint: str = None, s
         param_sets = None
 
     # Parallel generation — FluidSynth and ffmpeg are subprocess calls so
-    # threads release the GIL; 3 workers caps CPU without overwhelming Groq.
+    # threads release the GIL; 3 workers caps CPU.
     workers = min(count, 3)
 
     def _run(i):

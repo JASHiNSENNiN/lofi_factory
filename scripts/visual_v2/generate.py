@@ -44,8 +44,7 @@ def generate_visual(theme_name: str = "cozy_rain",
                     visual_seed: int = None,
                     track_title: str = "lofi dreams",
                     genre: str = "lo-fi hip hop",
-                    use_ai_bg: bool = False,
-                    regen_bg: bool = False) -> tuple:
+                    ) -> tuple:
     """
     Render an abstract lo-fi radio interface loop video.
     Returns (output_path, theme_name).
@@ -63,16 +62,8 @@ def generate_visual(theme_name: str = "cozy_rain",
           f"{n_frames} frames @ {fps}fps | {duration_secs}s")
     print("  Pre-rendering static layers...")
 
-    # ── Background: AI scene or programmatic gradient ───────────────────────
-    bg_grad = None
-    if use_ai_bg:
-        from .ai_background import generate_bg_scene
-        scene_variant = (visual_seed // 333) % 3  # 0=interior 1=exterior 2=closeup
-        bg_grad = generate_bg_scene(
-            theme_name, force_regen=regen_bg, variant=scene_variant
-        )
-    if bg_grad is None:
-        bg_grad = make_gradient_bg(theme_name, seed=visual_seed)
+    # ── Background: procedural gradient ─────────────────────────────────────
+    bg_grad = make_gradient_bg(theme_name, seed=visual_seed)
     star_field  = make_star_field(theme_name, seed=visual_seed)
     scanlines   = make_scanlines(strength=0.055)
     vignette    = make_vignette(strength=0.38)
@@ -149,14 +140,13 @@ def generate_visual(theme_name: str = "cozy_rain",
                 0, 255
             ).astype(np.uint8)
 
-            # ── 3. Perspective grid overlay (subtle — skip on AI bg) ────────
-            if not use_ai_bg:
-                grid_alpha = grid_ov[:, :, 3:4].astype(np.float32) / 255.0
-                frame = np.clip(
-                    frame.astype(np.float32) * (1 - grid_alpha)
-                    + grid_ov[:, :, :3].astype(np.float32) * grid_alpha,
-                    0, 255
-                ).astype(np.uint8)
+            # ── 3. Perspective grid overlay (subtle) ────────────────────────
+            grid_alpha = grid_ov[:, :, 3:4].astype(np.float32) / 255.0
+            frame = np.clip(
+                frame.astype(np.float32) * (1 - grid_alpha)
+                + grid_ov[:, :, :3].astype(np.float32) * grid_alpha,
+                0, 255
+            ).astype(np.uint8)
 
             # ── 3b. Cozy atmosphere FX ──────────────────────────────────────
             for fx in cozy_effects:

@@ -6,7 +6,7 @@ _voice_lead_progression_best.
 
 import random
 
-from scripts.generate_music_gemini import VOICING_OPTIONS
+from scripts.composer import VOICING_OPTIONS
 from scripts.generate_music_v2 import (
     _build_voicing_gene_pools,
     _chromosome_cost,

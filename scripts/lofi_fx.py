@@ -100,7 +100,7 @@ def apply_lofi_fx(wav_in: str, wav_out: str, sub_genre: str | None = None,
     Falls back to the legacy ffmpeg chain if pedalboard import fails.
 
     `transitions`: optional list of (sample_position, fx_name) from
-    generate_music_gemini.build_midi()'s section_transitions return value
+    composer.build_midi()'s section_transitions return value
     (see section_transition_fx_for) -- ignored by the ffmpeg fallback, which
     is a bare-bones legacy path with no numpy-array FX of its own.
     """
@@ -425,7 +425,7 @@ def _apply_wow_flutter(audio: "np.ndarray", sr: int, depth: float) -> "np.ndarra
 # applies its effect to a short window of `audio` ending at `at_sample` (the
 # section-boundary point) -- content at/after `at_sample` is left untouched
 # so the next section picks up normally; only the window leading into the
-# boundary is affected. See generate_music_gemini.py's
+# boundary is affected. See composer.py's
 # _SECTION_TRANSITION_FX for which effect pairs with which section-boundary
 # label pair, and that module's note on the remaining per-track pipeline
 # wiring (converting a section's bar offset to `at_sample` and calling

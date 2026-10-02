@@ -15,8 +15,6 @@ Usage:
   python run.py --duration "1 hour"      # Specific duration
   python run.py --skip-visual            # Skip visual gen (use existing)
   python run.py --skip-upload            # Skip YouTube upload
-  python run.py --music-mode mock        # Mock music (test without GPU)
-  python run.py --music-mode colab       # Print Colab code for music gen
   python run.py --visual-seed 42         # Reproducible render
   python run.py --stream                 # Live stream to YouTube instead of upload
   python run.py --stream --stream-test   # Test stream locally (60s → output/stream_test.mp4)
@@ -137,9 +135,6 @@ def main():
                         choices=["30 min", "45 min", "1 hour", "90 min",
                                  "2 hours", "3 hours", "4 hours", "5 hours",
                                  "8 hours", "10 hours", "all night"])
-    parser.add_argument("--music-mode", default="midi",
-                        choices=["mock", "midi", "colab"],
-                        help="midi=MIDI+FluidSynth, entirely procedural (default), mock=placeholder, colab=print Colab code")
     # Three-state: None (default) = let the engagement-analytics engine
     # bandit (scripts.analytics.engine_weights()) choose v1 vs v2, weighted
     # by which has performed better (neutral 50/50 with no data yet).
@@ -159,21 +154,14 @@ def main():
                         help="Skip music generation (use existing files in music/)")
     parser.add_argument("--skip-upload", action="store_true",
                         help="Skip YouTube upload step")
-    parser.add_argument("--use-ollama", action="store_true",
-                        help="Use local Ollama to enhance SEO description")
     parser.add_argument("--visual-seed", type=int, default=None,
                         help="Seed for visual scene layout (random if omitted — use to reproduce a specific render)")
-    parser.add_argument("--ai-bg", action="store_true",
-                        help="Use an AI-generated (Pollinations.ai) background scene instead of the "
-                             "procedural gradient background. Off by default.")
-    parser.add_argument("--regen-bg", action="store_true",
-                        help="Force regenerate the AI background even if a cached version exists")
     parser.add_argument("--stream", action="store_true",
                         help="Live stream to YouTube instead of assembling a file")
     parser.add_argument("--stream-test", action="store_true",
                         help="With --stream: encode 60s locally instead of pushing to YouTube")
     # Lazy import: genre_presets.load_all() only globs+parses config/genres/*.yaml
-    # (no soundfont-pool filesystem scan, unlike importing generate_music_gemini
+    # (no soundfont-pool filesystem scan, unlike importing composer
     # at module top level) — cheap enough to pay even when --sub-genre is never
     # used, and keeps run.py's own module-level footprint unchanged.
     from scripts.genre_presets import load_all as _load_all_subgenres
@@ -260,7 +248,6 @@ def main():
     print("  LO-FI FACTORY")
     print(f"  Theme:    {theme}")
     print(f"  Duration: {duration}{'' if duration_was_set else ' (random)'}")
-    print(f"  Music:    {args.music_mode}")
     print(f"  Genre:    {genre_hint or 'lo-fi hip hop'}")
     print(f"  Concept:  {concept_hint or '(random)'}")
     print("=" * 60)
@@ -278,8 +265,6 @@ def main():
             theme_name=theme, duration_secs=vis_secs,
             visual_seed=args.visual_seed,
             track_title=np_title, genre=np_genre,
-            use_ai_bg=args.ai_bg,
-            regen_bg=args.regen_bg,
         )
     else:
         print("\n[1/5] Skipping visual generation (using existing)")
@@ -292,41 +277,31 @@ def main():
     # ── STEP 2: Music ──────────────────────────────────────────
     generated_tracks = []
     if not args.skip_music:
-        print(f"\n[2/5] Music mode: {args.music_mode}")
-
-        if args.music_mode == "midi":
-            if args.music_v2 is None:
-                # No explicit --music-v2/--no-music-v2 on the CLI — let the
-                # engagement-analytics engine bandit choose (neutral 50/50
-                # when there's no/insufficient data yet). try/except-guarded
-                # the same way every other optional analytics-feedback layer
-                # is (sub_genre_weights()/bpm_bucket_weights() above) — a
-                # missing/corrupt analytics log must never block a render.
-                try:
-                    from scripts.analytics import engine_weights
-                    _ew = engine_weights()
-                    use_v2 = random.choices(
-                        ["v1", "v2"], weights=[_ew.get("v1", 1.0), _ew.get("v2", 1.0)], k=1,
-                    )[0] == "v2"
-                except Exception as _eng_e:
-                    print(f"  [run] Engine bandit selection failed ({_eng_e}) — defaulting to v1")
-                    use_v2 = False
-            else:
-                use_v2 = args.music_v2  # explicit flag wins over the bandit
-            if use_v2:
-                from scripts.generate_music_v2 import generate_tracks
-                print("[run] Using music generator v2 (beta)")
-            else:
-                from scripts.generate_music_gemini import generate_tracks
-            generated_tracks = generate_tracks(count=music_count, concept_hint=concept_hint, genre_hint=genre_hint)
-        elif args.music_mode == "mock":
-            from scripts.generate_music import generate_mock
-            generated_tracks = generate_mock(count=music_count, duration_secs=300)
-        elif args.music_mode == "colab":
-            from scripts.generate_music import print_colab_code
-            print_colab_code(count=10)
-            print("\n[!] Colab mode: drop your .wav/.mp3 files into music/ then re-run with --skip-music")
-            sys.exit(0)
+        print("\n[2/5] Generating music...")
+        if args.music_v2 is None:
+            # No explicit --music-v2/--no-music-v2 on the CLI — let the
+            # engagement-analytics engine bandit choose (neutral 50/50
+            # when there's no/insufficient data yet). try/except-guarded
+            # the same way every other optional analytics-feedback layer
+            # is (sub_genre_weights()/bpm_bucket_weights() above) — a
+            # missing/corrupt analytics log must never block a render.
+            try:
+                from scripts.analytics import engine_weights
+                _ew = engine_weights()
+                use_v2 = random.choices(
+                    ["v1", "v2"], weights=[_ew.get("v1", 1.0), _ew.get("v2", 1.0)], k=1,
+                )[0] == "v2"
+            except Exception as _eng_e:
+                print(f"  [run] Engine bandit selection failed ({_eng_e}) — defaulting to v1")
+                use_v2 = False
+        else:
+            use_v2 = args.music_v2  # explicit flag wins over the bandit
+        if use_v2:
+            from scripts.generate_music_v2 import generate_tracks
+            print("[run] Using music generator v2 (beta)")
+        else:
+            from scripts.composer import generate_tracks
+        generated_tracks = generate_tracks(count=music_count, concept_hint=concept_hint, genre_hint=genre_hint)
     else:
         print("\n[2/5] Skipping music generation (using existing files)")
 
@@ -368,8 +343,8 @@ def main():
     # ── STEP 3: SEO ────────────────────────────────────────────
     print("\n[3/5] Generating SEO metadata...")
     from scripts.generate_seo import generate_seo
-    seo, seo_path = generate_seo(theme_name=theme, duration=args.duration,
-                                  use_ollama=args.use_ollama, concept=concept,
+    seo, seo_path = generate_seo(theme_name=theme, duration=duration,
+                                  concept=concept,
                                   trends=trends)
 
     # Stash composition-selection metadata (sub_genre/bpm/music_engine) onto

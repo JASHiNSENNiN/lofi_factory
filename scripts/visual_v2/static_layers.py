@@ -15,7 +15,7 @@ from .config import W, H, VISUALS_DIR
 from .themes import THEMES
 
 # Append-only diagnostic log of which background technique fired, mirroring
-# the music side's recipe log (generate_music_gemini._append_recipe_log) —
+# the music side's recipe log (composer._append_recipe_log) —
 # deliberately a separate file/module (visual_v2 stays decoupled from the
 # music generator) but the same append-only-JSONL pattern for the same
 # reason: cheap, race-free, and answers "why did today's video look

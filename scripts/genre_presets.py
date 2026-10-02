@@ -2,7 +2,7 @@
 genre_presets.py — loader for config/genres/*.yaml.
 
 Collapses what used to be 6 scattered per-subgenre Python dicts (spread
-across generate_music_gemini.py, lofi_fx.py, and drum_sampler.py, all keyed
+across composer.py, lofi_fx.py, and drum_sampler.py, all keyed
 by the same subgenre strings) into one YAML file per subgenre under
 config/genres/. This module parses those files, resolves symbolic GM_*
 instrument names against scripts.gm_instruments, validates the result, and
@@ -10,10 +10,10 @@ reconstructs each of the original in-memory table shapes exactly — so every
 call site that used to reference a literal dict/set/frozenset now calls one
 of the build_*() functions below instead, with zero behavior change.
 
-NOTE: this module must NOT import scripts.generate_music_gemini at module
-top level — generate_music_gemini.py imports *this* module (to build its
+NOTE: this module must NOT import scripts.composer at module
+top level — composer.py imports *this* module (to build its
 _SUBGENRE_CONFIG etc.), so a top-level import here would be circular. The
-one place this module needs generate_music_gemini's PROGRESSIONS/
+one place this module needs composer's PROGRESSIONS/
 DRUM_PATTERNS (to bounds-check progression_indices/drum_pattern_indices),
 the import is done lazily inside the validation function instead.
 """
@@ -164,10 +164,10 @@ def _parse_one(path: str) -> tuple[str, dict]:
 
 def _validate_bounds(parsed: dict[str, dict]) -> None:
     """Bounds-check progression_indices/drum_pattern_indices against
-    generate_music_gemini's PROGRESSIONS/DRUM_PATTERNS tables. Imported
+    composer's PROGRESSIONS/DRUM_PATTERNS tables. Imported
     lazily (not at module top level) to avoid a circular import, since
-    generate_music_gemini.py imports this module."""
-    from scripts import generate_music_gemini as _gmg  # lazy — see module docstring
+    composer.py imports this module."""
+    from scripts import composer as _gmg  # lazy — see module docstring
 
     n_progs = len(_gmg.PROGRESSIONS)
     n_pats = len(_gmg.DRUM_PATTERNS)
@@ -205,7 +205,7 @@ def load_all() -> dict[str, dict]:
         parsed[key] = doc
 
     # Cache before bounds-checking: _validate_bounds lazily imports
-    # generate_music_gemini, which (in the normal call order) is already
+    # composer, which (in the normal call order) is already
     # mid-import and simply reuses PROGRESSIONS/DRUM_PATTERNS it already
     # defined; in the reverse call order (this module imported standalone),
     # that lazy import re-enters build_*()/load_all() for this same data,
@@ -221,7 +221,7 @@ def load_all() -> dict[str, dict]:
 
 
 def build_subgenre_config() -> dict:
-    """Exact shape of the old generate_music_gemini._SUBGENRE_CONFIG."""
+    """Exact shape of the old composer._SUBGENRE_CONFIG."""
     out = {}
     for key, doc in load_all().items():
         c = doc['composition']
@@ -239,7 +239,7 @@ def build_subgenre_config() -> dict:
 
 
 def build_swing_range() -> dict:
-    """Exact shape of the old generate_music_gemini._SWING_RANGE (only
+    """Exact shape of the old composer._SWING_RANGE (only
     subgenres that had an explicit entry — no _SWING_DEFAULT fallback)."""
     out = {}
     for key, doc in load_all().items():
@@ -249,12 +249,12 @@ def build_swing_range() -> dict:
 
 
 def build_cozy_subgenres() -> frozenset:
-    """Exact shape of the old generate_music_gemini._COZY_SUBGENRES."""
+    """Exact shape of the old composer._COZY_SUBGENRES."""
     return frozenset(key for key, doc in load_all().items() if doc.get('cozy_bias'))
 
 
 def build_subgenre_texture() -> dict:
-    """Exact shape of the old generate_music_gemini._SUBGENRE_TEXTURE
+    """Exact shape of the old composer._SUBGENRE_TEXTURE
     (values are (program, style) tuples, only for subgenres with a texture
     block)."""
     out = {}
@@ -266,7 +266,7 @@ def build_subgenre_texture() -> dict:
 
 
 def build_subgenre_drum_kits() -> dict:
-    """Exact shape of the old generate_music_gemini._SUBGENRE_DRUM_KITS
+    """Exact shape of the old composer._SUBGENRE_DRUM_KITS
     (only subgenres with a drum_kit_programs entry)."""
     out = {}
     for key, doc in load_all().items():
@@ -358,7 +358,7 @@ def build_chh_triplet_genres() -> set:
     16-step kick/snare, instead of a denser 16-step hat pattern
     (research/theory/rhythm-groove.md: drill's hi-hat triplets are a
     genuinely different subdivision, not reachable by densifying the
-    16-step grid). See generate_music_gemini.py's build_drums(chh_triplet=)."""
+    16-step grid). See composer.py's build_drums(chh_triplet=)."""
     return {key for key, doc in load_all().items() if doc.get('chh_triplet')}
 
 
@@ -368,7 +368,7 @@ def build_gamaka_genres() -> set:
     semitone off, then easing to center) on melody/counter-melody notes.
     research/subgenres/lofi_world.md: "the genre's most distinctive melodic
     device and the clearest way to differentiate lofi_world's melodic
-    character" from other dorian-leaning genres. See generate_music_gemini.py's
+    character" from other dorian-leaning genres. See composer.py's
     _gamaka_pitchbend_events() / build_melody(gamaka=)."""
     return {key for key, doc in load_all().items() if doc.get('gamaka')}
 
@@ -378,7 +378,7 @@ def build_tala_overlay_genres() -> set:
     (7-beat Rupak Tal, 3+2+2) polymetric overlay cycle layered over the
     existing 4/4 foundation. research/subgenres/lofi_world.md: "tala
     rhythmic cycles" alongside gamaka and drone/modal harmony. See
-    generate_music_gemini.py's build_tala_overlay() for why this is a safe,
+    composer.py's build_tala_overlay() for why this is a safe,
     fully independent overlay rather than a change to BAR/grid_tick()/
     DRUM_PATTERNS (which every other genre also depends on)."""
     return {key for key, doc in load_all().items() if doc.get('tala_overlay')}
@@ -412,7 +412,7 @@ def build_subgenre_pat(pat_registry: dict) -> dict:
 
 
 def build_form_overrides() -> dict:
-    """Exact shape of the old generate_music_gemini._FORM_BY_SUBGENRE
+    """Exact shape of the old composer._FORM_BY_SUBGENRE
     (only subgenres with an explicit song_form)."""
     out = {}
     for key, doc in load_all().items():

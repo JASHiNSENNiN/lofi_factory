@@ -1,15 +1,11 @@
 """
-trend_research.py — Real-time YouTube + AI trend snapshot for lo-fi content generation.
+trend_research.py — YouTube trend snapshot for lo-fi content generation.
 
 Pipeline:
   1. YouTube Data API  — search trending lofi videos (last 14 days, top view count)
                          fetch full details: titles, tags, view counts, durations
-  2. Gemini 2.0 Flash  — Google Search grounding for what's resonating right now
-                         (graceful fallback when quota exhausted)
-  3. Groq analysis     — extract patterns + emotional themes from trending data
-  4. Cache to assets/  — 6-hour TTL so we don't hammer APIs every run
-
-Result: TrendSnapshot injected into concept + title generators for truly live content.
+  2. Keyword rules     — derive a suggested theme and music hints from the titles
+  3. Cache to assets/  — 6-hour TTL so we don't hammer APIs every run
 """
 
 import os
@@ -30,9 +26,6 @@ except ImportError:
     pass
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-GEMINI_KEY      = os.getenv("GEMINI_API_KEY")
-GEMINI_BACKUP   = os.getenv("GEMINI_API_KEY_BACKUP")
-GROQ_KEY        = os.getenv("GROQ_API_KEY")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -299,83 +292,6 @@ def fetch_yt_dlp_trending(max_results: int = 15) -> list[dict]:
         return []
 
 
-# ── Source 2: Gemini with Google Search grounding ─────────────────────────────
-
-def fetch_gemini_trends() -> str | None:
-    """
-    Use Gemini 2.0 Flash with Google Search grounding to discover what's trending.
-    Returns a short insight string, or None on failure/quota exhaustion.
-    """
-    for key in [GEMINI_KEY, GEMINI_BACKUP]:
-        if not key:
-            continue
-        try:
-            from google import genai
-            from google.genai import types
-            client = genai.Client(api_key=key)
-            resp   = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=(
-                    f"Today is {datetime.datetime.now(datetime.timezone.utc).strftime('%B %d, %Y')}. "
-                    "Search YouTube and the web for what lofi/study music is trending RIGHT NOW. "
-                    "Focus on: (1) top-performing title patterns, (2) trending moods or aesthetics, "
-                    "(3) specific activities or scenarios viewers are searching for, "
-                    "(4) any cultural moments (season, events, memes) driving searches. "
-                    "Be specific and concise — 150 words max. No fluff."
-                ),
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                    temperature=0.3,
-                ),
-            )
-            return resp.text.strip()
-        except Exception as ex:
-            if "429" in str(ex) or "QUOTA" in str(ex).upper():
-                continue  # try backup key
-            print(f"  [Trends/Gemini] {ex}")
-            return None
-    return None   # both keys exhausted
-
-
-# ── Source 3: Groq pattern analysis ──────────────────────────────────────────
-
-def _groq_analyze_trends(trending_titles: list[str], season: str, seasonal_kw: list[str]) -> str | None:
-    """
-    Feed Groq the real trending titles and ask it to extract patterns + gaps.
-    Returns a concise insight string (injected into concept prompt).
-    """
-    if not GROQ_KEY or not trending_titles:
-        return None
-    try:
-        from groq import Groq
-        client = Groq(api_key=GROQ_KEY)
-        titles_block = "\n".join(f"  • {t}" for t in trending_titles[:12])
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            temperature=0.7,
-            messages=[{"role": "user", "content": f"""
-You are a YouTube lofi channel strategist. Here are the top-performing lofi videos uploaded in the last 14 days:
-
-{titles_block}
-
-It's currently {season} ({datetime.datetime.now(datetime.timezone.utc).strftime('%B %Y')}).
-Seasonal search spikes: {', '.join(seasonal_kw[:4])}.
-
-In 120 words max, answer:
-1. What emotional patterns are working? (e.g. "late night struggle", "cozy autumn nostalgia")
-2. What title structures are performing? (e.g. "scenario + duration", "japanese aesthetic + activity")
-3. What GAPS exist — what ISN'T being made that listeners are probably searching for?
-4. One specific concept that would be fresh and on-trend right now.
-
-Be specific and actionable. No generic advice.
-"""}],
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception as ex:
-        print(f"  [Trends/Groq] {ex}")
-        return None
-
-
 # ── Thumbnail theme suggestion ────────────────────────────────────────────────
 
 _VALID_THEMES = [
@@ -406,14 +322,12 @@ _SEASON_THEME_BIAS: dict[str, list[str]] = {
 def suggest_thumbnail_theme(snapshot: dict) -> str:
     """
     Suggest a thumbnail theme name based on keyword signals in the trend snapshot.
-    Checks the first 5 trending_titles, groq_analysis, and gemini_insight.
+    Checks the first 5 trending_titles.
     Returns one of the valid theme names from _VALID_THEMES.
     """
     titles       = snapshot.get("trending_titles", [])[:5]
-    groq_text    = snapshot.get("groq_analysis") or ""
-    gemini_text  = snapshot.get("gemini_insight") or ""
     season       = snapshot.get("season", "")
-    combined     = " ".join(titles) + " " + groq_text + " " + gemini_text
+    combined     = " ".join(titles)
     combined_low = combined.lower()
 
     for keywords, theme in _THEME_KEYWORD_MAP:
@@ -468,11 +382,9 @@ _MUSIC_HINT_RULES: list[tuple[list[str], dict]] = [
 
 def _extract_music_hints(snapshot: dict) -> dict:
     """
-    Derive {bpm_hint, mood, subgenre} from groq_analysis + trending_titles + season.
+    Derive {bpm_hint, mood, subgenre} from trending_titles + season.
     """
-    groq_text = snapshot.get("groq_analysis") or ""
-    titles    = " ".join(snapshot.get("trending_titles", []))
-    combined  = (groq_text + " " + titles).lower()
+    combined  = " ".join(snapshot.get("trending_titles", [])).lower()
     season    = snapshot.get("season", "")
 
     subgenre = "lofi hip hop"
@@ -505,8 +417,6 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
       yt_videos         list[dict]  — full {title, channel, views, tags, duration}
                                       rows behind trending_titles (kept for
                                       compute_trend_deltas() view-count tracking)
-      gemini_insight    str|None    — Gemini search grounding summary
-      groq_analysis     str|None    — Groq strategic analysis
       season            str         — current season
       seasonal_keywords list[str]   — month-specific search spikes
       fetched_at        str         — ISO timestamp
@@ -565,29 +475,12 @@ def get_trend_snapshot(force_refresh: bool = False) -> dict:
         d = v.get("duration", "unknown")
         dur_dist[d] = dur_dist.get(d, 0) + 1
 
-    # Gemini/Groq trend commentary — opt-in failsafe only (LOFI_LLM_FAILSAFE=1).
-    # suggest_thumbnail_theme()/_extract_music_hints() below already derive real
-    # signal directly from the scraped trending_titles via keyword-rule matching,
-    # so these are pure enrichment, not required for the pipeline to function.
-    gemini_insight = None
-    groq_analysis = None
-    if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-        gemini_insight = fetch_gemini_trends()
-        if gemini_insight:
-            print(f"  [Trends] Gemini insight: {gemini_insight[:80]}...")
-
-        groq_analysis = _groq_analyze_trends(trending_titles, season, seasonal_kw)
-        if groq_analysis:
-            print(f"  [Trends] Groq analysis complete")
-
     snapshot = {
         "trending_titles":    trending_titles,
         "trending_tags":      trending_tags,
         "trending_duration":  dur_dist,
         "yt_videos":          yt_videos,      # full rows incl. view counts -- see compute_trend_deltas()
         "yt_dlp_videos":      yt_dlp_videos,
-        "gemini_insight":     gemini_insight,
-        "groq_analysis":      groq_analysis,
         "season":             season,
         "seasonal_keywords":  seasonal_kw,
         "fetched_at":         _now_iso(),
@@ -614,7 +507,3 @@ if __name__ == "__main__":
     for t in snap["trending_titles"][:10]:
         print(f"  • {t[:80]}")
     print(f"\nTop tags: {snap['trending_tags'][:10]}")
-    if snap.get("groq_analysis"):
-        print(f"\n=== GROQ ANALYSIS ===\n{snap['groq_analysis']}")
-    if snap.get("gemini_insight"):
-        print(f"\n=== GEMINI INSIGHT ===\n{snap['gemini_insight']}")

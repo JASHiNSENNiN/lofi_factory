@@ -10,7 +10,7 @@ paths[0] actually be track 2's file.
 """
 import time
 
-import scripts.generate_music_gemini as gmg
+import scripts.composer as gmg
 
 
 def test_generate_tracks_returns_submission_order_despite_completion_race(monkeypatch):

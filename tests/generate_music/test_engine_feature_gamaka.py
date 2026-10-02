@@ -18,9 +18,9 @@ import random
 import mido
 import pytest
 
-import scripts.generate_music_gemini as gmg
+import scripts.composer as gmg
 from scripts import genre_presets
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     KEY_ROOTS,
     _GAMAKA_BEND_RANGE_SEMITONES,
     _GAMAKA_GENRES,

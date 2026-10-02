@@ -407,29 +407,6 @@ def view_studio(root) -> None:
             refresh_stats()
             ui.timer(30.0, refresh_stats)
 
-        # ── Lofi-inator (trending-cover generator; folded in from the old ──────
-        # standalone "Trends" nav tab, which collided in name with the real
-        # Analytics tab and wasn't actually analytics -- it's a render-job
-        # trigger like "New render" above, so it belongs here.
-        with theme.card("Lofi-inator", "Discover trending songs, generate lofi covers, "
-                        "upload to the lofi-inator playlist."):
-            with ui.row().classes("items-end gap-4"):
-                inator_limit = ui.number("Limit", value=1, min=1, max=10, format="%d").classes("w-28")
-                inator_save_only = ui.switch("Save only (no upload)", value=False)
-
-            async def run_inator() -> None:
-                if jobs.manager.is_busy():
-                    ui.notify("A job is already running.", type="warning")
-                    return
-                inator_args = ["publish.py", "lofi-inator", "--limit", str(int(inator_limit.value or 1))]
-                if inator_save_only.value:
-                    inator_args.append("--save-only")
-                await jobs.manager.run("lofi-inator", inator_args)
-                ui.notify("Running lofi-inator…", type="positive")
-
-            ui.button("Run lofi-inator", icon="auto_awesome",
-                      on_click=run_inator).props("color=primary").classes("mt-2")
-
         # ── Views by video ──────────────────────────────────────────────────────
         # Single-series bar (no legend needed -- see dataviz skill's color-
         # formula: one series doesn't need one) using the same
@@ -2574,31 +2551,6 @@ def view_settings(root) -> None:
 
             refresh_monetary()
 
-        with theme.card("yt-dlp cookies",
-                        "Server IPs are bot-gated by YouTube. Upload a Netscape cookies.txt "
-                        "(browser logged into YouTube) to enable audio covers."):
-            cookie_status = ui.label().classes("text-sm")
-
-            def refresh_cookie() -> None:
-                cs = data.cookies_status()
-                if cs["present"]:
-                    cookie_status.text = f"✅ cookies.txt ({cs['size_kb']} KB, {cs['modified']})"
-                    cookie_status.classes(remove="text-teal text-rose", add="text-teal")
-                else:
-                    cookie_status.text = "❌ no cookies.txt — downloads fall back to MIDI"
-                    cookie_status.classes(remove="text-teal text-rose", add="text-rose")
-
-            async def on_upload(e) -> None:
-                raw = await e.file.read()
-                with open(config.COOKIES_FILE, "wb") as f:
-                    f.write(raw)
-                refresh_cookie()
-                ui.notify("cookies.txt saved", type="positive")
-
-            ui.upload(on_upload=on_upload, auto_upload=True, label="Upload cookies.txt")\
-                .props("accept=.txt color=primary").classes("max-w-md")
-            refresh_cookie()
-
         with theme.card("Integrations & credentials",
                         "Saved to .env — restart lofi-webui.service to apply. Secret fields "
                         "never show their current value, only whether one is set; leave "
@@ -2607,23 +2559,6 @@ def view_settings(root) -> None:
             _env_field("YouTube channel ID", "YT_CHANNEL_ID")
             ui.separator()
 
-            llm_current = config.read_env_file().get("LOFI_LLM_FAILSAFE", "") == "1"
-            llm_switch = ui.switch(
-                "Allow LLM failsafe (Groq/Gemini) when procedural generation fails",
-                value=llm_current)
-
-            def save_llm_failsafe() -> None:
-                config.write_env_value("LOFI_LLM_FAILSAFE", "1" if llm_switch.value else "")
-                ui.notify("Saved — restart the panel to apply", type="positive")
-
-            llm_switch.on_value_change(save_llm_failsafe)
-            _env_field("Groq API key", "GROQ_API_KEY", secret=True)
-            _env_field("Gemini API key", "GEMINI_API_KEY", secret=True)
-            _env_field("Gemini API key (backup)", "GEMINI_API_KEY_BACKUP", secret=True)
-            ui.separator()
-            _env_field("Spotify client ID", "SPOTIFY_CLIENT_ID")
-            _env_field("Spotify client secret", "SPOTIFY_CLIENT_SECRET", secret=True)
-            ui.separator()
             _env_field("Alert URL(s) — stream reconnect, render/queue failures",
                        "LOFI_STREAM_ALERT_WEBHOOK")
             ui.label("A Slack/Discord incoming-webhook URL works as-is (unchanged from "
@@ -3073,7 +3008,7 @@ def view_system(root) -> None:
 def view_logs(root) -> None:
     with root:
         with theme.card("Live output", "Whatever the web UI itself is currently running "
-                        "(a Studio render, lofi-inator, a queued job)."):
+                        "(a Studio render or a queued job)."):
             live_log(lambda: jobs.manager.current, height="h-72")
 
         with theme.card("Recent runs", "Every job the web UI has run this deploy — "

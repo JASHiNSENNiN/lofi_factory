@@ -7,7 +7,7 @@ build_tala_overlay() is a genuinely odd-meter (7-beat Rupak Tal, 3+2+2)
 generator with its OWN independent tick grid (PPQN per beat, nothing
 derived from BAR/S16/grid_tick()) -- deliberately NOT a change to the
 shared 4/4 BAR/grid_tick()/DRUM_PATTERNS machinery every other genre
-depends on. See its module comment in generate_music_gemini.py for the
+depends on. See its module comment in composer.py for the
 full rationale on why this is a safe overlay rather than a full
 variable-time-signature retrofit.
 """
@@ -16,9 +16,9 @@ import random
 import mido
 import pytest
 
-import scripts.generate_music_gemini as gmg
+import scripts.composer as gmg
 from scripts import genre_presets
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     BAR,
     KEY_ROOTS,
     PPQN,

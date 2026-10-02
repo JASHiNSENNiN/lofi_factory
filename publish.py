@@ -80,8 +80,8 @@ STREAM_PRESETS = {
 
 # ── AUTH ────────────────────────────────────────────────────────────────────
 # Delegates to scripts/upload_youtube.py — the OAuth flow used identically by
-# run.py, scripts/analytics.py, scripts/stream_live.py, scripts/youtube_live_manager.py,
-# and scripts/lofi_inator/pipeline.py. Kept as a thin wrapper here so existing
+# run.py, scripts/analytics.py, scripts/stream_live.py and
+# scripts/youtube_live_manager.py. Kept as a thin wrapper here so existing
 # `get_youtube()` call sites throughout this file don't need to change.
 
 def get_youtube():
@@ -206,58 +206,6 @@ def _sleep_until_next_loop(tag: str, interval_secs: float):
     time.sleep(interval_secs)
 
 
-# ── LOFI-INATOR ────────────────────────────────────────────────────────────────
-
-def _run_lofi_inator_once(args):
-    """Discover trending mainstream songs and publish lofi covers to 'lofi-inator' playlist."""
-    from scripts.lofi_inator.pipeline import run_lofi_inator
-
-    youtube = None
-    if not args.save_only:
-        youtube = get_youtube()
-
-    print(f"\n[lofi-inator] limit={args.limit}  theme={args.theme or 'auto'}  "
-          f"duration={args.duration}  save_only={args.save_only}")
-
-    results = run_lofi_inator(
-        limit=args.limit,
-        theme=args.theme,
-        duration=args.duration,
-        dry_run=args.save_only,
-        youtube=youtube,
-    )
-
-    uploaded = [r for r in results if r["status"] == "uploaded"]
-    skipped  = [r for r in results if r["status"] == "skipped"]
-    saved    = [r for r in results if r["status"] == "saved"]
-    failed   = [r for r in results if r["status"] == "failed"]
-
-    print(f"\n[lofi-inator] Done: {len(uploaded)} uploaded, {len(skipped)} skipped, "
-          f"{len(saved)} saved-only, {len(failed)} failed")
-    for r in uploaded:
-        print(f"  ✓ {r['song'].artist} — {r['song'].title}: {r['video_url']}")
-    for r in saved:
-        print(f"  ~ {r['song'].artist} — {r['song'].title}: {r.get('title', '')}")
-    for r in failed:
-        print(f"  ✗ {r['song'].artist} — {r['song'].title}: {r.get('error', '?')}")
-
-
-def cmd_lofi_inator(args):
-    if not getattr(args, "loop", False):
-        _run_lofi_inator_once(args)
-        return
-
-    interval = parse_interval(args.interval)
-    print(f"[lofi-inator] Looping forever — batch of {args.limit} every "
-          f"{format_duration(int(interval))} (Ctrl-C to stop)")
-    while True:
-        try:
-            _run_lofi_inator_once(args)
-        except Exception as e:
-            print(f"[lofi-inator] Iteration failed: {e}")
-        _sleep_until_next_loop("lofi-inator", interval)
-
-
 # ── AUTO (generate + upload) ────────────────────────────────────────────────
 
 # Unattended `auto` runs (systemd timer, no one present to watch/cancel) size
@@ -341,7 +289,7 @@ def _dynamic_max_safe_duration() -> str:
     max_safe_target_secs = max(budget_secs, 0) * speed
     tiers = sorted(
         ((label, secs) for label, secs in DURATION_MAP.items()
-         if label not in ("single", "all night")),
+         if label != "all night"),
         key=lambda kv: kv[1],
     )
     fitting = [label for label, secs in tiers if secs <= max_safe_target_secs]
@@ -570,8 +518,7 @@ def cmd_cron(args):
 # ── SHORTS (repurpose a long-form video into a vertical Short) ──────────────
 
 def cmd_shorts(args):
-    """Delegates to scripts/generate_shorts.py's run_pipeline() -- same pattern
-    as cmd_lofi_inator delegating to scripts.lofi_inator.pipeline."""
+    """Delegates to scripts/generate_shorts.py's run_pipeline()."""
     from scripts.generate_shorts import run_pipeline
 
     youtube = None
@@ -891,8 +838,6 @@ def cmd_upload(args):
 def _generate_live_title() -> str:
     """
     Generate a unique live broadcast title using the SEO concept engine.
-    Procedural (pick_concept/build_title) is primary; Groq is only used as an
-    explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1).
     Hard 30s timeout — if APIs hang, falls back to default immediately.
     Returns empty string on any failure (caller uses its own fallback).
     """
@@ -911,9 +856,6 @@ def _generate_live_title() -> str:
 
         concept = pick_concept(trends)
         title = build_title(concept, "all night")
-        if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-            from scripts.generate_seo import build_title_groq
-            title = build_title_groq(concept, "all night", trends) or title
         return title.replace("all night", "24/7 live").strip()[:100]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
@@ -989,9 +931,6 @@ def _do_midnight_refresh(broadcast_id: str):
 
         concept = pick_concept(trends)
         title   = build_title(concept, "all night")
-        if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-            from scripts.generate_seo import build_title_groq
-            title = build_title_groq(concept, "all night", trends) or title
         title   = title.replace("all night", "24/7 live").strip()[:100]
         description = _generate_live_description(concept)
 
@@ -1686,28 +1625,6 @@ def main():
     # ── dashboard ────────────────────────────────────────────────
     sub.add_parser("dashboard", help="Open the TUI dashboard (use ./lofi for SSH resilience)")
 
-    # ── lofi-inator ──────────────────────────────────────────────
-    p_li = sub.add_parser(
-        "lofi-inator",
-        help="Cover trending mainstream songs as lofi + auto-add to 'lofi-inator' playlist",
-    )
-    p_li.add_argument("--limit", type=int, default=5,
-                      help="Number of songs to process (default: 5)")
-    p_li.add_argument("--theme", default=None,
-                      help="Override visual theme (default: auto-derived from song mood)")
-    p_li.add_argument("--duration", default="single",
-                      choices=["single", "30 min", "45 min", "1 hour", "90 min",
-                               "2 hours", "3 hours", "4 hours", "8 hours"],
-                      help='Video duration per cover — "single" = ~4.5min one-track cover (default: "single")')
-    p_li.add_argument("--save-only", action="store_true",
-                      help="Generate covers locally without uploading to YouTube")
-    p_li.add_argument("--loop", action="store_true",
-                      help="Keep discovering+covering trending songs forever, "
-                           "sleeping --interval between batches")
-    p_li.add_argument("--interval", default="12h",
-                      help="Sleep between loop batches, e.g. '90m', '6h', '2d' (default: 12h). "
-                           "Only used with --loop")
-
     # ── shorts ───────────────────────────────────────────────────
     p_shorts = sub.add_parser(
         "shorts",
@@ -1802,7 +1719,6 @@ def main():
         "analytics":     cmd_analytics,
         "cron":          cmd_cron,
         "dashboard":     cmd_dashboard,
-        "lofi-inator":   cmd_lofi_inator,
         "playlist":      cmd_playlist,
         "shorts":        cmd_shorts,
     }

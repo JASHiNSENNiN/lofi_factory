@@ -9,8 +9,8 @@ extended/altered chord vocabulary (7ths/9ths, not plain triads).
 """
 import random
 
-import scripts.generate_music_gemini as gmg
-from scripts.generate_music_gemini import (
+import scripts.composer as gmg
+from scripts.composer import (
     GM_EP2,
     GM_RHODES,
     GM_VIBRAPHONE,

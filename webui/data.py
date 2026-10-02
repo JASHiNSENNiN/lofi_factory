@@ -376,13 +376,3 @@ def delete_sample(path: str) -> bool:
     return True
 
 
-def cookies_status() -> dict:
-    path = config.COOKIES_FILE
-    if os.path.exists(path):
-        st = os.stat(path)
-        return {
-            "present": True,
-            "size_kb": round(st.st_size / 1024, 1),
-            "modified": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
-        }
-    return {"present": False, "size_kb": 0, "modified": None}

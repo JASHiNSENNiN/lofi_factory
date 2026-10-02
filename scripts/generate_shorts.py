@@ -36,8 +36,7 @@ CLI
   python scripts/generate_shorts.py --video output/lofi_XYZ.mp4 --save-only
   python scripts/generate_shorts.py --video output/lofi_XYZ.mp4 --window-secs 45
 Also reachable via `python publish.py shorts ...` (see publish.py's `shorts`
-subcommand, which delegates to run_pipeline() below the same way
-`publish.py lofi-inator` delegates to scripts/lofi_inator/pipeline.py).
+subcommand, which delegates to run_pipeline() below).
 """
 from __future__ import annotations
 

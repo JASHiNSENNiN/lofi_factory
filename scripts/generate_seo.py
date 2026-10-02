@@ -18,8 +18,8 @@ Each concept generates a unique:
   · Tags (broad + mid + long-tail + concept-specific)
   · Chapter labels matching the concept narrative
 
-Groq generates the concept when available. 300+ fallback pool ensures
-variety even without API access.
+Concepts come from a combinatorial pool of hand-written phrases (300+
+base combinations); nothing here calls an external text generator.
 
 Output: assets/seo_TIMESTAMP.json
 """
@@ -39,12 +39,8 @@ os.makedirs(ASSETS_DIR, exist_ok=True)
 
 
 
-GROQ_KEY      = os.getenv('GROQ_API_KEY')
-GEMINI_KEY    = os.getenv('GEMINI_API_KEY')
-GEMINI_BACKUP = os.getenv('GEMINI_API_KEY_BACKUP')
-
 # ──────────────────────────────────────────────────────────────────────────────
-#  CONCEPT POOLS  (fallback when Groq/Gemini is unavailable)
+#  CONCEPT POOLS
 #  Combinatorial design: temporal × activity × emotional gives thousands of
 #  unique base combos. Each renders a different title + description + tags.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -884,244 +880,6 @@ def _build_setting_story(concept: dict) -> str:
 #  CONCEPT GENERATION
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _build_concept_prompt(trends: dict | None = None) -> str:
-    """Build the Groq concept prompt, optionally enriched with live trend data."""
-    trend_block = ""
-    if trends:
-        titles = trends.get("trending_titles", [])[:8]
-        season = trends.get("season", "")
-        s_kw   = trends.get("seasonal_keywords", [])[:3]
-        groq_a = trends.get("groq_analysis", "")
-        gemini = trends.get("gemini_insight", "")
-
-        if titles:
-            trend_block += f"\nCURRENT TRENDS (use for inspiration — do NOT copy):\n"
-            trend_block += f"Season: {season}. Seasonal searches: {', '.join(s_kw)}.\n"
-            trend_block += "Top-performing titles this week:\n"
-            for t in titles:
-                trend_block += f"  • {t[:80]}\n"
-        if groq_a:
-            trend_block += f"\nStrategic analysis of what's working:\n{groq_a[:400]}\n"
-        elif gemini:
-            trend_block += f"\nWeb trend insight:\n{gemini[:300]}\n"
-        if trend_block:
-            trend_block += (
-                "\nYour concept should be FRESH — tap into the emotional need these titles serve "
-                "but take it somewhere new. What are listeners ACTUALLY searching for that nobody's made yet?\n"
-            )
-
-    return f"""\
-You are a lo-fi YouTube channel writer. Generate one unique video concept — a place, moment, or feeling that anchors 1-3 hours of music.
-{trend_block}
-TARGET EMOTIONAL REGISTER: "productive melancholy" — tired, a little sad, but still working. Soft enough to exist in. Heavy enough to mean something. Think: desk lamp at 3am, rain you didn't plan for, a city that doesn't know your name yet.
-
-GENRE DIVERSITY — pick one that fits the concept organically, then build the setting around it:
-- "lo-fi hip hop": urban bedroom, city windows at night, headphones as armor against the world
-- "lofi jazz": late-night bar after last call, dimly lit practice room, cigarette smoke and brushed snares
-- "chillhop": sunny afternoon that asks nothing of you, café terrace, the slow hours between things
-- "bossa nova lofi": coastal city, open window, warm breeze and old vinyl scratching
-- "neo-soul lofi": Sunday morning, kitchen radio, something cooking, groove with a soft ache in it
-- "lofi ambient": liminal spaces, fog, transit — nowhere and everywhere, the mind going quiet
-- "city pop lofi": 80s Japan nostalgia, neon reflections on wet asphalt, night drives, cassette tape warmth
-- "dark lofi": late and heavy, the hours you wouldn't explain to anyone, cinematic weight
-
-GOOD concepts — specific moment or story, someone can picture exactly where they are:
-- "finishing something you started two years ago, alone, past midnight"
-- "rain on a window you've watched from desks in four different apartments"
-- "the hour after the deadline passes and the silence feels unfamiliar"
-- "Sunday neo-soul morning, headphones in, watching the street wake up slowly"
-- "4am, still here, the kind of tired that clarifies everything"
-- "the playlist you'd make if you knew nobody would hear it"
-
-BAD concepts — NEVER generate these:
-- "soft rain on wooden roofs" (noun + adjective, no story, no person, no ache)
-- "cozy study vibes" (aesthetic label, not a moment)
-- "rainy night lofi" (genre description, not a concept)
-- "peaceful evening studying" (generic, no specificity, no tension)
-- ANY concept naming a city, country, neighborhood, or real-world location (no Tokyo, Paris, Brooklyn, etc.)
-
-Output ONLY valid JSON:
-{{
-  "pillar": "emotional",
-  "concept": "one-sentence story or moment (max 90 chars)",
-  "city": null,
-  "setting": "specific place or general setting — NO city or country names",
-  "time_label": "exact time or occasion — never just 'night' or 'evening'",
-  "mood_line": "one line that IS the feeling — write like a poet, not a marketer (max 70 chars, no period)",
-  "activity": "what the listener is doing — specific enough to picture (not just 'studying')",
-  "genre_label": "lofi sub-genre label",
-  "aesthetic": "aesthetic tag or null",
-  "tags_extra": ["5 specific searchable tags unique to THIS concept"]
-}}
-
-Rules:
-- pillar: one of "temporal","activity","emotional","aesthetic","cross_genre" — NEVER "geographic"
-- city: always null — do NOT name any city, country, or place
-- concept: evokes a MOMENT not a category, NO location names
-- mood_line: the feeling itself in words. AVOID: "for the study sessions", "chill beats for X". DO: "still here, still going", "softer than grief, louder than silence", "the whole world is asleep except you", "for the hours that don't belong to anyone"
-- activity: specific enough to picture — "coding a side project", "drawing what you're afraid to show anyone", "writing a letter you won't send", not just "working"
-- genre_label: one of "lo-fi hip hop","lofi jazz","chillhop","bossa nova lofi","neo-soul lofi","lofi ambient","city pop lofi","dark lofi"
-- tags_extra: 5 searchable tags specific to this concept, not generic "lofi study"
-- Be creative. Vary pillars. Output ONLY JSON.
-"""
-
-
-def pick_concept_groq(trends: dict | None = None) -> dict | None:
-    """Use Groq to generate a unique video concept, enriched with live trend data."""
-    if not GROQ_KEY:
-        return None
-    try:
-        from groq import Groq
-        client = Groq(api_key=GROQ_KEY)
-        prompt = _build_concept_prompt(trends)
-
-        # Inject a random 'Creative Seed' to force LLM to break from cached patterns
-        creative_seed = random.randint(0, 1000000)
-        prompt += f"\n\n[CREATIVE SEED: {creative_seed}]\n"
-        prompt += "Use this seed to explore a completely different creative direction than previous runs."
-
-        resp   = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=1.1,
-        )
-        raw = resp.choices[0].message.content.strip()
-        if "```" in raw:
-            raw = "\n".join(l for l in raw.split("\n") if not l.strip().startswith("```"))
-        s, e = raw.find("{"), raw.rfind("}") + 1
-        concept = json.loads(raw[s:e])
-        concept.setdefault("genre_label", "lo-fi hip hop")
-        concept.setdefault("tags_extra",  [])
-        concept.setdefault("city",        None)
-        concept.setdefault("aesthetic",   None)
-        print(f"  [Groq] concept: {concept.get('concept', '')[:80]}")
-        return concept
-    except Exception as ex:
-        print(f"  [Groq concept] failed ({ex}), using pool")
-        return None
-
-
-def pick_concept_gemini(trends: dict | None = None) -> dict | None:
-    """Use Gemini to generate a unique video concept — primary generator."""
-    for key in [GEMINI_KEY, GEMINI_BACKUP]:
-        if not key:
-            continue
-        try:
-            from google import genai
-            client = genai.Client(api_key=key)
-            prompt = _build_concept_prompt(trends)
-
-            # Inject a random 'Creative Seed' to force LLM to break from cached patterns
-            creative_seed = random.randint(0, 1000000)
-            prompt += f"\n\n[CREATIVE SEED: {creative_seed}]\n"
-            prompt += "Use this seed to explore a completely different creative direction than previous runs."
-
-            resp = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            raw = resp.text.strip()
-            if "```" in raw:
-                raw = "\n".join(l for l in raw.split("\n") if not l.strip().startswith("```"))
-            s, e = raw.find("{"), raw.rfind("}") + 1
-            concept = json.loads(raw[s:e])
-            concept.setdefault("genre_label", "lo-fi hip hop")
-            concept.setdefault("tags_extra",  [])
-            concept.setdefault("city",        None)
-            concept.setdefault("aesthetic",   None)
-            print(f"  [Gemini] concept: {concept.get('concept', '')[:80]}")
-            return concept
-        except Exception as ex:
-            print(f"  [Gemini concept] failed ({ex}), trying next key")
-    return None
-
-
-def build_title_groq(concept: dict, duration: str, trends: dict | None = None) -> str | None:
-    """
-    Use Groq to generate a trend-aware YouTube title that balances SEO + emotional hook.
-    Falls back to None (caller will use static pattern generator).
-    """
-    if not GROQ_KEY:
-        return None
-    try:
-        from groq import Groq
-        client   = Groq(api_key=GROQ_KEY)
-        dur_str  = DURATION_DISPLAY.get(duration, duration)
-        season   = trends.get("season", "") if trends else ""
-        trend_titles = (trends.get("trending_titles", [])[:6] if trends else [])
-
-        trend_ctx = ""
-        if trend_titles:
-            trend_ctx = "Top-performing titles this week (DO NOT copy — use as pattern inspiration):\n"
-            trend_ctx += "\n".join(f"  • {t[:70]}" for t in trend_titles)
-            trend_ctx += "\n\n"
-        if season:
-            trend_ctx += f"Current season: {season}.\n"
-
-        prompt = f"""\
-Write ONE YouTube title for a lofi music video. It should feel like something a real person \
-would write in their notes app at 2am — specific, a little cinematic, not trying too hard.
-
-{trend_ctx}Concept: {concept.get('concept', '')}
-Mood: {concept.get('mood_line', '')}
-Activity: {concept.get('activity', '')}
-Duration: {dur_str}
-Genre: {concept.get('genre_label', 'lo-fi hip hop')}
-City: {concept.get('city') or 'none'}
-Time: {concept.get('time_label', '')}
-
-[UNIQUENESS SEED: {random.randint(0, 1000000)}]
-Use this seed to explore a different title structure or hook than previous attempts.
-
-What a great title does:
-- Captures a MOMENT, not a category ("you said five more minutes 40 minutes ago" > "late night focus")
-- Uses an unexpected structure — not always [keyword] · [duration] · [thing]
-- Duration can go at the end, in parentheses, or mid-sentence — not always slot 2
-- The SEO keyword (lofi/study music) appears early but doesn't have to open the sentence
-- Reads like something you'd actually say, not a metadata label
-
-Structures to try (pick one that fits the concept):
-"lofi hip hop · [scene], [observation] — {dur_str}"
-"study music · [specific moment] ({dur_str})"
-"lofi · {dur_str} · [action]. [short consequence]."
-"lofi hip hop · [twist on expectation] · {dur_str}"
-"lofi · [specific image], [specific image] — {dur_str} 🌙"
-
-Hard rules:
-1. "lofi", "lofi hip hop", or "study music" in the first 35 characters
-2. Include {dur_str}
-3. Total length 50-70 characters. Target 55-65.
-   CRITICAL: first 40 characters must carry the complete hook — mobile truncates there.
-   Make char 1-40 self-contained. Extend with duration/context after char 40.
-   Do NOT pad with filler words to hit 65+ chars — hook quality matters more than length.
-4. One emoji max, not at the start
-5. No ALL CAPS, no "...", no "vibes", no "chill out", no "relax"
-6. The interesting part must come from the CONCEPT, not filler words
-
-Output ONLY the title — no quotes, no explanation."""
-
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.85,   # higher = more creative, narrative variety
-        )
-        title = resp.choices[0].message.content.strip().strip('"').strip("'")
-        if len(title) > 100:
-            print(f"  [Groq] title too long ({len(title)} chars, YouTube limit 100), using pattern fallback")
-            return None
-        # Validate SEO rule 1: "lofi", "lo-fi", or "study music" must be in first 35 chars
-        _SEO_KEYWORDS = ("lofi", "lo-fi", "study music", "lofi hip hop", "chillhop")
-        title_prefix = title[:35].lower()
-        if not any(kw in title_prefix for kw in _SEO_KEYWORDS):
-            print(f"  [Groq] title fails SEO check (no lofi/study keyword in first 35 chars): '{title[:50]}...'")
-            return None
-        print(f"  [Groq] title: {title}")
-        return title
-    except Exception as ex:
-        print(f"  [Groq title] failed ({ex}), using pattern generator")
-        return None
-
-
 def _pillar_weights() -> dict[str, float]:
     """
     Per-pillar weight multipliers derived from analytics_log.json.
@@ -1145,9 +903,9 @@ def _pillar_weights() -> dict[str, float]:
         return default
 
 
-_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 45, 70  # mirrors build_title_groq()'s
-# existing 55-65 guidance, widened since these hand-written templates have
-# less fine-grained control over final length than a freeform LLM completion.
+# Preferred title length band. Templates can't hit an exact length, so this
+# is a preference when picking among candidates, not a hard limit.
+_TITLE_TARGET_MIN, _TITLE_TARGET_MAX = 45, 70
 
 
 def generate_title_variants(
@@ -1159,10 +917,7 @@ def generate_title_variants(
     """Return up to n unique title candidates for this concept, each drawn
     from a DIFFERENT hook-strategy family (HOOK_STRATEGIES: "statement",
     "benefit_list", "spec_led") so the variants are genuinely different
-    creative hooks -- not n rolls of the same skeleton family. Procedural
-    template-pattern titles (build_title) are primary; Groq is only used as
-    an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1), tagged with the
-    synthetic strategy label "llm_failsafe" for the returned strategies list.
+    creative hooks -- not n rolls of the same skeleton family.
 
     Each attempt prefers a candidate landing in the [_TITLE_TARGET_MIN,
     _TITLE_TARGET_MAX] char range (falls back to the first deduped candidate
@@ -1199,12 +954,6 @@ def generate_title_variants(
         if candidate is not None:
             variants.append(candidate)
             strategies.append(strategy)
-
-    if len(variants) < n and os.getenv("LOFI_LLM_FAILSAFE") == "1":
-        groq_title = build_title_groq(concept, duration, trends)
-        if groq_title and groq_title not in variants:
-            variants.append(groq_title)
-            strategies.append("llm_failsafe")
 
     return variants[:n], strategies[:len(variants[:n])]
 
@@ -1296,13 +1045,9 @@ def pick_concept_from_pool() -> dict:
 
 
 def pick_concept(trends: dict | None = None) -> dict:
-    """Get a concept — procedural pool (analytics-weighted, hundreds of hand-
-    written combinations) is primary and always used. Gemini/Groq are only
-    ever reached as an explicit opt-in failsafe (LOFI_LLM_FAILSAFE=1)."""
-    if os.getenv("LOFI_LLM_FAILSAFE") == "1":
-        concept = pick_concept_gemini(trends) or pick_concept_groq(trends)
-        if concept:
-            return concept
+    """Get a concept from the analytics-weighted procedural pool.
+
+    `trends` is accepted for call-site compatibility and currently unused."""
     return pick_concept_from_pool()
 
 
@@ -1534,7 +1279,7 @@ def build_description(concept: dict, duration: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def generate_seo(theme_name: str = None, duration: str = None,
-                 use_ollama: bool = False, concept: dict = None,
+                 concept: dict = None,
                  trends: dict | None = None) -> tuple:
     """
     Generate SEO metadata for a video.
@@ -1542,8 +1287,8 @@ def generate_seo(theme_name: str = None, duration: str = None,
     Args:
         theme_name: Visual theme (cozy_rain, purple_dusk, etc.)
         duration:   Video duration label ("1 hour", "2 hours", etc.)
-        use_ollama: Use local Ollama to polish description
-        concept:    Pre-generated concept dict (pass from run.py to avoid double Groq call)
+        concept:    Pre-generated concept dict (pass from run.py so the title,
+                    visual and music all describe the same concept)
         trends:     TrendSnapshot from trend_research.get_trend_snapshot()
 
     Returns: (seo_dict, seo_file_path)
@@ -1616,21 +1361,6 @@ def generate_seo(theme_name: str = None, duration: str = None,
                 total_chars += char_cost
         tags = merged
 
-    if use_ollama:
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["ollama", "run", "llama3.2",
-                 f"Rewrite this YouTube description to be more evocative and atmospheric "
-                 f"for a lo-fi music channel. Keep chapter timestamps exactly as-is. "
-                 f"Under 500 chars total. Original:\n\n{description[:600]}"],
-                capture_output=True, text=True, timeout=40,
-            )
-            if result.returncode == 0 and len(result.stdout.strip()) > 80:
-                description = result.stdout.strip()
-        except Exception:
-            pass
-
     _now_utc = datetime.datetime.now(datetime.timezone.utc)
     ts = _now_utc.strftime("%Y%m%d_%H%M%S")
     # Unique ref stamped into description — used for cross-device duplicate detection.
@@ -1675,7 +1405,7 @@ if __name__ == "__main__":
     import sys
     theme    = sys.argv[1] if len(sys.argv) > 1 else None
     duration = sys.argv[2] if len(sys.argv) > 2 else "2 hours"
-    seo, path = generate_seo(theme, duration, use_ollama=False)
+    seo, path = generate_seo(theme, duration)
     print("\n--- CONCEPT ---")
     print(seo["concept"])
     print("\n--- TITLE ---")

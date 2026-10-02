@@ -8,7 +8,7 @@ theory from scratch, per project convention (music21 is the industry-standard
 library for exactly this).
 
 This is layered ON TOP OF the existing curated 51-entry `PROGRESSIONS` table
-and its Markov-chain walk (`generate_progression` in generate_music_gemini.py)
+and its Markov-chain walk (`generate_progression` in composer.py)
 — NOT a replacement. It is one more alternate progression source, selected
 per-track with a small probability from `pick_params()`, exactly like the
 existing Euclidean-drum-pattern and Markov-progression toggles. When it is
@@ -20,7 +20,7 @@ Design: rather than let music21 invent arbitrary chord spellings (which the
 rest of the pipeline's fixed VOICING_OPTIONS/BASS_ROOTS tables would not
 have voicings for), each supported "tonal center" maps every diatonic and
 secondary-dominant Roman numeral to one of the EXACT chord-symbol strings
-already present in generate_music_gemini.py's VOICING_OPTIONS table. music21
+already present in composer.py's VOICING_OPTIONS table. music21
 is used to validate/realize the harmony (confirm each numeral is a legitimate
 resolution in that key, and to pin down real functional relationships like
 "the dominant of ii" or "the applied V of the relative major"), while the
@@ -48,7 +48,7 @@ class HarmonyEngineUnavailable(RuntimeError):
 # ─── TONAL CENTERS ─────────────────────────────────────────────────────────
 # Each tonal center is a (major key name) covering both that major key and
 # its relative minor. Chord symbols are drawn only from
-# generate_music_gemini.VOICING_OPTIONS so every generated progression has a
+# composer.VOICING_OPTIONS so every generated progression has a
 # real existing voicing. Degrees with no matching table entry are simply
 # omitted (the grammar walk skips to another degree in the same function).
 
@@ -132,7 +132,7 @@ TONAL_CENTERS = tuple(_MAJOR_DEGREE_CHORDS.keys())
 # vocabulary fall back to the tonal center whose major-scale pitch-class is
 # closest on the circle of fifths (a reasonable "sounds nearby" default —
 # the pipeline already treats `key` loosely for progression purposes; see
-# generate_music_gemini.py's own note that voicings can be "modal" for a
+# composer.py's own note that voicings can be "modal" for a
 # major key paired with a minor-flavoured progression index).
 _CENTER_PITCH_CLASS = {'C': 0, 'F': 5, 'Bb': 10, 'Eb': 3}
 _KEY_TO_CENTER_MODE: dict[str, tuple[str, str]] = {

@@ -5,7 +5,7 @@ import random
 import mido
 import pytest
 
-import scripts.generate_music_gemini as gmg
+import scripts.composer as gmg
 import scripts.generate_music_v2 as gmv2
 from scripts.track_quality import MIN_QUALITY_SCORE
 

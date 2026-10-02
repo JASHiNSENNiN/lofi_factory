@@ -19,8 +19,8 @@ import mido
 import numpy as np
 import pytest
 
-import scripts.generate_music_gemini as gmg
-from scripts.generate_music_gemini import (
+import scripts.composer as gmg
+from scripts.composer import (
     _compute_section_transitions,
     _SECTION_TRANSITION_FX,
     _SONG_FORMS,

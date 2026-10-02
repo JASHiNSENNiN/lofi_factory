@@ -11,8 +11,8 @@ import random
 import mido
 import pytest
 
-import scripts.generate_music_gemini as gmg
-from scripts.generate_music_gemini import (
+import scripts.composer as gmg
+from scripts.composer import (
     CHH,
     KICK,
     PPQN,
@@ -133,7 +133,7 @@ def test_drum_pattern_q_phonk_hat_roll_has_expected_shape():
     # research/theory/rhythm-groove.md Task 5: new curated pattern (index 16)
     # -- straight-8th hat base + a roll-burst on the bar's back quarter +
     # cowbell-style RIM accents, referenced from lofi_phonk.yaml.
-    from scripts.generate_music_gemini import CHH, KICK, OHH, RIM, SNARE
+    from scripts.composer import CHH, KICK, OHH, RIM, SNARE
     pattern = DRUM_PATTERNS[16]
     for voice in (KICK, SNARE, CHH, RIM):
         assert voice in pattern
@@ -263,7 +263,7 @@ def test_lofi_synthwave_build_midi_lead_track_is_a_dense_continuous_run(_isolate
             ons.append(abs_t)
     assert len(ons) > 20, "arpeggiator should produce many notes, not a sparse phrase melody"
     gaps = [b - a for a, b in zip(ons, ons[1:])]
-    from scripts.generate_music_gemini import S16
+    from scripts.composer import S16
     # A phrase-based build_melody() lead routinely leaves multi-bar rests
     # between phrases; a continuous arpeggiator should be tight-gapped almost
     # everywhere -- allow for the handful of real section-boundary gaps

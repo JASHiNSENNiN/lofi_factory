@@ -4,7 +4,7 @@ the existing 24: drill/trap-adjacent lofi and world/ethnic-fusion lofi.
 """
 import random
 
-from scripts.generate_music_gemini import (
+from scripts.composer import (
     CHH, KICK, OHH, RIM, SNARE,
     DRUM_PATTERNS,
     GM_KALIMBA,
@@ -77,7 +77,7 @@ def test_lofi_world_scale_pool_includes_phrygian_dominant():
 
 
 def test_pick_params_works_for_both_new_subgenres_across_many_seeds():
-    import scripts.generate_music_gemini as gmg
+    import scripts.composer as gmg
     for name in ('lofi_drill', 'lofi_world'):
         for seed in range(10):
             random.seed(seed)

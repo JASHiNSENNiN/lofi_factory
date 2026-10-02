@@ -1,7 +1,7 @@
 """
 generate_music_v2.py — Beta music generator (music-theory-correct algorithms).
 
-Drop-in replacement for generate_music_gemini.py.
+Drop-in replacement for composer.py.
 Activate with --music-v2 in run.py.
 
 Improvements over v1:
@@ -24,7 +24,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from scripts.generate_music_gemini import (  # noqa: E402
+from scripts.composer import (  # noqa: E402
     PPQN, BAR, S16,
     KICK, SNARE, RIM, CHH, OHH, RIDE, CRASH,
     PROGRESSIONS, VOICING_OPTIONS, BASS_ROOTS, _GUIDE_TONES,
@@ -1037,11 +1037,11 @@ def build_midi_v2(params: dict, output_path: str) -> str:
     markov_nodes = params.get('markov_melody_nodes')
 
     # A procedurally-generated progression (Markov walk, ~18% of the time —
-    # see generate_music_gemini.generate_progression) takes priority over the
+    # see composer.generate_progression) takes priority over the
     # curated table. The music21-backed functional-harmony engine (see
     # harmony_engine.py, wired into pick_params/_build_diverse_params, both
     # shared with v1) takes top priority when present — see the matching
-    # comment in generate_music_gemini.build_midi().
+    # comment in composer.build_midi().
     prog      = (params.get('harmony_progression') or params.get('generated_progression')
                  or PROGRESSIONS[prog_idx])
     prog_bars = sum(d for _, d in prog)
@@ -1064,7 +1064,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
     form_name = _FORM_BY_SUBGENRE.get(sub_genre, 'standard')
     form      = _SONG_FORMS[form_name]
     # ~25% of the time, use the generative form-grammar instead — see the
-    # matching comment in generate_music_gemini.build_midi().
+    # matching comment in composer.build_midi().
     if random.random() < 0.25:
         try:
             form = generate_song_form()
@@ -1085,7 +1085,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
           f"energy={energy} sub={sub_genre} walk={walking} form={form_name} mood='{mood}' | {TOTAL} bars")
 
     # ── Build events, with a quality-gate retry loop (see build_midi() in
-    # generate_music_gemini.py for the identical pattern / rationale) ──────
+    # composer.py for the identical pattern / rationale) ──────
     try:
         from scripts.track_quality import score_track_quality, MIN_QUALITY_SCORE, MAX_RETRIES
     except Exception:
@@ -1250,7 +1250,7 @@ def build_midi_v2(params: dict, output_path: str) -> str:
         mid.tracks.append(abs_to_track(texture_ev, channel=5, program=tex_prog))
 
     # Feed this track's melody into the self-referential history (see
-    # generate_music_gemini._build_self_markov / pick_params). Fires once, on
+    # composer._build_self_markov / pick_params). Fires once, on
     # the winning attempt only — see build_midi()'s identical comment.
     _save_melody_pitch_classes([note % 12 for (_t, note, _v, _d) in mel_ev])
     try:
@@ -1311,7 +1311,7 @@ def generate_track(
             print(f"  [DRUMS] Skipped ({_de})")
 
         # Audio-domain quality gates on the final rendered WAV — see the
-        # matching block in generate_music_gemini.generate_track() for the
+        # matching block in composer.generate_track() for the
         # full rationale (diagnostic only, never blocks/retries).
         try:
             import soundfile as _sf
@@ -1324,7 +1324,7 @@ def generate_track(
             print(f"  [audio-quality] Scoring skipped ({_aqe})")
 
     # music_engine hardcoded "v2" — this is the v2 generator's own sidecar
-    # write (does not reuse generate_music_gemini.generate_track()). See the
+    # write (does not reuse composer.generate_track()). See the
     # matching block there for the "v1" counterpart and why bpm/music_engine
     # are stashed here (run.py's meta-alignment -> analytics feedback loop).
     with open(out + '.meta.json', 'w', encoding='utf-8') as _mf:
