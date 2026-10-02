@@ -1,8 +1,8 @@
 key: vaporwave
 family: dark_moody
 composition:
-  piano_program: GM_WARM_PAD
-  melody_program: GM_WARM_PAD
+  piano_program: GM_RHODES
+  melody_program: GM_ALTO_SAX
   countermelody_program: GM_STRINGS
   scales: [lydian, major, whole_tone]
   drum_pattern_indices: [7, 9, 11]
@@ -18,7 +18,11 @@ swing_range: [0.5, 0.6]
 cozy_bias: false
 texture: {program: GM_FLUTE, style: breath}
 drum_kit_programs: [24, 0]
-drum_sampler_pattern: 808_trap
+drum_sampler_pattern: standard
 mix: {lpf_hz: 8000, bitcrush_bits: 9, reverb_room: 0.6, reverb_wet: 0.35, tape_wobble_depth: 0.28,
   compress_ratio: 3.0, vinyl_crackle: 0.14, use_ir_reverb: false, sidechain_duck: false}
 song_form: ambient
+bass_program: GM_FRETLESS_BASS
+pad_program: GM_WARM_PAD
+# Genre rework: vaporwave is slowed 80s/90s smooth jazz and muzak (en.wikipedia.org/wiki/Vaporwave):
+# electric piano, alto sax, fretless bass. Trap drum samples were removed.

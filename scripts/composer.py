@@ -83,6 +83,9 @@ RIM   = 37
 CHH   = 42
 OHH   = 46
 RIDE  = 51
+CLAP  = 39
+COWBELL = 56
+SHAKER = 82
 CRASH = 49
 
 # ─── MULTIPLE VOICINGS PER CHORD ─────────────────────────────────────────────
@@ -894,7 +897,31 @@ DRUM_PATTERNS = [
      SNARE:[0,0,0,0,  0,0,0,0,  90,0,0,0,  0,0,38,0],
      CHH:  [55,0,55,0,55,0,55,0,55,0,55,0,60,68,76,85],
      OHH:  [0,0,0,0,  55,0,0,0,  0,0,0,0,  0,0,0,0],
-     RIM:  [0,0,0,0,  0,0,50,0,  0,0,0,0,  0,0,55,0]},
+     # Cowbell, not rim: the cowbell line is phonk's signature voice (GM 56).
+     COWBELL:[0,0,0,0,  0,0,62,0,  0,0,0,0,  0,0,66,0]},
+    # R: House four-on-the-floor -- kick on every beat, clap on 2 and 4,
+    # open hat on every off-beat 8th, light closed 16ths. lofi_house had no
+    # four-on-the-floor pattern at all before (it drew hip-hop/funk/trap).
+    {KICK: [100,0,0,0,  96,0,0,0,  98,0,0,0,  96,0,0,0],
+     CLAP: [0,0,0,0,  86,0,0,0,  0,0,0,0,  88,0,0,0],
+     SNARE:[0,0,0,0,  40,0,0,0,  0,0,0,0,  42,0,0,0],
+     CHH:  [46,0,0,34,  46,0,0,34,  46,0,0,34,  46,0,0,34],
+     OHH:  [0,0,70,0,  0,0,68,0,  0,0,70,0,  0,0,68,0]},
+    # S: Bossa nova (two bars, 32 steps). Bass drum on 1 and 3 with soft
+    # pickups on the "and" of 2 and 4; steady soft 8th hats; side-stick
+    # plays the 3-2 bossa clave (bar 1: 1, 2&, 4 / bar 2: 2, 3&). No
+    # backbeat snare. (kickdrum.io/patterns/bossa-nova, tunableapp.com)
+    {KICK: [80,0,0,0,  0,0,52,0,  78,0,0,0,  0,0,54,0] * 2,
+     RIM:  [72,0,0,0,  0,0,68,0,  0,0,0,0,  70,0,0,0,
+            0,0,0,0,  70,0,0,0,  0,0,68,0,  0,0,0,0],
+     CHH:  [46,0,38,0,  44,0,38,0,  46,0,38,0,  44,0,38,0] * 2,
+     SHAKER:[0,30,0,30,  0,30,0,30,  0,30,0,30,  0,30,0,30] * 2},
+    # T: Synthwave -- steady four-on-the-floor kick, a big snare (plus clap)
+    # on 2 and 4, straight 8th hats. (orphiq.com, ujam.com synthwave guides)
+    {KICK: [98,0,0,0,  92,0,0,0,  96,0,0,0,  92,0,0,0],
+     SNARE:[0,0,0,0,  100,0,0,0,  0,0,0,0,  100,0,0,0],
+     CLAP: [0,0,0,0,  64,0,0,0,  0,0,0,0,  66,0,0,0],
+     CHH:  [58,0,52,0,  58,0,52,0,  58,0,52,0,  58,0,52,0]},
 ]
 
 # Index of pattern Q above -- the only pattern _scale_roll_intensity() acts
@@ -948,6 +975,12 @@ _CONTINUOUS_ARP_GENRES: set = genre_presets.build_continuous_arp_genres()
 _CHH_TRIPLET_GENRES: set = genre_presets.build_chh_triplet_genres()
 _GAMAKA_GENRES: set = genre_presets.build_gamaka_genres()
 _TALA_OVERLAY_GENRES: set = genre_presets.build_tala_overlay_genres()
+# Genre-identity controls (config/genres/README.md).
+_GENERATED_DRUM_GENRES: set = genre_presets.build_generated_drum_genres()
+_BEATLESS_GENRES: set = genre_presets.build_beatless_genres()
+_WALKING_BASS: dict = genre_presets.build_walking_bass()
+_BASS_PROGRAMS: dict = genre_presets.build_bass_programs()
+_PAD_PROGRAMS: dict = genre_presets.build_pad_programs()
 
 # Drum fills (1 bar of 16 steps — fire at last bar of a section)
 DRUM_FILLS = [
@@ -1495,7 +1528,7 @@ _MICRO_SWING_DEFAULT = (4.0, 6.0)
 
 
 def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None,
-                micro_swing=False, chh_triplet=False):
+                micro_swing=False, chh_triplet=False, allow_generated=True):
     """
     Build drum events. fill_bars = set of bar numbers that get a fill
     instead of the regular pattern. Every 4 bars gets a hi-hat 16th run.
@@ -1518,10 +1551,14 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None,
     fill_bars = fill_bars or set()
     fill_template = random.choice(DRUM_FILLS)
     # Euclidean hi-hat: 15% chance of polyrhythmic CHH pattern per section
-    eucl_hat = random.choice(list(_EUCL_HATS.values())) if random.random() < 0.15 else None
+    # Only for genres that opt in (generated_drums): elsewhere it would
+    # overwrite the hats/rim that define the genre's groove.
+    eucl_hat = (random.choice(list(_EUCL_HATS.values()))
+                if allow_generated and random.random() < 0.15 else None)
     # Independent second Euclidean layer for OHH/RIM (10% chance, own pattern
     # and own target channel, layered on top of whatever CHH is doing).
-    eucl_layer2 = random.choice(list(_EUCL_HATS.values())) if random.random() < 0.10 else None
+    eucl_layer2 = (random.choice(list(_EUCL_HATS.values()))
+                   if allow_generated and random.random() < 0.10 else None)
     eucl_layer2_note = random.choice([OHH, RIM]) if eucl_layer2 is not None else None
 
     for bar in range(num_bars):
@@ -1554,7 +1591,9 @@ def build_drums(pattern, start_bar, num_bars, swing, bpm, fill_bars=None,
                     drag_ticks = int(random.uniform(15, 28) * (PPQN * bpm) / 60000.0)
                     base_t = base_t + drag_ticks
 
-                vel_val = vels[step % 16]
+                # Patterns may span several bars (32 steps = 2 bars, e.g. a clave).
+                n_pat_bars = max(1, len(vels) // 16)
+                vel_val = vels[(abs_bar % n_pat_bars) * 16 + step % 16]
 
                 # Euclidean CHH override (replaces fixed pattern with polyrhythm)
                 if eucl_hat is not None and drum_note == CHH and not use_fill:
@@ -3016,7 +3055,7 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         'mood':           _pick_mood_phrase(concept_hint, sub_genre=sub, history=history),
         'melody_density': random.choice(['sparse', 'medium']),
         'melody_scale':   random.choice(cfg['scale']),
-        'bass_walking':   random.random() < 0.4,
+        'bass_walking':   _WALKING_BASS.get(sub, random.random() < 0.4),
         'drum_pattern_a': pat_a,
         'drum_pattern_b': pat_b,
         'drum_energy':    drum_energy,
@@ -3039,7 +3078,9 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
         if hi > lo:
             from scripts.analytics import bpm_bucket_weights
             bpm_bucket_w = bpm_bucket_weights()
-            candidates = sorted({params['bpm'], lo, hi, *(random.randint(lo, hi) for _ in range(3))})
+            # Not the endpoints: adding lo and hi as fixed candidates put ~45% of
+            # all tracks exactly on the slowest or fastest tempo of their genre.
+            candidates = sorted({params['bpm'], *(random.randint(lo, hi) for _ in range(3))})
             cand_weights = [bpm_bucket_w.get((c // 10) * 10, 1.0) for c in candidates]
             params['bpm'] = random.choices(candidates, weights=cand_weights, k=1)[0]
     except Exception as e:
@@ -3059,7 +3100,11 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
     # tala-cycle-inspired percussion identity, and nujabes-style jazzier
     # genres), not offered to every genre the way Euclidean/CA are.
     _polyrhythm_genres = {'lofi_world', 'nujabes'}
-    if random.random() < 0.35:
+    # Euclidean/CA patterns know nothing about genre; they used to replace
+    # the curated groove in about half of all sections of every genre.
+    # Now only genres that opt in (generated_drums) get them.
+    gen_ok = sub in _GENERATED_DRUM_GENRES
+    if gen_ok and random.random() < 0.35:
         try:
             params['drum_pattern_a_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
             params['drum_pattern_a_source'] = 'euclidean'
@@ -3071,7 +3116,7 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
             params['drum_pattern_a_source'] = 'polyrhythm'
         except Exception as e:
             print(f"  [params] Polyrhythm drum A generation failed ({e}) — using curated table")
-    elif random.random() < 0.20:
+    elif gen_ok and random.random() < 0.20:
         # Cellular-automaton pattern (see generate_ca_drum_pattern) — a
         # second procedural rhythm source, mutually exclusive with the
         # Euclidean roll above (both write the same override slot) but
@@ -3082,7 +3127,7 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
             params['drum_pattern_a_source'] = 'ca'
         except Exception as e:
             print(f"  [params] CA drum A generation failed ({e}) — using curated table")
-    if random.random() < 0.35:
+    if gen_ok and random.random() < 0.35:
         try:
             params['drum_pattern_b_generated'] = generate_euclidean_drum_pattern(energy_f, complexity_f)
             params['drum_pattern_b_source'] = 'euclidean'
@@ -3094,7 +3139,7 @@ def pick_params(concept_hint: str | None = None, genre_hint: str | None = None) 
             params['drum_pattern_b_source'] = 'polyrhythm'
         except Exception as e:
             print(f"  [params] Polyrhythm drum B generation failed ({e}) — using curated table")
-    elif random.random() < 0.20:
+    elif gen_ok and random.random() < 0.20:
         try:
             params['drum_pattern_b_generated'] = generate_ca_drum_pattern(energy_f, complexity_f)
             params['drum_pattern_b_source'] = 'ca'
@@ -3400,6 +3445,18 @@ def _compute_section_transitions(form: list[tuple[str, int]], prog_bars: int,
 # layered on after rendering (drum_sampler.layer_drum_break) belongs only
 # here; intros, bridges and outros have their own sparser drum parts.
 _FULL_BEAT_SECTIONS = ('A', 'B')
+
+
+def full_beat_span_labels(form: list[tuple[str, int]]) -> list[str]:
+    """Section label ('A'/'B') of each span full_beat_spans() returns, in
+    order (a merged run takes its first section's label)."""
+    labels, prev_full = [], False
+    for label, _n in form:
+        full = label in _FULL_BEAT_SECTIONS
+        if full and not prev_full:
+            labels.append(label)
+        prev_full = full
+    return labels
 
 
 def full_beat_spans(form: list[tuple[str, int]], prog_bars: int, bpm: float,
@@ -3755,6 +3812,10 @@ def build_midi(params, output_path):
         pat_a = _scale_roll_intensity(pat_a, _roll_density)
         pat_b = _scale_roll_intensity(pat_b, _roll_density)
 
+    # The audio drum-sample layer plays these same patterns (see
+    # drum_sampler.pattern_from_midi), instead of a second, unrelated one.
+    params['drum_pattern_dicts'] = (pat_a, pat_b)
+
     # Sub-genre config (piano/melody programs, forced energy)
     _cfg = _SUBGENRE_CONFIG.get(sub_genre, {})
     piano_prog = _cfg.get('piano', GM_RHODES)
@@ -3808,6 +3869,7 @@ def build_midi(params, output_path):
     # no need to fold this into that loop's bookkeeping.
     section_transitions = _compute_section_transitions(form, prog_bars, bpm)
     params['full_beat_spans'] = full_beat_spans(form, prog_bars, bpm)
+    params['full_beat_span_labels'] = full_beat_span_labels(form)
 
     # ── Motif scale (recomputed fresh per retry attempt below) ──
     # Uses the same _resolve_scale() dispatch as build_melody()/
@@ -3901,7 +3963,8 @@ def build_midi(params, output_path):
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
                 bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking, glide=use_glide_bass)
                 drum_ev    += build_drums(pat_a, sec_start, sec_bars, swing, bpm, fill_bars,
-                                          micro_swing=use_micro_swing, chh_triplet=use_chh_triplet)
+                                          micro_swing=use_micro_swing, chh_triplet=use_chh_triplet,
+                                          allow_generated=sub_genre in _GENERATED_DRUM_GENRES)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 if use_arp_melody:
                     # Synthwave's melodic engine is the arp itself, not
@@ -3943,7 +4006,8 @@ def build_midi(params, output_path):
                 piano_ev   += build_chords(prog, sec_start, n_loops, swing, bpm, tension=sec_tension)
                 bass_ev    += build_bass(prog, sec_start, n_loops, swing, bpm, walking, glide=use_glide_bass)
                 drum_ev    += build_drums(pat_b, sec_start, sec_bars, swing, bpm, fill_bars,
-                                          micro_swing=use_micro_swing, chh_triplet=use_chh_triplet)
+                                          micro_swing=use_micro_swing, chh_triplet=use_chh_triplet,
+                                          allow_generated=sub_genre in _GENERATED_DRUM_GENRES)
                 pad_ev     += build_pad(prog, sec_start, n_loops, swing, bpm)
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 active_bars += sec_bars
@@ -3991,7 +4055,8 @@ def build_midi(params, output_path):
                 sustain_ev += build_sustain_pedal(prog, sec_start, n_loops, swing, bpm)
                 od_bars = max(1, sec_bars // 2)
                 od_raw  = build_drums(pat_a, sec_start, od_bars, swing, bpm,
-                                      micro_swing=use_micro_swing, chh_triplet=use_chh_triplet)
+                                      micro_swing=use_micro_swing, chh_triplet=use_chh_triplet,
+                                          allow_generated=sub_genre in _GENERATED_DRUM_GENRES)
                 n_od = len(od_raw)
                 od_raw = [(ev[0], ev[1], max(1, int(ev[2] * (1.0 - (i / max(1, n_od)) * 0.75))), ev[3])
                           for i, ev in enumerate(od_raw)]
@@ -4052,12 +4117,10 @@ def build_midi(params, output_path):
                                    cc_events=sustain_ev))
     # Bass program varies by sub-genre: fretless for jazz, synth bass for house/phonk,
     # slap for funk. Falls back to acoustic bass (32) for everything else.
-    _BASS_PROG = {
-        'lofi_jazz': 35, 'bossa_lofi': 35, 'jazz_cafe': 35, 'piano_lofi': 35,
-        'hip_hop_lofi': 38, 'lofi_phonk': 38, 'lofi_house': 38, 'vaporwave': 38,
-        'lo_fi_funk': 36, 'neo_soul': 36,
-    }
-    bass_prog = _BASS_PROG.get(sub_genre, GM_BASS)
+    # Per-genre bass (config/genres/*.yaml bass_program): upright for jazz
+    # and bossa, slap for city pop/funk, synth for house/synthwave, an
+    # 808-style sub for drill/phonk.
+    bass_prog = _BASS_PROGRAMS.get(sub_genre, GM_BASS)
     # pitch_bend_range only when this subgenre's bass actually uses glide=True
     # (see use_glide_bass above) -- keeps the RPN setup scoped to the one
     # feature that needs it instead of touching every subgenre's bass track.
@@ -4065,6 +4128,8 @@ def build_midi(params, output_path):
                                    pitch_bend_range=_GLIDE_BEND_RANGE_SEMITONES if use_glide_bass else None))
     # Rotate drum kit per track — GS/SF3 soundfonts honor non-zero kits;
     # GM-only soundfonts silently fall back to Standard (program 0).
+    if sub_genre in _BEATLESS_GENRES:
+        drum_ev = []          # ambient: no beat (config/genres drums: false)
     drum_kit = random.choice(_SUBGENRE_DRUM_KITS.get(sub_genre, _DEFAULT_DRUM_KIT_POOL))
     mid.tracks.append(abs_to_track(drum_ev, channel=9, program=drum_kit,
                                    bank_msb=127 if drum_kit != 0 else None))
@@ -4075,7 +4140,8 @@ def build_midi(params, output_path):
         mid.tracks.append(abs_to_track(mel_ev,    channel=2, program=mel_prog,
                                        pitch_bend_range=_gamaka_bend_range))
     # Pad: always present — fills air throughout
-    mid.tracks.append(abs_to_track(pad_ev,    channel=3, program=GM_STRINGS))
+    mid.tracks.append(abs_to_track(pad_ev,    channel=3,
+                                   program=_PAD_PROGRAMS.get(sub_genre, GM_STRINGS)))
     # Counter melody: instrument chosen per sub-genre
     if cmelo_ev:
         cmelo_prog = _cfg.get('cmelo', GM_WARM_PAD)
@@ -4172,14 +4238,22 @@ def _render_track(index: int, params: dict, low_priority: bool, attempt: int = 0
         # Layer synthesized drum break — real FM+noise drums on top of the
         # MIDI render so every track has a different acoustic character.
         try:
-            from scripts.drum_sampler import layer_drum_break as _layer_drums
-            print(f"  [DRUMS] Layering synthetic breaks ({params.get('sub_genre', '?')})...")
+            from scripts.drum_sampler import layer_drum_break as _layer_drums, pattern_from_midi
+            _sub = params.get('sub_genre', 'chillhop')
+            if _sub in _BEATLESS_GENRES:
+                raise RuntimeError("beatless genre")
+            print(f"  [DRUMS] Layering sampled drums on the MIDI pattern ({_sub})...")
+            _pats = params.get('drum_pattern_dicts')
+            _trip = _sub in _CHH_TRIPLET_GENRES
             _layer_drums(out, out,
                          bpm=params.get('bpm', 80),
-                         sub_genre=params.get('sub_genre', 'chillhop'),
+                         sub_genre=_sub,
                          volume=0.22,
                          swing=float(params.get('swing', 0.62)),
-                         spans=params.get('full_beat_spans'))
+                         spans=params.get('full_beat_spans'),
+                         patterns=(tuple(pattern_from_midi(p, _trip) for p in _pats)
+                                   if _pats else None),
+                         span_labels=params.get('full_beat_span_labels'))
         except Exception as _de:
             print(f"  [DRUMS] Skipped ({_de})")
 

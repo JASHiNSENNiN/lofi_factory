@@ -2,7 +2,7 @@ key: ambient
 family: dark_moody
 composition:
   piano_program: GM_WARM_PAD
-  melody_program: GM_WARM_PAD
+  melody_program: GM_VIBRAPHONE
   countermelody_program: GM_FLUTE
   scales: [pent, natural_minor, whole_tone]
   drum_pattern_indices: [7, 9, 13]
@@ -17,3 +17,7 @@ drum_sampler_pattern: jazz
 mix: {lpf_hz: 12000, bitcrush_bits: 13, reverb_room: 0.7, reverb_wet: 0.4, tape_wobble_depth: 0.12,
   compress_ratio: 2.0, vinyl_crackle: 0.05, use_ir_reverb: false, sidechain_duck: false}
 song_form: ambient
+drums: false
+bass_program: GM_FRETLESS_BASS
+pad_program: GM_NEW_AGE_PAD
+# Genre rework: ambient is usually beatless (edmprod.com, beatkey.app), so no drums.

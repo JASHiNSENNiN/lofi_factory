@@ -217,9 +217,13 @@ def main():
     music_sub_genre = ""
     music_bpm = None
     music_engine = "v1"
-    if generated_tracks:
+    import glob as _glob
+    _metas = ([generated_tracks[0] + ".meta.json"] if generated_tracks else
+              sorted(_glob.glob(os.path.join(ROOT, "music", "*.wav.meta.json")),
+                     key=os.path.getmtime)[-1:])   # --skip-music: the reused tracks
+    if _metas:
         import json as _json
-        meta_path = generated_tracks[0] + ".meta.json"
+        meta_path = _metas[0]
         if os.path.exists(meta_path):
             try:
                 with open(meta_path) as _mf:

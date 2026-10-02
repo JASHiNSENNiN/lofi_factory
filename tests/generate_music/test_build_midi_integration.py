@@ -125,7 +125,8 @@ def test_build_midi_v1_seeded_sweep_exercises_all_probabilistic_branches(isolate
     seen = {'generated_progression': False, 'drum_pattern_a_generated': False}
     for seed in range(15):
         random.seed(seed)
-        params = gmg.pick_params()
+        # Generated drum patterns only apply to genres that opt in.
+        params = gmg.pick_params(genre_hint='study_lofi' if seed % 2 else None)
         for key in seen:
             if key in params:
                 seen[key] = True

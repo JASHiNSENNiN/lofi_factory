@@ -20,3 +20,4 @@ mix: {lpf_hz: 9000, bitcrush_bits: 10, reverb_room: 0.35, reverb_wet: 0.18, tape
   compress_ratio: 3.5, vinyl_crackle: 0.15, use_ir_reverb: true, sidechain_duck: true,
   duck_profile: hiphop, presence_db: -1.5, warmth_db: 1.5}
 song_form: funk
+bass_program: GM_SYNTH_BASS_1

@@ -38,3 +38,4 @@ mix: {lpf_hz: 10000, bitcrush_bits: 11, reverb_room: 0.4, reverb_wet: 0.22, tape
   compress_ratio: 3.2, vinyl_crackle: 0.08, use_ir_reverb: false, sidechain_duck: true,
   duck_profile: house}
 song_form: funk
+bass_program: GM_SYNTH_BASS_1

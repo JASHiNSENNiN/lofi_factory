@@ -1,9 +1,9 @@
 key: nujabes
 family: jazz_soul
 composition:
-  piano_program: GM_RHODES
-  melody_program: GM_VIBRAPHONE
-  countermelody_program: GM_MUTED_TRUMPET
+  piano_program: GM_ACOUSTIC_GRAND
+  melody_program: GM_FLUTE
+  countermelody_program: GM_TENOR_SAX
   scales: [dorian, pent, lydian, natural_minor]
   drum_pattern_indices: [1, 0, 10, 14]
   bpm_range: [80, 92]
@@ -17,3 +17,5 @@ drum_sampler_pattern: boom_bap
 mix: {lpf_hz: 10000, bitcrush_bits: 11, reverb_room: 0.45, reverb_wet: 0.25, tape_wobble_depth: 0.2,
   compress_ratio: 2.8, vinyl_crackle: 0.12, use_ir_reverb: false, sidechain_duck: false}
 song_form: extended
+bass_program: GM_ACOUSTIC_BASS
+# Genre rework: jazz boom bap at 85-95 BPM, piano, sax and flute (jazz.fm, melodigging.com).

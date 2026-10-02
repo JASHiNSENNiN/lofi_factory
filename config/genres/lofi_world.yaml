@@ -3,7 +3,7 @@ family: world_fusion
 composition:
   piano_program: GM_RHODES
   melody_program: GM_SITAR
-  countermelody_program: GM_KOTO
+  countermelody_program: GM_FLUTE
   scales: [dorian, phryg_dom, pent, natural_minor]
   drum_pattern_indices: [12, 4, 3, 9]
   bpm_range: [70, 86]
@@ -26,8 +26,10 @@ gamaka: true
 # build_tala_overlay()'s module comment for why this is an overlay rather
 # than a full engine-wide meter retrofit).
 tala_overlay: true
-texture: {program: GM_KALIMBA, style: pop}
 drum_sampler_pattern: null
 mix: {lpf_hz: 10500, bitcrush_bits: 12, reverb_room: 0.42, reverb_wet: 0.24, tape_wobble_depth: 0.16,
   compress_ratio: 2.6, vinyl_crackle: 0.09, use_ir_reverb: true, sidechain_duck: false}
 song_form: null
+# Genre rework: one tradition, not three. Sitar lead with gamaka and the
+# Rupak tala are Hindustani; the koto (Japan) and kalimba (Africa) were dropped
+# for a flute counter-line (bansuri stand-in).

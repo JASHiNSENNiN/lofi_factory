@@ -9,6 +9,9 @@ dicts/sets. This directory is the single source of truth for per-subgenre
 composition, mix, and drum-sampler behavior — nothing here changes what a
 track sounds like, it only changes where the numbers live.
 
+Sources for the genre choices (tempo, groove, instruments) are collected in
+`research/genres.md`.
+
 ## Schema
 
 ```yaml
@@ -77,6 +80,20 @@ tala_overlay: true|false             # optional, default false. true = an
                                       # independent tick grid, unrelated to
                                       # BAR/grid_tick()/DRUM_PATTERNS --
                                       # build_tala_overlay()
+
+bass_program: GM_SOMETHING           # optional. Default GM_BASS (acoustic). Upright for
+                                      # jazz/bossa, slap for city pop/funk, synth for
+                                      # house/synthwave, GM_SYNTH_BASS_2 + glide for 808 subs
+pad_program: GM_SOMETHING            # optional. Default GM_STRINGS
+generated_drums: true|false          # optional, default false. true = sections may swap
+                                      # the curated pattern for a Euclidean/CA one and
+                                      # build_drums may overlay Euclidean hats. Off by
+                                      # default because those patterns know nothing about
+                                      # the genre and used to replace its groove in about
+                                      # half of all sections.
+drums: true|false                    # optional, default true. false = beatless (ambient)
+walking_bass: true|false             # optional. Forces the walking bass on/off; omit for
+                                      # the old ~40% chance
 
 texture:                             # omit the whole block if this subgenre has none
   program: GM_SOMETHING

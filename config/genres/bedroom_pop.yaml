@@ -1,8 +1,8 @@
 key: bedroom_pop
 family: cozy_bright
 composition:
-  piano_program: GM_VIBRAPHONE
-  melody_program: GM_GUITAR_NYLON
+  piano_program: GM_GUITAR_CLEAN
+  melody_program: GM_VIBRAPHONE
   countermelody_program: GM_FLUTE
   scales: [major_pent, major, pent]
   drum_pattern_indices: [0, 4, 7, 13]
@@ -20,3 +20,6 @@ drum_sampler_pattern: null
 mix: {lpf_hz: 13000, bitcrush_bits: 13, reverb_room: 0.35, reverb_wet: 0.18, tape_wobble_depth: 0.13,
   compress_ratio: 2.2, vinyl_crackle: 0.06, use_ir_reverb: false, sidechain_duck: false}
 song_form: null
+bass_program: GM_FINGER_BASS
+pad_program: GM_WARM_PAD
+# Genre rework: clean, chorused guitar chords carry bedroom pop (guitarchalk.com, melodigging.com).

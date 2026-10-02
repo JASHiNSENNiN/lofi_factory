@@ -128,6 +128,13 @@ def _parse_one(path: str) -> tuple[str, dict]:
     doc['chh_triplet']  = bool(raw.get('chh_triplet', False))
     doc['gamaka']       = bool(raw.get('gamaka', False))
     doc['tala_overlay'] = bool(raw.get('tala_overlay', False))
+    # Genre-identity controls (see config/genres/README.md).
+    for field in ('bass_program', 'pad_program'):
+        doc[field] = (_resolve_gm(raw[field], filename, field)
+                      if raw.get(field) is not None else None)
+    doc['generated_drums'] = bool(raw.get('generated_drums', False))
+    doc['drums'] = bool(raw.get('drums', True))
+    doc['walking_bass'] = raw.get('walking_bass')     # True/False forces it; None = sometimes
 
     tex_raw = raw.get('texture')
     if tex_raw is not None:
@@ -420,3 +427,26 @@ def build_form_overrides() -> dict:
         if form:
             out[key] = form
     return out
+
+
+def build_bass_programs() -> dict:
+    return {k: d['bass_program'] for k, d in load_all().items() if d.get('bass_program') is not None}
+
+
+def build_pad_programs() -> dict:
+    return {k: d['pad_program'] for k, d in load_all().items() if d.get('pad_program') is not None}
+
+
+def build_generated_drum_genres() -> set:
+    """Genres whose drums may be replaced by Euclidean/CA/polyrhythm patterns.
+    Everything else keeps its curated, genre-defining grooves."""
+    return {k for k, d in load_all().items() if d.get('generated_drums')}
+
+
+def build_beatless_genres() -> set:
+    return {k for k, d in load_all().items() if not d.get('drums', True)}
+
+
+def build_walking_bass() -> dict:
+    return {k: bool(d['walking_bass']) for k, d in load_all().items()
+            if d.get('walking_bass') is not None}

@@ -19,3 +19,5 @@ drum_sampler_pattern: null
 mix: {lpf_hz: 11000, bitcrush_bits: 11, reverb_room: 0.4, reverb_wet: 0.22, tape_wobble_depth: 0.18,
   compress_ratio: 2.8, vinyl_crackle: 0.1, use_ir_reverb: false, sidechain_duck: false}
 song_form: null
+bass_program: GM_FINGER_BASS
+micro_swing: true

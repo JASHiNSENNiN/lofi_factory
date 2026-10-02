@@ -16,3 +16,5 @@ drum_sampler_pattern: null
 mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.45, reverb_wet: 0.25, tape_wobble_depth: 0.14,
   compress_ratio: 2.5, vinyl_crackle: 0.08, use_ir_reverb: false, sidechain_duck: false}
 song_form: ambient
+bass_program: GM_FINGER_BASS
+generated_drums: true

@@ -11,10 +11,11 @@ composition:
   progression_indices: [26, 27, 10, 11, 3, 38, 45]
 swing_range: [0.6, 0.69]
 cozy_bias: false
-texture: {program: GM_ORGAN_ROCK, style: stab}
+texture: {program: GM_CLAVI, style: stab}
 drum_kit_programs: [0, 16]
 drum_sampler_pattern: null
 mix: {lpf_hz: 9500, bitcrush_bits: 10, reverb_room: 0.35, reverb_wet: 0.18, tape_wobble_depth: 0.22,
   compress_ratio: 3.5, vinyl_crackle: 0.14, use_ir_reverb: true, sidechain_duck: true,
   duck_profile: hiphop, presence_db: -1.5, warmth_db: 1.5}
 song_form: funk
+bass_program: GM_SLAP_BASS

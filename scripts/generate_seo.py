@@ -680,7 +680,13 @@ def with_tracklist(description: str, tracks: list[dict]) -> str:
     it into chapters when there are at least three, starting at 0:00."""
     if not tracks:
         return description
-    lines = "\n".join(f"{_fmt_ts(t['start'])} {t['title']}" for t in tracks)
+    seen: dict[str, int] = {}
+    rows = []
+    for t in tracks:
+        seen[t["title"]] = seen.get(t["title"], 0) + 1
+        n = seen[t["title"]]
+        rows.append(f"{_fmt_ts(t['start'])} {t['title']}" + (f" ({n})" if n > 1 else ""))
+    lines = "\n".join(rows)
     block = f"TRACKLIST\n{lines}\n\n"
     marker = "─────"
     i = description.find(marker)
@@ -886,38 +892,39 @@ def pick_concept(trends: dict | None = None) -> dict:
 # Maps internal sub_genre keys → SEO genre_label strings used in titles/descriptions.
 # Any sub_genre not in this dict falls back to "lo-fi hip hop".
 _SUBGENRE_TO_GENRE_LABEL: dict[str, str] = {
+    # Each genre under the name people search for it. These feed titles,
+    # tags, hashtags and genre playlists; several used to name a different
+    # genre (house as "city pop lofi", phonk as "dark lofi", vaporwave as
+    # "lofi ambient", anime and piano as "lofi jazz").
     "dark_lofi":      "dark lofi",
-    "lofi_phonk":     "dark lofi",
-    "vaporwave":      "lofi ambient",
-    "ambient":        "lofi ambient",
+    "lofi_phonk":     "lofi phonk",
+    "vaporwave":      "vaporwave",
+    "ambient":        "ambient lofi",
     "lofi_jazz":      "lofi jazz",
-    "jazz_cafe":      "lofi jazz",
-    "nujabes":        "lofi jazz",
-    "neo_soul":       "neo-soul lofi",
+    "jazz_cafe":      "jazz cafe lofi",
+    "nujabes":        "jazz hop",
+    "neo_soul":       "neo soul lofi",
     "bossa_lofi":     "bossa nova lofi",
-    "lofi_rnb":       "neo-soul lofi",
+    "lofi_rnb":       "r&b lofi",
     "chillhop":       "chillhop",
     "hip_hop_lofi":   "lo-fi hip hop",
-    "lo_fi_funk":     "lo-fi hip hop",
-    "chill_beats":    "chillhop",
-    "lofi_house":     "city pop lofi",
-    "cozy_cafe":      "lo-fi hip hop",
-    "morning_lofi":   "lo-fi hip hop",
-    "anime_lofi":     "lofi jazz",
-    "summer_vibes":   "city pop lofi",
-    "bedroom_pop":    "lo-fi hip hop",
+    "lo_fi_funk":     "lofi funk",
+    "chill_beats":    "chill lofi beats",
+    "lofi_house":     "lofi house",
+    "cozy_cafe":      "cafe lofi",
+    "morning_lofi":   "morning lofi",
+    "anime_lofi":     "anime lofi",
+    "summer_vibes":   "summer lofi",
+    "bedroom_pop":    "bedroom pop",
     "city_pop":       "city pop lofi",
     "study_lofi":     "lo-fi hip hop",
-    "piano_lofi":     "lofi jazz",
-    "lofi_classical": "lofi ambient",
-    # 3 new research-driven subgenres (config/genres/README.md's "add a new
-    # subgenre" step 2). Note: lofi_drill/lofi_world (added in a prior pass)
-    # were never actually added here and silently fall back to "lo-fi hip
-    # hop" -- that looks like an unintentional gap in that pass, not a
-    # pattern worth repeating, so these 3 get real labels instead.
-    "sleep_lofi":     "lofi ambient",
+    "piano_lofi":     "piano lofi",
+    "lofi_classical": "classical lofi",
+    "sleep_lofi":     "sleep lofi",
     "lofi_garage":    "lofi garage",
     "lofi_synthwave": "synthwave lofi",
+    "lofi_drill":     "lofi drill",
+    "lofi_world":     "indian lofi",
 }
 
 

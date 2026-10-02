@@ -240,8 +240,30 @@ def _mix_at(buf: np.ndarray, src: np.ndarray, pos: int) -> None:
         buf[pos:end] += src[:src_end]
 
 
+_GM_KICK, _GM_SNARE, _GM_CLAP, _GM_CHH = 36, 38, 39, 42
+
+
+def pattern_from_midi(midi_pattern: dict, chh_triplet: bool = False) -> dict:
+    """{'k','s','h'} amplitudes from a composer MIDI drum pattern (GM note ->
+    velocities, 16 steps per bar), so the sample layer doubles the MIDI
+    drummer instead of playing a second, unrelated groove. Only voices with
+    a matching sample are taken: kick, snare/clap, closed hat. Rim, ride,
+    cowbell and shakers stay MIDI-only; triplet hats (drill) can't be
+    doubled on this 16-step grid, so they're left out too."""
+    length = max(len(v) for v in midi_pattern.values())
+
+    def voice(*notes):
+        out = [0.0] * length
+        for n in notes:
+            for i, vel in enumerate(midi_pattern.get(n, [])):
+                out[i] = max(out[i], vel / 127.0)
+        return out
+    return {"k": voice(_GM_KICK), "s": voice(_GM_SNARE, _GM_CLAP),
+            "h": [0.0] * length if chh_triplet else voice(_GM_CHH)}
+
+
 def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
-                swing: float = 0.5) -> np.ndarray:
+                swing: float = 0.5, pattern: dict | None = None) -> np.ndarray:
     """
     Build one drum loop (n_bars long) with swing-aware timing.
 
@@ -277,13 +299,16 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
     # dependency-free of composer.py, so a failure here can't
     # cascade into the MIDI-layer generation — still wrapped defensively since
     # this runs unattended daily.
-    try:
-        if random.random() < 0.35:
-            pat = generate_euclidean_pat_dict(energy=random.uniform(0.35, 0.85))
-        else:
+    if pattern is not None:
+        pat = pattern
+    else:
+        try:
+            if random.random() < 0.35:
+                pat = generate_euclidean_pat_dict(energy=random.uniform(0.35, 0.85))
+            else:
+                pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
+        except Exception:
             pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
-    except Exception:
-        pat = _SUBGENRE_PAT.get(sub_genre, random.choice(_ALL_PATS))
 
     for step in range(16 * n_bars):
         step_in_bar = step % 16
@@ -291,9 +316,9 @@ def _build_loop(bpm: int, sub_genre: str, n_bars: int = 4,
         jitter      = random.gauss(0, 0.007)
         pos         = max(0, int((step * step_sec + swing_off + jitter) * SR))
 
-        k_v = pat["k"][step_in_bar] * random.uniform(0.88, 1.00)
-        s_v = pat["s"][step_in_bar] * random.uniform(0.84, 1.00)
-        h_v = pat["h"][step_in_bar] * random.uniform(0.78, 1.00)
+        k_v = pat["k"][step % len(pat["k"])] * random.uniform(0.88, 1.00)
+        s_v = pat["s"][step % len(pat["s"])] * random.uniform(0.84, 1.00)
+        h_v = pat["h"][step % len(pat["h"])] * random.uniform(0.78, 1.00)
 
         if k_v > 0.01:
             _mix_at(loop, kick * k_v, pos)
@@ -318,6 +343,8 @@ def layer_drum_break(
     volume: float = 0.22,
     swing: float = 0.62,
     spans: list[tuple[int, int]] | None = None,
+    patterns: tuple[dict, dict] | None = None,
+    span_labels: list[str] | None = None,
 ) -> None:
     """
     Generate a drum break and mix it into base_wav.
@@ -339,15 +366,29 @@ def layer_drum_break(
     audio, _ = sf.read(base_wav, dtype="float32", always_2d=True)
     n_samples = audio.shape[0]
 
-    loop_a = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
-    loop_b = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
-    macro  = np.concatenate([loop_a, loop_b])
+    if patterns is not None and spans:
+        # Double the MIDI drummer: each section's own pattern, started at the
+        # section's first bar so the layers line up.
+        loops = {"A": _build_loop(bpm, sub_genre, 4, swing, pattern=patterns[0]),
+                 "B": _build_loop(bpm, sub_genre, 4, swing, pattern=patterns[1])}
+        drums = np.zeros(n_samples, dtype=np.float32)
+        for i, (start, end) in enumerate(spans):
+            start, end = max(0, int(start)), min(n_samples, int(end))
+            label = (span_labels[i] if span_labels and i < len(span_labels) else "A")
+            loop = loops["B" if label == "B" else "A"]
+            if end > start and len(loop):
+                reps = int(np.ceil((end - start) / len(loop)))
+                drums[start:end] = np.tile(loop, reps)[:end - start]
+    else:
+        loop_a = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
+        loop_b = _build_loop(bpm, sub_genre, n_bars=4, swing=swing)
+        macro  = np.concatenate([loop_a, loop_b])
 
-    if len(macro) == 0:
-        return
+        if len(macro) == 0:
+            return
 
-    n_reps = int(np.ceil(n_samples / len(macro)))
-    drums  = np.tile(macro, n_reps)[:n_samples]
+        n_reps = int(np.ceil(n_samples / len(macro)))
+        drums  = np.tile(macro, n_reps)[:n_samples]
 
     if spans is not None:
         mask = np.zeros(n_samples, dtype=np.float32)

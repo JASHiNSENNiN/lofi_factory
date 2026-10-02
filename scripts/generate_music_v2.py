@@ -990,7 +990,7 @@ def build_drums_v2(
                                          * (PPQN * bpm) / 60_000.0)
                         base_t += max(0, drag_ticks)
 
-                vel_val = vels[step % 16]
+                vel_val = vels[(abs_bar % max(1, len(vels) // 16)) * 16 + step % 16]
 
                 # Euclidean CHH override
                 if eucl_hat is not None and drum_note == CHH and not use_fill:

@@ -19,7 +19,6 @@ from scripts.composer import (
     SNARE,
     DRUM_PATTERNS,
     GM_EP2,
-    GM_MARIMBA,
     GM_ORGAN_ROCK,
     GM_RHODES,
     GM_STRINGS,
@@ -40,7 +39,11 @@ _LOFI_BPM_FLOOR, _LOFI_BPM_CEILING = 55, 105
 
 # Chord-instrument allowlist test_genre_authenticity.py enforces for every
 # subgenre's piano_program.
-_LOFI_CHORD_INSTRUMENTS = {GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_WARM_PAD}
+# Soft chord instruments. Acoustic piano (piano/anime/classical lofi), nylon
+# and clean guitar (bossa, bedroom pop) and polysynth pad (synthwave) are the
+# genre-correct chord voices there (research/genres.md).
+_LOFI_CHORD_INSTRUMENTS = {GM_RHODES, GM_EP2, GM_VIBRAPHONE, GM_WARM_PAD,
+                           0, 24, 27, 90}
 
 
 def test_new_subgenres_are_registered():
@@ -124,17 +127,18 @@ def test_lofi_synthwave_uses_a_lydian_leaning_scale_and_prog_pool():
     cfg = _SUBGENRE_CONFIG['lofi_synthwave']
     assert 'lydian' in cfg['scale']
     assert cfg['cmelo'] == GM_STRINGS
-    assert _SUBGENRE_TEXTURE['lofi_synthwave'] == (GM_MARIMBA, 'pop')
+    # The arp and saw lead carry synthwave; the marimba texture was dropped.
+    assert 'lofi_synthwave' not in _SUBGENRE_TEXTURE
     assert 'lofi_synthwave' in gmg._CONTINUOUS_ARP_GENRES
 
 
 def test_drum_pattern_q_phonk_hat_roll_has_expected_shape():
     # research/theory/rhythm-groove.md Task 5: new curated pattern (index 16)
     # -- straight-8th hat base + a roll-burst on the bar's back quarter +
-    # cowbell-style RIM accents, referenced from lofi_phonk.yaml.
-    from scripts.composer import CHH, KICK, RIM, SNARE
+    # a real GM cowbell accent voice, referenced from lofi_phonk.yaml.
+    from scripts.composer import CHH, COWBELL, KICK, SNARE
     pattern = DRUM_PATTERNS[16]
-    for voice in (KICK, SNARE, CHH, RIM):
+    for voice in (KICK, SNARE, CHH, COWBELL):
         assert voice in pattern
         assert len(pattern[voice]) == 16
         assert all(0 <= v <= 127 for v in pattern[voice])
@@ -144,7 +148,8 @@ def test_drum_pattern_q_phonk_hat_roll_has_expected_shape():
     assert all(v > 0 for v in chh[-4:]), "expected a hit on every one of the last 4 steps (roll burst)"
     assert chh[-1] > chh[0], "roll burst should build in velocity toward the end of the bar"
     # Cowbell-style RIM accents on the "and" of 2 and 4 (steps 6, 14).
-    assert pattern[RIM][6] > 0 and pattern[RIM][14] > 0
+    COWBELL = 56   # a real GM cowbell now, not a rim stand-in
+    assert pattern[COWBELL][6] > 0 and pattern[COWBELL][14] > 0
     assert 16 in _SUBGENRE_CONFIG['lofi_phonk']['drum_pats']
 
 

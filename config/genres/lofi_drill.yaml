@@ -2,7 +2,7 @@ key: lofi_drill
 family: drill_trap
 composition:
   piano_program: GM_RHODES
-  melody_program: GM_ORGAN_ROCK
+  melody_program: GM_ACOUSTIC_GRAND
   countermelody_program: GM_CELLO
   scales: [natural_minor, harmonic_minor, phryg, pent]
   drum_pattern_indices: [15, 11, 2, 9]
@@ -27,3 +27,5 @@ mix: {lpf_hz: 7200, bitcrush_bits: 8, reverb_room: 0.35, reverb_wet: 0.2, tape_w
 # research/theory/arrangement-structure.md #6: lofi_drill is buildup/release-
 # driven, not wallpaper music, and was silently falling back to 'standard'.
 song_form: build
+bass_program: GM_SYNTH_BASS_2
+# Genre rework: dark piano lead over a gliding 808-style sub (ampedstudio.com drill guide).

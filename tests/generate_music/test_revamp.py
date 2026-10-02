@@ -20,9 +20,13 @@ from scripts.composer import (
 _ALL_SUBGENRES = list(_SUBGENRE_CONFIG)
 
 
-def test_no_subgenre_uses_gm_piano_for_melody():
+_PIANO_LED = {'piano_lofi', 'anime_lofi', 'lofi_drill'}
+
+
+def test_only_piano_led_genres_use_gm_piano_for_melody():
     for name, cfg in _SUBGENRE_CONFIG.items():
-        assert cfg['melody'] != 0, f"{name}: melody instrument still GM Acoustic Grand Piano"
+        if name not in _PIANO_LED:
+            assert cfg['melody'] != 0, f"{name}: melody instrument is GM Acoustic Grand Piano"
 
 
 def test_melody_instrument_differs_from_chord_instrument_for_previously_broken_subgenres():

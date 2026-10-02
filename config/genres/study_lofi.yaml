@@ -15,3 +15,4 @@ drum_sampler_pattern: dusty
 mix: {lpf_hz: 11000, bitcrush_bits: 12, reverb_room: 0.38, reverb_wet: 0.2, tape_wobble_depth: 0.14,
   compress_ratio: 2.5, vinyl_crackle: 0.09, use_ir_reverb: false, sidechain_duck: false}
 song_form: null
+generated_drums: true

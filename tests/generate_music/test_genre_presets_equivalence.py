@@ -24,6 +24,11 @@ corresponding config/genres/<key>.yaml), so this test still catches any
 *other* accidental divergence for those subgenres. Affected keys: chillhop,
 hip_hop_lofi, lofi_jazz, bedroom_pop, bossa_lofi, city_pop, vaporwave,
 lofi_classical, neo_soul, lofi_rnb.
+
+DELIBERATE EXCEPTION 2: the genre rework (research/genres.md) changed
+instruments, drum pools, tempo and swing for the genres listed in
+_GENRE_REWORK below. Those exact fields are overlaid on the literals; every
+other field is still compared against the original snapshot.
 """
 
 from scripts import genre_presets
@@ -339,12 +344,34 @@ EXPECTED_SIDECHAIN_DUCK_GENRES = {"lofi_house", "lo_fi_funk", "hip_hop_lofi", "c
                                   "lofi_garage", "lofi_synthwave"}
 
 
+_GENRE_REWORK = {
+    'ambient':        {'melody': 11},
+    'anime_lofi':     {'piano': 0, 'melody': 0},
+    'bedroom_pop':    {'piano': 27, 'melody': 11},
+    'bossa_lofi':     {'piano': 24, 'melody': 73, 'cmelo': 11, 'drum_pats': [18, 4]},
+    'city_pop':       {'melody': 65, 'cmelo': 27, 'drum_pats': [8, 17, 6], 'bpm': (90, 108)},
+    'lofi_classical': {'piano': 0},
+    'lofi_drill':     {'melody': 0},
+    'lofi_house':     {'drum_pats': [17]},
+    'lofi_phonk':     {'melody': 113, 'drum_pats': [16, 11]},
+    'lofi_synthwave': {'piano': 90, 'melody': 81, 'drum_pats': [19], 'bpm': (82, 104)},
+    'lofi_world':     {'cmelo': 73},
+    'neo_soul':       {'piano': 4},
+    'nujabes':        {'piano': 0, 'melody': 73, 'cmelo': 66},
+    'piano_lofi':     {'piano': 0, 'melody': 0},
+    'vaporwave':      {'piano': 4, 'melody': 65},
+}
+_SWING_REWORK = {'bossa_lofi': (0.5, 0.56), 'city_pop': (0.5, 0.56),
+                 'lofi_house': (0.5, 0.56), 'lofi_synthwave': (0.5, 0.52)}
+
+
 def test_subgenre_config_matches_pre_refactor_literal():
-    assert genre_presets.build_subgenre_config() == EXPECTED_SUBGENRE_CONFIG
+    expected = {k: {**v, **_GENRE_REWORK.get(k, {})} for k, v in EXPECTED_SUBGENRE_CONFIG.items()}
+    assert genre_presets.build_subgenre_config() == expected
 
 
 def test_swing_range_matches_pre_refactor_literal():
-    assert genre_presets.build_swing_range() == EXPECTED_SWING_RANGE
+    assert genre_presets.build_swing_range() == {**EXPECTED_SWING_RANGE, **_SWING_REWORK}
 
 
 def test_cozy_subgenres_matches_pre_refactor_literal():
@@ -354,7 +381,11 @@ def test_cozy_subgenres_matches_pre_refactor_literal():
 
 
 def test_subgenre_texture_matches_pre_refactor_literal():
-    assert genre_presets.build_subgenre_texture() == EXPECTED_SUBGENRE_TEXTURE
+    # Rework: synthwave's marimba and world's kalimba dropped; funk stabs on clavinet.
+    expected = {k: v for k, v in EXPECTED_SUBGENRE_TEXTURE.items()
+                if k not in ('lofi_synthwave', 'lofi_world')}
+    expected['lo_fi_funk'] = (7, 'stab')
+    assert genre_presets.build_subgenre_texture() == expected
 
 
 def test_subgenre_drum_kits_matches_pre_refactor_literal():
@@ -389,7 +420,8 @@ def test_subgenre_pat_matches_pre_refactor_literal():
     expected = {
         "hip_hop_lofi": boom_bap, "nujabes": boom_bap, "dark_lofi": boom_bap,
         "chillhop": dusty,        "study_lofi": dusty,
-        "lofi_phonk": trap808,    "vaporwave": trap808,   "lofi_drill": trap808,
+        "lofi_phonk": trap808,    "lofi_drill": trap808,
+        "vaporwave": standard,    # rework: smooth-jazz vaporwave, not trap
         "lofi_jazz": jazz,        "jazz_cafe": jazz,
         "bossa_lofi": jazz,       "ambient": jazz,
         "piano_lofi": jazz,       "lofi_classical": jazz,
