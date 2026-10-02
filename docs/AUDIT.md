@@ -1301,3 +1301,10 @@ phrases spilled past the card) after the cards were narrowed; long phrases
 now wrap onto two lines at 94-108px. The genre-hint matcher's substring
 fallback picked the first table entry ('lofi' meant anime lofi); it now
 needs a unique match.
+- A second stream test printed "Done" while writing nothing: ffmpeg exits 0
+  when it refuses to overwrite a file. The test now overwrites (-y), checks
+  the file was really written, and exits non-zero on failure; -nostdin
+  keeps a stray key from ending a live stream.
+- Full pipeline verified for real (30-minute render, not stubbed): exact
+  30:00 H.264/AAC, real chapters with grammatical track names, and
+  publish.py pairs the run's own SEO file and primary thumbnail.
