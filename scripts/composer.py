@@ -3022,11 +3022,15 @@ def _resolve_genre_hint(hint: str) -> str | None:
         if s.replace('_', '') == norm_bare:
             print(f"  [params] genre_hint '{hint}' resolved to '{s}'")
             return s
-    # Substring fallback
-    match = next((s for s in _SUBGENRE_CONFIG if normalized in s or s in normalized), None)
-    if match:
-        print(f"  [params] genre_hint '{hint}' resolved to '{match}'")
-    return match
+    # Substring fallback, only when it names exactly one genre: "lofi" used to
+    # pick anime_lofi (first in the table) and "jazz" jazz_cafe over lofi_jazz.
+    matches = [s for s in _SUBGENRE_CONFIG if normalized in s or s in normalized]
+    if len(matches) == 1:
+        print(f"  [params] genre_hint '{hint}' resolved to '{matches[0]}'")
+        return matches[0]
+    if matches:
+        print(f"  [params] genre_hint '{hint}' is ambiguous ({', '.join(matches)}); picking by weight")
+    return None
 
 
 def _pick_mood_phrase(concept_hint: str | None = None, sub_genre: str = '',

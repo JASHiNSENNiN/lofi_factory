@@ -448,6 +448,25 @@ def _select_side(theme_name: str, variant: int) -> str:
 _TITLE_FONT_SIZES = (108, 94, 82, 72, 64)
 
 
+_LINE_GAP = 4   # between the two lines of a wrapped title
+
+
+def _two_line_fit(draw, text: str, font_path: str, max_text_w: int):
+    """(font, [line1, line2]) at the largest size where the most balanced
+    two-line split of `text` fits, or None for a one-word title."""
+    words = text.split()
+    if len(words) < 2:
+        return None
+    for size in _TITLE_FONT_SIZES:
+        font = _load_font(font_path, size)
+        best = min(((" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words))),
+                   key=lambda pr: max(_text_size(draw, pr[0], font)[0],
+                                      _text_size(draw, pr[1], font)[0]))
+        if max(_text_size(draw, ln, font)[0] for ln in best) <= max_text_w:
+            return font, list(best)
+    return None
+
+
 def _fit_title_font(draw: ImageDraw.ImageDraw, text: str, font_path: str, max_text_w: int):
     """Shrink the title font until it fits max_text_w, so narrower (thirds/
     edge) cards don't overflow their frosted-glass backing. Falls back to the
@@ -467,7 +486,10 @@ def _card_position(layout: str, side: str, card_w: int, card_h: int) -> tuple[in
         cx_frac = 0.255 if side == "left" else 0.745
         card_x  = int(TW * cx_frac) - card_w // 2
         card_x  = max(40, min(TW - 40 - card_w, card_x))
-        card_y  = int(TH * 0.60) - card_h // 2   # sits on the lower third line
+        # On the lower third line, but never above 40% of the height: the
+        # wall shelf (scripts/thumbnail_scene.py) sits at 36%.
+        card_y  = max(int(TH * 0.60) - card_h // 2, int(TH * 0.40))
+        card_y  = min(card_y, TH - card_h - 40)
     elif layout == "edge":
         margin = 56
         card_x = margin if side == "left" else TW - margin - card_w
@@ -605,7 +627,17 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
     rule_gap = 10    # gap above and below the accent rule
 
     max_card_w = _max_card_width(layout)
-    title_font, tw_t, th_t = _fit_title_font(draw, title_text, font_path, max_card_w - pad_x * 2)
+    avail = max_card_w - pad_x * 2
+    title_font, tw_t, th_t = _fit_title_font(draw, title_text, font_path, avail)
+    title_lines = [title_text]
+    # Side cards are half the frame wide: a long phrase gets two balanced
+    # lines at a bigger size rather than one line at the smallest size (or,
+    # for the longest phrases, past the card's edge). The centered title band
+    # stays one line so it clears the window below it.
+    if layout != "centered" and (title_font.size < 94 or tw_t > avail):
+        two = _two_line_fit(draw, title_text, font_path, avail)
+        if two and (two[0].size > title_font.size or tw_t > avail):
+            title_font, title_lines = two
     sub_font   = _load_font(font_path, 30)
     deco_font  = _load_font(font_path, 26)
 
@@ -613,8 +645,11 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
     tw_d, th_d = (0, 0) if not deco_text else _text_size(draw, deco_text, deco_font)
     # Glyph boxes start below the draw origin (the font's top bearing), so
     # the title's real bottom edge is its box bottom, not its box height.
-    th_t = draw.textbbox((0, 0), title_text, font=title_font,
-                         stroke_width=max(3, title_font.size // 16))[3]
+    stroke = max(3, title_font.size // 16)
+    line_h = [draw.textbbox((0, 0), ln, font=title_font, stroke_width=stroke)[3]
+              for ln in title_lines]
+    tw_t = max(_text_size(draw, ln, title_font)[0] for ln in title_lines)
+    th_t = sum(line_h) + _LINE_GAP * (len(title_lines) - 1)
     th_s = draw.textbbox((0, 0), sub_text, font=sub_font)[3]
 
     # Card dimensions: pad around the widest element
@@ -626,7 +661,8 @@ def _card_geometry(draw: ImageDraw.ImageDraw, theme: str, short_title: str,
     card_x, card_y = _card_position(layout, side, card_w, card_h)
 
     return dict(
-        title_text=title_text, sub_text=sub_text, deco_text=deco_text,
+        title_text=title_text, title_lines=title_lines, line_h=line_h,
+        sub_text=sub_text, deco_text=deco_text,
         title_font=title_font, sub_font=sub_font, deco_font=deco_font,
         tw_t=tw_t, th_t=th_t, tw_s=tw_s, th_s=th_s, tw_d=tw_d, th_d=th_d,
         pad_x=pad_x, pad_top=pad_top, pad_bot=pad_bot, rule_gap=rule_gap,
@@ -700,11 +736,13 @@ def _draw_text_card(
     # readable at the ~120px-wide grid preview size regardless of what's
     # behind it, since a soft drop-shadow alone still washes into a busy/
     # similarly-toned background once downsampled that small.
-    tx = card_x + (card_w - tw_t) // 2
-    draw.text((tx, cur_y), title_text, font=title_font,
-              fill=(*c["text_main"], 255),
-              stroke_width=max(3, title_font.size // 16), stroke_fill=(0, 0, 0, 235))
-    cur_y += th_t + rule_gap
+    for ln, lh in zip(g["title_lines"], g["line_h"]):
+        lw = _text_size(draw, ln, title_font)[0]
+        draw.text((card_x + (card_w - lw) // 2, cur_y), ln, font=title_font,
+                  fill=(*c["text_main"], 255),
+                  stroke_width=max(3, title_font.size // 16), stroke_fill=(0, 0, 0, 235))
+        cur_y += lh + _LINE_GAP
+    cur_y += rule_gap - _LINE_GAP
 
     # ── Accent rule ──
     rx0 = card_x + pad_x

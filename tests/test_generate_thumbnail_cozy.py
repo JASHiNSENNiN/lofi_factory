@@ -237,3 +237,18 @@ def test_thumbnail_subtitle_names_the_genre():
     draw = ImageDraw.Draw(Image.new("RGB", (gtc.TW, gtc.TH)))
     g = gtc._card_geometry(draw, "cozy_rain", "rain", "1 hour", "edge", "left", "Sleep Lofi")
     assert g["sub_text"] == "sleep lofi"
+
+
+def test_side_titles_stay_big_and_inside_their_card():
+    from PIL import Image, ImageDraw
+    from scripts import generate_thumbnail_cozy as gtc, titles
+    draw = ImageDraw.Draw(Image.new("RGB", (gtc.TW, gtc.TH)))
+    for layout in ("thirds", "edge"):
+        avail = gtc._max_card_width(layout)
+        for phrases in titles.SCENES.values():
+            for p in phrases:
+                g = gtc._card_geometry(draw, "cozy_rain", p, "1 hour", layout, "left", "jazz hop")
+                assert g["title_font"].size >= 94, (layout, p)          # phone-readable
+                assert g["tw_t"] <= avail - 2 * g["pad_x"], (layout, p)  # never past the card
+                assert g["card_y"] >= int(gtc.TH * 0.40) - 1               # below the wall shelf
+                assert g["card_y"] + g["card_h"] <= gtc.TH, (layout, p)

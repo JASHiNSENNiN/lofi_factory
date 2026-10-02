@@ -252,3 +252,11 @@ def test_sleep_and_ambient_videos_are_not_sold_as_study_beats():
 def test_sentences_start_with_capitals():
     from scripts.generate_seo import _sentence
     assert _sentence("functional. mostly functional. fine") == "Functional. Mostly functional. Fine."
+
+
+def test_ambiguous_genre_hints_are_not_resolved_arbitrarily():
+    from scripts.composer import _resolve_genre_hint
+    assert _resolve_genre_hint("lofi") is None          # was anime_lofi
+    assert _resolve_genre_hint("jazz") is None          # two jazz genres
+    assert _resolve_genre_hint("house") == "lofi_house"
+    assert _resolve_genre_hint("jazz hop") == "nujabes"  # a published label
